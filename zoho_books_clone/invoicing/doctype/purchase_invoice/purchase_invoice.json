@@ -1,0 +1,149 @@
+{
+  "name": "Purchase Invoice",
+  "module": "Invoicing",
+  "doctype": "DocType",
+  "is_submittable": 1,
+  "track_changes": 1,
+  "fields": [
+    {
+      "fieldname": "supplier",
+      "fieldtype": "Link",
+      "label": "Supplier",
+      "options": "Supplier",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "supplier_name",
+      "fieldtype": "Data",
+      "label": "Supplier Name",
+      "fetch_from": "supplier.supplier_name",
+      "read_only": 1
+    },
+    {
+      "fieldname": "bill_no",
+      "fieldtype": "Data",
+      "label": "Supplier Invoice No",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "bill_date",
+      "fieldtype": "Date",
+      "label": "Supplier Invoice Date"
+    },
+    {
+      "fieldname": "posting_date",
+      "fieldtype": "Date",
+      "label": "Posting Date",
+      "reqd": 1,
+      "default": "Today"
+    },
+    {
+      "fieldname": "due_date",
+      "fieldtype": "Date",
+      "label": "Due Date"
+    },
+    {
+      "fieldname": "currency",
+      "fieldtype": "Link",
+      "label": "Currency",
+      "options": "Currency",
+      "default": "INR"
+    },
+    {
+      "fieldname": "company",
+      "fieldtype": "Link",
+      "label": "Company",
+      "options": "Company",
+      "reqd": 1
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Draft\nSubmitted\nPaid\nPartly Paid\nOverdue\nCancelled",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "items",
+      "fieldtype": "Table",
+      "label": "Items",
+      "options": "Purchase Invoice Item"
+    },
+    {
+      "fieldname": "taxes",
+      "fieldtype": "Table",
+      "label": "Taxes",
+      "options": "Tax Line"
+    },
+    {
+      "fieldname": "net_total",
+      "fieldtype": "Currency",
+      "label": "Net Total",
+      "read_only": 1
+    },
+    {
+      "fieldname": "total_tax",
+      "fieldtype": "Currency",
+      "label": "Total Tax",
+      "read_only": 1
+    },
+    {
+      "fieldname": "grand_total",
+      "fieldtype": "Currency",
+      "label": "Grand Total",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "outstanding_amount",
+      "fieldtype": "Currency",
+      "label": "Outstanding",
+      "read_only": 1
+    },
+    {
+      "fieldname": "credit_to",
+      "fieldtype": "Link",
+      "label": "Credit To (AP Account)",
+      "options": "Account"
+    },
+    {
+      "fieldname": "expense_account",
+      "fieldtype": "Link",
+      "label": "Expense Account",
+      "options": "Account"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "Books Admin",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "submit": 1,
+      "cancel": 1
+    },
+    {
+      "role": "Accountant",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "submit": 1,
+      "cancel": 1
+    },
+    {
+      "role": "Books Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1
+    },
+    {
+      "role": "Books Viewer",
+      "read": 1
+    }
+  ],
+  "autoname": "naming_series:PINV-.YYYY.-.#####",
+  "title_field": "supplier_name"
+}

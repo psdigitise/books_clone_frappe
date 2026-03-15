@@ -1,0 +1,45 @@
+{
+  "name": "Tax Line",
+  "module": "Invoicing",
+  "doctype": "DocType",
+  "istable": 1,
+  "fields": [
+    {
+      "fieldname": "tax_type",
+      "fieldtype": "Select",
+      "label": "Tax Type",
+      "options": "CGST\nSGST\nIGST\nVAT\nCess\nOther",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Data",
+      "label": "Description",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "rate",
+      "fieldtype": "Percent",
+      "label": "Rate (%)",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "tax_amount",
+      "fieldtype": "Currency",
+      "label": "Tax Amount",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "account_head",
+      "fieldtype": "Link",
+      "label": "Account Head",
+      "options": "Account"
+    },
+    {
+      "fieldname": "included_in_print_rate",
+      "fieldtype": "Check",
+      "label": "Included in Rate"
+    }
+  ]
+}

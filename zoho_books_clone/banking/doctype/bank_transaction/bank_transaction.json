@@ -1,0 +1,101 @@
+{
+  "name": "Bank Transaction",
+  "module": "Banking",
+  "doctype": "DocType",
+  "is_submittable": 1,
+  "fields": [
+    {
+      "fieldname": "bank_account",
+      "fieldtype": "Link",
+      "label": "Bank Account",
+      "options": "Bank Account",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "date",
+      "fieldtype": "Date",
+      "label": "Transaction Date",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Data",
+      "label": "Description",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "debit",
+      "fieldtype": "Currency",
+      "label": "Debit",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "credit",
+      "fieldtype": "Currency",
+      "label": "Credit",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "balance",
+      "fieldtype": "Currency",
+      "label": "Balance",
+      "read_only": 1
+    },
+    {
+      "fieldname": "currency",
+      "fieldtype": "Link",
+      "label": "Currency",
+      "options": "Currency"
+    },
+    {
+      "fieldname": "reference_number",
+      "fieldtype": "Data",
+      "label": "Reference No"
+    },
+    {
+      "fieldname": "transaction_type",
+      "fieldtype": "Select",
+      "label": "Type",
+      "options": "Deposit\nWithdrawal\nTransfer\nCharge\nInterest"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Unreconciled\nReconciled\nPending",
+      "default": "Unreconciled",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "payment_entry",
+      "fieldtype": "Link",
+      "label": "Payment Entry",
+      "options": "Payment Entry",
+      "read_only": 1
+    }
+  ],
+  "permissions": [
+    {
+      "role": "Books Admin",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "submit": 1,
+      "cancel": 1
+    },
+    {
+      "role": "Accountant",
+      "read": 1,
+      "write": 1,
+      "create": 1
+    },
+    {
+      "role": "Books Viewer",
+      "read": 1
+    }
+  ],
+  "autoname": "naming_series:BTXN-.YYYY.-.#####"
+}

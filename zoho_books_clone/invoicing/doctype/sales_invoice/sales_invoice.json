@@ -1,0 +1,206 @@
+{
+  "name": "Sales Invoice",
+  "module": "Invoicing",
+  "doctype": "DocType",
+  "is_submittable": 1,
+  "track_changes": 1,
+  "fields": [
+    {
+      "fieldname": "customer",
+      "fieldtype": "Link",
+      "label": "Customer",
+      "options": "Customer",
+      "reqd": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "customer_name",
+      "fieldtype": "Data",
+      "label": "Customer Name",
+      "fetch_from": "customer.customer_name",
+      "read_only": 1
+    },
+    {
+      "fieldname": "posting_date",
+      "fieldtype": "Date",
+      "label": "Invoice Date",
+      "reqd": 1,
+      "default": "Today",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "due_date",
+      "fieldtype": "Date",
+      "label": "Due Date",
+      "reqd": 1
+    },
+    {
+      "fieldname": "invoice_number",
+      "fieldtype": "Data",
+      "label": "Invoice Number",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "currency",
+      "fieldtype": "Link",
+      "label": "Currency",
+      "options": "Currency",
+      "default": "INR"
+    },
+    {
+      "fieldname": "exchange_rate",
+      "fieldtype": "Float",
+      "label": "Exchange Rate",
+      "default": 1,
+      "precision": 6
+    },
+    {
+      "fieldname": "column_break_1",
+      "fieldtype": "Column Break"
+    },
+    {
+      "fieldname": "status",
+      "fieldtype": "Select",
+      "label": "Status",
+      "options": "Draft\nSubmitted\nPaid\nPartly Paid\nOverdue\nCancelled",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "payment_terms",
+      "fieldtype": "Link",
+      "label": "Payment Terms",
+      "options": "Payment Terms"
+    },
+    {
+      "fieldname": "cost_center",
+      "fieldtype": "Link",
+      "label": "Cost Center",
+      "options": "Cost Center"
+    },
+    {
+      "fieldname": "company",
+      "fieldtype": "Link",
+      "label": "Company",
+      "options": "Company",
+      "reqd": 1
+    },
+    {
+      "fieldname": "fiscal_year",
+      "fieldtype": "Link",
+      "label": "Fiscal Year",
+      "options": "Fiscal Year"
+    },
+    {
+      "fieldname": "section_items",
+      "fieldtype": "Section Break",
+      "label": "Items"
+    },
+    {
+      "fieldname": "items",
+      "fieldtype": "Table",
+      "label": "Items",
+      "options": "Sales Invoice Item"
+    },
+    {
+      "fieldname": "section_taxes",
+      "fieldtype": "Section Break",
+      "label": "Taxes & Charges"
+    },
+    {
+      "fieldname": "taxes",
+      "fieldtype": "Table",
+      "label": "Taxes",
+      "options": "Tax Line"
+    },
+    {
+      "fieldname": "section_totals",
+      "fieldtype": "Section Break",
+      "label": "Totals"
+    },
+    {
+      "fieldname": "net_total",
+      "fieldtype": "Currency",
+      "label": "Net Total",
+      "options": "currency",
+      "read_only": 1
+    },
+    {
+      "fieldname": "total_tax",
+      "fieldtype": "Currency",
+      "label": "Total Tax",
+      "options": "currency",
+      "read_only": 1
+    },
+    {
+      "fieldname": "grand_total",
+      "fieldtype": "Currency",
+      "label": "Grand Total",
+      "options": "currency",
+      "read_only": 1,
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "outstanding_amount",
+      "fieldtype": "Currency",
+      "label": "Outstanding Amount",
+      "options": "currency",
+      "read_only": 1
+    },
+    {
+      "fieldname": "notes",
+      "fieldtype": "Text Editor",
+      "label": "Notes"
+    },
+    {
+      "fieldname": "terms",
+      "fieldtype": "Text Editor",
+      "label": "Terms & Conditions"
+    },
+    {
+      "fieldname": "debit_to",
+      "fieldtype": "Link",
+      "label": "Debit To (AR Account)",
+      "options": "Account"
+    },
+    {
+      "fieldname": "income_account",
+      "fieldtype": "Link",
+      "label": "Income Account",
+      "options": "Account"
+    }
+  ],
+  "permissions": [
+    {
+      "role": "Books Admin",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "delete": 1,
+      "submit": 1,
+      "cancel": 1
+    },
+    {
+      "role": "Accountant",
+      "read": 1,
+      "write": 1,
+      "create": 1,
+      "submit": 1,
+      "cancel": 1
+    },
+    {
+      "role": "Books Manager",
+      "read": 1,
+      "write": 1,
+      "create": 1
+    },
+    {
+      "role": "Books Viewer",
+      "read": 1
+    }
+  ],
+  "autoname": "naming_series:INV-.YYYY.-.#####",
+  "title_field": "customer_name",
+  "search_fields": "customer,customer_name,invoice_number,status"
+}

@@ -1,0 +1,33 @@
+{
+  "name": "Tax Template Detail",
+  "module": "Taxes",
+  "doctype": "DocType",
+  "istable": 1,
+  "fields": [
+    {
+      "fieldname": "tax_type",
+      "fieldtype": "Select",
+      "label": "Tax Type",
+      "options": "CGST\nSGST\nIGST\nCess\nOther",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "rate",
+      "fieldtype": "Percent",
+      "label": "Rate (%)",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "account_head",
+      "fieldtype": "Link",
+      "label": "Account Head",
+      "options": "Account",
+      "in_list_view": 1
+    },
+    {
+      "fieldname": "description",
+      "fieldtype": "Data",
+      "label": "Description"
+    }
+  ]
+}

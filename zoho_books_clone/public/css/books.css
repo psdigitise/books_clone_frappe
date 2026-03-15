@@ -1,0 +1,56 @@
+:root {
+  --books-blue:       #2563EB;
+  --books-blue-light: #EFF6FF;
+  --books-green:      #16A34A;
+  --books-red:        #DC2626;
+  --books-orange:     #EA580C;
+  --books-gray:       #6B7280;
+  --books-border:     #E5E7EB;
+  --books-radius:     8px;
+  --books-shadow:     0 1px 4px rgba(0,0,0,.08);
+}
+
+/* ── Indicator pills ──────────────────────────── */
+.indicator.green  { background: var(--books-green); }
+.indicator.red    { background: var(--books-red); }
+.indicator.orange { background: var(--books-orange); }
+.indicator.blue   { background: var(--books-blue); }
+
+/* ── Form header brand strip ──────────────────── */
+.books-header-bar {
+  background: var(--books-blue);
+  color: #fff;
+  padding: 12px 20px;
+  border-radius: var(--books-radius) var(--books-radius) 0 0;
+  font-size: 1.1rem;
+  font-weight: 600;
+  letter-spacing: .3px;
+}
+
+/* ── Dashboard KPI cards ──────────────────────── */
+.books-kpi-card {
+  background: #fff;
+  border: 1px solid var(--books-border);
+  border-radius: var(--books-radius);
+  box-shadow: var(--books-shadow);
+  padding: 20px 24px;
+  text-align: center;
+}
+.books-kpi-card .kpi-value {
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: var(--books-blue);
+}
+.books-kpi-card .kpi-label {
+  font-size: .8rem;
+  color: var(--books-gray);
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+
+/* ── Invoice print ────────────────────────────── */
+@media print {
+  .books-invoice-header { background: var(--books-blue) !important; color: #fff !important; }
+  .books-invoice-table th { background: var(--books-blue) !important; color:#fff !important; }
+}
