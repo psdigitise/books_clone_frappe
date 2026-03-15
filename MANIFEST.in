@@ -1,0 +1,2 @@
+include *.md *.txt
+recursive-include zoho_books_clone *.json *.js *.css *.html *.py *.md *.png *.svg
