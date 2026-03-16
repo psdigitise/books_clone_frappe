@@ -26,13 +26,16 @@
 <body>
   <div id="books-app"></div>
 
-  <!-- Session bootstrap — injected by index.py context -->
+  <!-- Session bootstrap — safe values only, no DB calls -->
   <script>
-    window.frappe         = window.frappe || {};
-    window.frappe.csrf_token      = "{{ csrf_token }}";
-    window.frappe.session         = { user: "{{ session_user }}", user_fullname: "{{ user_fullname }}" };
-    window.frappe.boot            = { sysdefaults: { company: "{{ company }}" } };
-    window.__booksCompany         = "{{ company }}";
+    window.frappe = window.frappe || {};
+    window.frappe.csrf_token     = "{{ csrf_token }}";
+    window.frappe.session        = {
+      user:          "{{ session_user }}",
+      user_fullname: "{{ user_fullname }}"
+    };
+    window.frappe.boot           = { sysdefaults: { company: "" } };
+    window.__booksCompany        = "";  // filled after app mounts via API
   </script>
 
   <!-- Vue 3 + Vue Router from CDN -->

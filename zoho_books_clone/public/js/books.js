@@ -86,12 +86,33 @@
     }) || [];
   }
 
+  // Fetch company once and cache it
+  async function resolveCompany() {
+    if (window.__booksCompany) return window.__booksCompany;
+    try {
+      const val = await frappeCall("frappe.client.get_value", {
+        doctype: "User",
+        filters: { name: window.frappe?.session?.user || "" },
+        fieldname: "name",
+      });
+      // Try getting default company from defaults API
+      const def = await frappeCall("frappe.client.get_list", {
+        doctype: "Company",
+        fields: ["name"],
+        limit: 1,
+        order_by: "creation asc",
+      });
+      const company = (def && def[0] && def[0].name) || "";
+      window.__booksCompany = company;
+      window.frappe.boot.sysdefaults.company = company;
+      return company;
+    } catch (e) {
+      return "";
+    }
+  }
+
   function defaultCompany() {
-    return (
-      window.__booksCompany ||
-      frappe?.boot?.sysdefaults?.company ||
-      ""
-    );
+    return window.__booksCompany || window.frappe?.boot?.sysdefaults?.company || "";
   }
 
   /* ------------------------------------------------------------------ */
@@ -164,7 +185,7 @@
 
       onMounted(async () => {
         loading.value = true;
-        const company = defaultCompany();
+        const company = await resolveCompany();
         try {
           const [d, k, t, a] = await Promise.all([
             frappeCall("zoho_books_clone.api.dashboard.get_home_dashboard", { company }),

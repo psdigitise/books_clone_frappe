@@ -1,5 +1,4 @@
 import frappe
-import json
 
 def get_context(context):
     # Redirect guests to login
@@ -14,9 +13,10 @@ def get_context(context):
     context.no_sidebar     = 1
     context.show_sidebar   = 0
 
-    # Pass session data to template
-    context.csrf_token     = frappe.session.csrf_token
-    context.session_user   = frappe.session.user
-    context.user_fullname  = frappe.utils.get_fullname(frappe.session.user)
-    context.company        = frappe.defaults.get_user_default("company") or \
-                             frappe.db.get_single_value("Global Defaults", "default_company") or ""
+    # Safe session values — no DB calls here
+    context.csrf_token    = frappe.session.csrf_token or ""
+    context.session_user  = frappe.session.user or ""
+    try:
+        context.user_fullname = frappe.utils.get_fullname(frappe.session.user) or ""
+    except Exception:
+        context.user_fullname = frappe.session.user or ""
