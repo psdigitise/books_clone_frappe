@@ -2,90 +2,196 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <meta charset="UTF-8">
-  <style>
-    body { font-family: Arial, sans-serif; color: #1F2937; margin: 0; padding: 0; }
-    .header { background: #2563EB; color: #fff; padding: 24px 32px; }
-    .header h1 { margin:0; font-size:1.6rem; }
-    .header .inv-meta { margin-top:6px; font-size:.85rem; opacity:.85; }
-    .body { padding: 24px 32px; }
-    .parties { display:flex; justify-content:space-between; margin-bottom:24px; }
-    .party-box h4 { margin:0 0 4px; font-size:.75rem; text-transform:uppercase; color:#6B7280; }
-    table { width:100%; border-collapse:collapse; margin-bottom:20px; }
-    th { background:#2563EB; color:#fff; padding:10px 12px; text-align:left; font-size:.8rem; }
-    td { padding:9px 12px; border-bottom:1px solid #E5E7EB; font-size:.85rem; }
-    tr:nth-child(even) td { background:#F9FAFB; }
-    .totals { float:right; width:260px; }
-    .totals table td { border:none; padding:5px 8px; }
-    .grand-total td { font-weight:700; font-size:1rem; border-top:2px solid #2563EB; }
-    .footer { text-align:center; margin-top:40px; font-size:.75rem; color:#9CA3AF; }
-  </style>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'DM Sans', sans-serif; color: #1A1D23; background: #fff; }
+  .page { max-width: 800px; margin: 0 auto; padding: 48px; }
+
+  /* Header */
+  .inv-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; }
+  .brand-name { font-size: 24px; font-weight: 700; color: #3B5BDB; letter-spacing: -0.5px; }
+  .brand-sub  { font-size: 12px; color: #868E96; margin-top: 4px; }
+  .inv-title-block { text-align: right; }
+  .inv-title  { font-size: 32px; font-weight: 700; color: #3B5BDB; letter-spacing: -1px; }
+  .inv-meta   { margin-top: 10px; }
+  .inv-meta table { margin-left: auto; border-collapse: collapse; }
+  .inv-meta td { padding: 3px 0 3px 16px; font-size: 12.5px; }
+  .inv-meta td:first-child { color: #868E96; }
+  .inv-meta td:last-child  { font-weight: 500; color: #1A1D23; }
+
+  /* Status strip */
+  .status-strip {
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 28px;
+  }
+  .status-strip::before { content:''; width:8px; height:8px; border-radius:50%; background:currentColor; opacity:.7; }
+  .status-paid      { background: #EBFBEE; color: #2F9E44; }
+  .status-overdue   { background: #FFF5F5; color: #C92A2A; }
+  .status-submitted { background: #E7F5FF; color: #1971C2; }
+  .status-draft     { background: #F1F3F5; color: #495057; }
+  .status-partial   { background: #FFF3BF; color: #E67700; }
+
+  /* Parties */
+  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; background: #F8F9FC;
+             border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
+  .party-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+                 color: #ADB5BD; margin-bottom: 6px; }
+  .party-name  { font-size: 15px; font-weight: 600; color: #1A1D23; margin-bottom: 3px; }
+  .party-detail{ font-size: 12.5px; color: #868E96; }
+
+  /* Items table */
+  table.items { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  table.items thead tr { background: #3B5BDB; color: #fff; }
+  table.items thead th { padding: 11px 14px; font-size: 11.5px; font-weight: 600; letter-spacing: .3px; text-align: left; }
+  table.items thead th:last-child { text-align: right; }
+  table.items tbody td { padding: 12px 14px; font-size: 13px; color: #495057; border-bottom: 1px solid #E8ECF0; }
+  table.items tbody tr:nth-child(even) td { background: #FAFBFC; }
+  table.items tbody td.amount { text-align: right; font-family: 'DM Mono', monospace; }
+  table.items tfoot td { padding: 10px 14px; font-size: 13px; border-top: 1px solid #CDD5E0; }
+  table.items tfoot td.label { color: #868E96; text-align: right; padding-right: 24px; }
+  table.items tfoot td.amount { text-align: right; font-family: 'DM Mono', monospace; font-weight: 500; }
+  table.items tfoot tr.grand td {
+    background: #EEF2FF; color: #3B5BDB;
+    font-size: 15px; font-weight: 700;
+    border-top: 2px solid #3B5BDB;
+  }
+  table.items tfoot tr.outstanding td {
+    background: #FFF5F5; color: #C92A2A; font-size: 13px; font-weight: 600;
+  }
+
+  /* Notes / Terms */
+  .notes { background: #F8F9FC; border-left: 3px solid #3B5BDB;
+           border-radius: 0 6px 6px 0; padding: 12px 16px;
+           font-size: 13px; color: #495057; margin-bottom: 16px; }
+  .notes strong { display: block; font-size: 11px; font-weight: 700; letter-spacing: .5px;
+                  text-transform: uppercase; color: #868E96; margin-bottom: 4px; }
+
+  /* Footer */
+  .inv-footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #E8ECF0;
+               display: flex; justify-content: space-between; align-items: flex-end; }
+  .thank-you  { font-size: 14px; font-weight: 600; color: #3B5BDB; }
+  .footer-meta{ font-size: 11px; color: #ADB5BD; text-align: right; }
+
+  @media print {
+    .page { padding: 24px; }
+    body  { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
 </head>
 <body>
-<div class="header">
-  <h1>TAX INVOICE</h1>
-  <div class="inv-meta">
-    Invoice No: <b>{{ inv.name }}</b> &nbsp;|&nbsp;
-    Date: <b>{{ frappe.format(inv.posting_date, "Date") }}</b> &nbsp;|&nbsp;
-    Due: <b>{{ frappe.format(inv.due_date, "Date") }}</b>
-  </div>
-</div>
-<div class="body">
-  <div class="parties">
-    <div class="party-box">
-      <h4>Bill To</h4>
-      <strong>{{ inv.customer_name }}</strong>
+<div class="page">
+
+  <!-- Header -->
+  <div class="inv-header">
+    <div>
+      <div class="brand-name">{{ frappe.db.get_single_value("Global Defaults","default_company") or "Your Company" }}</div>
+      <div class="brand-sub">GST Compliant Tax Invoice</div>
     </div>
-    <div class="party-box" style="text-align:right">
-      <h4>{{ frappe.db.get_single_value("Global Defaults","default_company") }}</h4>
-      <span style="font-size:.8rem;color:#6B7280">Status: <b>{{ inv.status }}</b></span>
+    <div class="inv-title-block">
+      <div class="inv-title">INVOICE</div>
+      <div class="inv-meta">
+        <table>
+          <tr><td>Invoice No</td><td>{{ inv.name }}</td></tr>
+          <tr><td>Date</td><td>{{ frappe.format(inv.posting_date, "Date") }}</td></tr>
+          <tr><td>Due Date</td><td>{{ frappe.format(inv.due_date, "Date") }}</td></tr>
+          {% if inv.invoice_number %}<tr><td>Ref No</td><td>{{ inv.invoice_number }}</td></tr>{% endif %}
+        </table>
+      </div>
     </div>
   </div>
 
-  <table>
+  <!-- Status -->
+  {% set smap = {"Paid":"status-paid","Overdue":"status-overdue","Submitted":"status-submitted","Draft":"status-draft","Partly Paid":"status-partial","Cancelled":"status-draft"} %}
+  <span class="status-strip {{ smap.get(inv.status,'status-draft') }}">{{ inv.status }}</span>
+
+  <!-- Parties -->
+  <div class="parties">
+    <div>
+      <div class="party-label">Bill To</div>
+      <div class="party-name">{{ inv.customer_name }}</div>
+      <div class="party-detail">{{ inv.customer }}</div>
+    </div>
+    <div style="text-align:right">
+      <div class="party-label">Currency</div>
+      <div class="party-name">{{ inv.currency or "INR" }}</div>
+      {% if inv.cost_center %}<div class="party-detail">{{ inv.cost_center }}</div>{% endif %}
+    </div>
+  </div>
+
+  <!-- Items -->
+  <table class="items">
     <thead>
-      <tr><th>#</th><th>Item</th><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>
+      <tr>
+        <th style="width:40px">#</th>
+        <th>Item / Description</th>
+        <th style="width:80px;text-align:right">Qty</th>
+        <th style="width:120px;text-align:right">Rate</th>
+        <th style="width:140px;text-align:right">Amount</th>
+      </tr>
     </thead>
     <tbody>
       {% for item in inv.items %}
       <tr>
-        <td>{{ loop.index }}</td>
-        <td>{{ item.item_name }}</td>
-        <td>{{ item.description or "" }}</td>
-        <td>{{ item.qty }}</td>
-        <td>{{ frappe.format(item.rate, "Currency") }}</td>
-        <td>{{ frappe.format(item.amount, "Currency") }}</td>
+        <td style="color:#ADB5BD">{{ loop.index }}</td>
+        <td>
+          <div style="font-weight:500;color:#1A1D23">{{ item.item_name }}</div>
+          {% if item.description %}<div style="font-size:11.5px;color:#868E96;margin-top:2px">{{ item.description }}</div>{% endif %}
+          {% if item.hsn_code %}<div style="font-size:11px;color:#ADB5BD">HSN: {{ item.hsn_code }}</div>{% endif %}
+        </td>
+        <td class="amount">{{ item.qty }}</td>
+        <td class="amount">{{ frappe.format(item.rate,"Currency") }}</td>
+        <td class="amount">{{ frappe.format(item.amount,"Currency") }}</td>
       </tr>
       {% endfor %}
     </tbody>
+    <tfoot>
+      <tr><td colspan="3"></td><td class="label">Subtotal</td><td class="amount">{{ frappe.format(inv.net_total,"Currency") }}</td></tr>
+      {% for tax in inv.taxes %}
+      <tr>
+        <td colspan="3"></td>
+        <td class="label">{{ tax.description }} ({{ tax.rate }}%)</td>
+        <td class="amount">{{ frappe.format(tax.tax_amount,"Currency") }}</td>
+      </tr>
+      {% endfor %}
+      <tr class="grand">
+        <td colspan="3"></td>
+        <td class="label" style="color:#3B5BDB">Total Amount</td>
+        <td class="amount">{{ frappe.format(inv.grand_total,"Currency") }}</td>
+      </tr>
+      {% if inv.outstanding_amount and inv.outstanding_amount > 0 %}
+      <tr class="outstanding">
+        <td colspan="3"></td>
+        <td class="label" style="color:#C92A2A">Balance Due</td>
+        <td class="amount">{{ frappe.format(inv.outstanding_amount,"Currency") }}</td>
+      </tr>
+      {% endif %}
+    </tfoot>
   </table>
 
-  <div class="totals">
-    <table>
-      <tr><td>Net Total</td><td style="text-align:right">{{ frappe.format(inv.net_total,"Currency") }}</td></tr>
-      {% for tax in inv.taxes %}
-      <tr><td>{{ tax.description }} ({{ tax.rate }}%)</td>
-          <td style="text-align:right">{{ frappe.format(tax.tax_amount,"Currency") }}</td></tr>
-      {% endfor %}
-      <tr class="grand-total">
-        <td>Grand Total</td>
-        <td style="text-align:right">{{ frappe.format(inv.grand_total,"Currency") }}</td>
-      </tr>
-      <tr><td>Outstanding</td>
-          <td style="text-align:right;color:#DC2626">{{ frappe.format(inv.outstanding_amount,"Currency") }}</td></tr>
-    </table>
-  </div>
-  <div style="clear:both"></div>
-
   {% if inv.notes %}
-  <p style="margin-top:20px;font-size:.85rem"><b>Notes:</b> {{ inv.notes }}</p>
+  <div class="notes"><strong>Notes</strong>{{ inv.notes }}</div>
   {% endif %}
   {% if inv.terms %}
-  <p style="font-size:.85rem"><b>Terms:</b> {{ inv.terms }}</p>
+  <div class="notes"><strong>Terms & Conditions</strong>{{ inv.terms }}</div>
   {% endif %}
-</div>
-<div class="footer">
-  Thank you for your business &nbsp;|&nbsp; Generated by Zoho Books Clone on Frappe
+
+  <!-- Footer -->
+  <div class="inv-footer">
+    <div class="thank-you">Thank you for your business!</div>
+    <div class="footer-meta">
+      Generated by Books Accounting<br>
+      {{ frappe.format(frappe.utils.now(),"Datetime") }}
+    </div>
+  </div>
+
 </div>
 </body>
 </html>
