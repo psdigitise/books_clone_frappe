@@ -6,11 +6,11 @@
 <title>Books</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/zoho_books_clone/books.css">
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;overflow:hidden;background:#080c14}
+html,body{height:100%;overflow:hidden;background:#f0f2f5}
 #books-app{height:100vh;width:100vw}
 </style>
 </head>
@@ -20,8 +20,7 @@ html,body{height:100%;overflow:hidden;background:#080c14}
 window.frappe={session:{},boot:{sysdefaults:{company:''}}};
 window.__booksCompany='';
 fetch('/api/method/zoho_books_clone.api.session.get_books_session',{
-  credentials:'same-origin',
-  headers:{'X-Requested-With':'XMLHttpRequest'}
+  credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}
 })
 .then(function(r){return r.json();})
 .then(function(d){
