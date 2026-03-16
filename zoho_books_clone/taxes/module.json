@@ -1,0 +1,8 @@
+{
+  "module_name": "Taxes",
+  "app_name": "zoho_books_clone",
+  "color": "#EA580C",
+  "icon": "octicon octicon-tag",
+  "type": "module",
+  "label": "Taxes"
+}
