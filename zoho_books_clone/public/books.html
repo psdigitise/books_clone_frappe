@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Books</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/zoho_books_clone/css/books.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;width:100%;background:#0f1117;color:#e2e8f0;overflow:hidden}
+#books-app{height:100vh;width:100vw;display:flex}
+</style>
+</head>
+<body>
+<div id="books-app"></div>
+<script>
+window.frappe = { session: {}, boot: { sysdefaults: { company: '' } } };
+window.__booksCompany = '';
+fetch('/api/method/zoho_books_clone.api.session.get_books_session', {
+  credentials: 'same-origin',
+  headers: { 'X-Requested-With': 'XMLHttpRequest' }
+})
+.then(function(r) { return r.json(); })
+.then(function(d) {
+  if (!d.message) { window.location.href = '/login?redirect-to=/books'; return; }
+  window.frappe.csrf_token = d.message.csrf_token;
+  window.frappe.session.user = d.message.user;
+  window.frappe.session.user_fullname = d.message.fullname;
+  window.__booksCompany = d.message.company || '';
+  window.frappe.boot.sysdefaults.company = window.__booksCompany;
+})
+.catch(function() { window.location.href = '/login?redirect-to=/books'; });
+</script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+<script src="/assets/zoho_books_clone/js/books.js"></script>
+</body>
+</html>
