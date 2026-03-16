@@ -1379,10 +1379,11 @@ const App=defineComponent({name:"BooksApp",
     const initials=computed(()=>{const n=window.frappe?.session?.user_fullname||"Admin";return n.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();});
     const fullname=computed(()=>window.frappe?.session?.user_fullname||"Administrator");
     const title=computed(()=>TITLES[route.name]||"Books");
-    return{cname,initials,fullname,title,NAV,icon};
+    const collapsed=ref(false);
+    return{cname,initials,fullname,title,NAV,icon,collapsed};
   },
   template:`
-<div id="books-root">
+<div :class="{'books-root':true, collapsed:collapsed}">
   <aside class="b-sidebar">
     <div class="b-brand">
       <div class="b-brand-icon">B</div>
@@ -1400,7 +1401,11 @@ const App=defineComponent({name:"BooksApp",
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <div class="b-user-row">
+      <button class="b-collapse-btn" @click="collapsed=!collapsed">
+        <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
+        <span class="b-nav-label">Collapse</span>
+      </button>
+      <div class="b-user-row" style="margin-top:6px">
         <div class="b-user-avatar">{{initials}}</div>
         <div class="b-user-info"><div class="b-user-name">{{fullname}}</div><div class="b-user-role">Books Admin</div></div>
       </div>
