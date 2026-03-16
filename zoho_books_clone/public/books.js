@@ -200,7 +200,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
           doctype:"Customer",filters:{name:form.customer},
           fieldname:["customer_name","default_currency"]
         });
-        form.customer_name=r.customer_name||form.customer;
+        form.customer_name=r?.customer_name||form.customer;
         if(r.default_currency)form.currency=r.default_currency;
       }catch{}
     }
@@ -228,7 +228,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }catch{}
       // Load customers
       try{
-        customers.value=await apiList("Customer",{fields:["name","customer_name"],limit:50,order:"customer_name asc"});
+        customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});
       }catch{}
       // Load tax templates
       try{
@@ -344,7 +344,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
           <label class="mi-label">Customer <span style="color:#C92A2A">*</span></label>
           <select v-model="form.customer" @change="onCustomer" class="mi-input">
             <option value="">— Select Customer —</option>
-            <option v-for="c in customers" :key="c.name" :value="c.name">{{c.customer_name||c.name}}</option>
+            <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
           </select>
         </div>
         <div>
@@ -583,7 +583,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{suppliers.value=await apiList("Supplier",{fields:["name","supplier_name"],limit:50,order:"supplier_name asc"});}catch{}
+      try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       try{
         accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});
         if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
@@ -757,8 +757,8 @@ const PaymentModal=defineComponent({name:"PaymentModal",
       try{accounts_bank.value=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["company","=",c],["is_group","=",0]],limit:20});}catch{}
       try{accounts_ar.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
       try{accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
-      try{customers.value=await apiList("Customer",{fields:["name","customer_name"],limit:50,order:"customer_name asc"});}catch{}
-      try{suppliers.value=await apiList("Supplier",{fields:["name","supplier_name"],limit:50,order:"supplier_name asc"});}catch{}
+      try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
+      try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       _autoFillAccounts();
     }
 
@@ -879,7 +879,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
           <label class="mi-label">{{form.party_type}} <span style="color:#C92A2A">*</span></label>
           <select v-model="form.party" @change="onParty" class="mi-input">
             <option value="">— Select —</option>
-            <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.customer_name||p.supplier_name||p.name}}</option>
+            <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.name}}</option>
           </select>
         </div>
         <div>
