@@ -52,29 +52,44 @@
     return inv.outstanding_amount > 0 && inv.due_date && new Date(inv.due_date) < new Date();
   }
 
+  // Get CSRF token from cookie (Frappe sets it as "full_name" cookie is not it —
+  // Frappe sets X-Frappe-CSRF-Token from frappe.csrf_token injected in the page)
+  function getCsrf() {
+    return window.frappe?.csrf_token
+      || document.cookie.split(";").map(c => c.trim())
+          .find(c => c.startsWith("full_name="))?.split("=")?.[1]
+      || "unauthenticated";
+  }
+
   async function frappeCall(method, args) {
-    const res = await frappe.call({ method, args: args || {} });
-    return res.message;
+    const res = await fetch(`/api/method/${method}`, {
+      method:  "POST",
+      headers: {
+        "Content-Type":        "application/json",
+        "X-Frappe-CSRF-Token": getCsrf(),
+        "Accept":              "application/json",
+      },
+      body: JSON.stringify(args || {}),
+    });
+    if (!res.ok) throw new Error(`API error ${res.status}: ${method}`);
+    const json = await res.json();
+    return json.message;
   }
 
   async function frappeList(doctype, opts) {
-    const res = await frappe.call({
-      method: "frappe.client.get_list",
-      args: {
-        doctype,
-        fields:            opts.fields    || ["name"],
-        filters:           opts.filters   || [],
-        order_by:          opts.order_by  || "modified desc",
-        limit_page_length: opts.limit     || 20,
-      },
-    });
-    return res.message || [];
+    return await frappeCall("frappe.client.get_list", {
+      doctype,
+      fields:            opts.fields    || ["name"],
+      filters:           opts.filters   || [],
+      order_by:          opts.order_by  || "modified desc",
+      limit_page_length: opts.limit     || 20,
+    }) || [];
   }
 
   function defaultCompany() {
     return (
+      window.__booksCompany ||
       frappe?.boot?.sysdefaults?.company ||
-      frappe?.defaults?.get_user_default?.("company") ||
       ""
     );
   }
@@ -345,7 +360,7 @@
     </div>
     <div class="actions-right">
       <button class="books-btn books-btn-ghost" @click="load">↻ Refresh</button>
-      <button class="books-btn books-btn-primary" @click="frappe.new_doc('Sales Invoice')">+ New Invoice</button>
+      <button class="books-btn books-btn-primary" @click="window.location.href='/app/sales-invoice/new-sales-invoice-1'">+ New Invoice</button>
     </div>
   </div>
   <div class="books-card">
@@ -361,7 +376,7 @@
           <tr v-for="n in 8" :key="n"><td colspan="7"><div class="loading-shimmer" style="height:13px"></div></td></tr>
         </template>
         <template v-else>
-          <tr v-for="inv in filtered" :key="inv.name" class="clickable-row" @click="frappe.set_route('Form','Sales Invoice',inv.name)">
+          <tr v-for="inv in filtered" :key="inv.name" class="clickable-row" @click="window.location.href='/app/sales-invoice/'+inv.name">
             <td><span class="mono text-accent fw-700">{{ inv.name }}</span></td>
             <td><div class="fw-700">{{ inv.customer_name || inv.customer }}</div></td>
             <td class="text-muted mono" style="font-size:12px">{{ fmtDate(inv.posting_date) }}</td>
@@ -419,7 +434,7 @@
     <div class="filter-group">
       <button v-for="t in types" :key="t.key" class="filter-pill" :class="{ active: activeType===t.key }" @click="activeType=t.key">{{ t.label }}</button>
     </div>
-    <button class="books-btn books-btn-primary" @click="frappe.new_doc('Payment Entry')">+ New Payment</button>
+    <button class="books-btn books-btn-primary" @click="window.location.href='/app/payment-entry/new-payment-entry-1'">+ New Payment</button>
   </div>
   <div class="books-card">
     <table class="books-table">
@@ -429,7 +444,7 @@
           <tr v-for="n in 8" :key="n"><td colspan="6"><div class="loading-shimmer" style="height:13px"></div></td></tr>
         </template>
         <template v-else>
-          <tr v-for="p in filtered" :key="p.name" class="clickable-row" @click="frappe.set_route('Form','Payment Entry',p.name)">
+          <tr v-for="p in filtered" :key="p.name" class="clickable-row" @click="window.location.href='/app/payment-entry/'+p.name">
             <td><span class="mono text-accent fw-700">{{ p.name }}</span></td>
             <td class="fw-700">{{ p.party }}</td>
             <td class="text-muted">{{ p.mode_of_payment || '—' }}</td>
@@ -467,16 +482,13 @@
         selectedAccount.value = acct.name;
         txnLoading.value      = true;
         try {
-          const res = await frappe.call({
-            method: "frappe.client.get_list",
-            args: {
-              doctype: "Bank Transaction",
-              filters: [["bank_account","=",acct.name],["status","=","Unreconciled"]],
-              fields:  ["name","date","description","debit","credit","balance","reference_number","status"],
-              order_by: "date asc", limit_page_length: 30,
-            },
+          const txns = await frappeCall("frappe.client.get_list", {
+            doctype: "Bank Transaction",
+            filters: [["bank_account","=",acct.name],["status","=","Unreconciled"]],
+            fields:  ["name","date","description","debit","credit","balance","reference_number","status"],
+            order_by: "date asc", limit_page_length: 30,
           });
-          transactions.value = res.message || [];
+          transactions.value = txns || [];
         } finally { txnLoading.value = false; }
       }
 
@@ -585,7 +597,7 @@
     <div class="filter-group">
       <button v-for="t in allTypes" :key="t" class="filter-pill" :class="{ active: activeType===t }" @click="activeType=t">{{ t }}</button>
     </div>
-    <button class="books-btn books-btn-primary" @click="frappe.new_doc('Account')">+ New Account</button>
+    <button class="books-btn books-btn-primary" @click="window.location.href='/app/account/new-account-1'">+ New Account</button>
   </div>
   <div class="books-card">
     <table class="books-table">
@@ -595,7 +607,7 @@
           <tr v-for="n in 8" :key="n"><td colspan="4"><div class="loading-shimmer" style="height:12px"></div></td></tr>
         </template>
         <template v-else>
-          <tr v-for="a in filtered" :key="a.name" class="clickable-row" @click="frappe.set_route('Form','Account',a.name)">
+          <tr v-for="a in filtered" :key="a.name" class="clickable-row" @click="window.location.href='/app/account/'+a.name">
             <td>
               <div class="fw-700">{{ a.account_name }}</div>
               <div class="mono text-muted" style="font-size:11px">{{ a.name }}</div>

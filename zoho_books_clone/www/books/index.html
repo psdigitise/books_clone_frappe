@@ -1,20 +1,45 @@
-{% extends "templates/web.html" %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Books</title>
 
-{% block title %}Books{% endblock %}
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 
-{% block head_include %}
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/assets/zoho_books_clone/css/books.css">
-{% endblock %}
+  <!-- Books CSS -->
+  <link rel="stylesheet" href="/assets/zoho_books_clone/css/books.css">
 
-{% block content %}
-<div id="books-app"></div>
-{% endblock %}
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%; width: 100%;
+      background: #0f1117; color: #e2e8f0;
+      overflow: hidden;
+    }
+    #books-app { height: 100vh; width: 100vw; display: flex; }
+  </style>
+</head>
+<body>
+  <div id="books-app"></div>
 
-{% block script %}
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
-<script src="/assets/zoho_books_clone/js/books.js"></script>
-{% endblock %}
+  <!-- Session bootstrap — injected by index.py context -->
+  <script>
+    window.frappe         = window.frappe || {};
+    window.frappe.csrf_token      = "{{ csrf_token }}";
+    window.frappe.session         = { user: "{{ session_user }}", user_fullname: "{{ user_fullname }}" };
+    window.frappe.boot            = { sysdefaults: { company: "{{ company }}" } };
+    window.__booksCompany         = "{{ company }}";
+  </script>
+
+  <!-- Vue 3 + Vue Router from CDN -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+
+  <!-- Books Vue SPA -->
+  <script src="/assets/zoho_books_clone/js/books.js"></script>
+</body>
+</html>
