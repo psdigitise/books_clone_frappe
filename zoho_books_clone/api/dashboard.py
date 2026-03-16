@@ -6,9 +6,11 @@ from zoho_books_clone.db import queries
 @frappe.whitelist()
 def get_home_dashboard(company: str | None = None) -> dict:
     """All KPI data for the Books dashboard in one API call."""
-    company = company or frappe.db.get_single_value("Global Defaults", "default_company")
     if not company:
-        return {"error": "No default company set. Please configure one in Global Defaults."}
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
 
     t   = today()
     som = str(get_first_day(t))
@@ -34,12 +36,17 @@ def get_home_dashboard(company: str | None = None) -> dict:
         "top_customers":      queries.get_top_customers(company, som, eom, limit=5),
         "overdue_invoices":   queries.get_overdue_invoices(company),
         "gst_summary":        queries.get_gst_summary(company, som, eom),
+        "aging_buckets":      _get_aging_buckets(company, t),
     }
 
 
 @frappe.whitelist()
 def get_cash_position(company: str | None = None) -> dict:
-    company = company or frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
     bank_accounts = frappe.get_all(
         "Bank Account",
         filters={"company": company},
@@ -51,7 +58,11 @@ def get_cash_position(company: str | None = None) -> dict:
 
 @frappe.whitelist()
 def search_transactions(query: str, company: str | None = None) -> list[dict]:
-    company = company or frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
     like = f"%{query}%"
     invoices = frappe.db.sql("""
         SELECT 'Sales Invoice' AS doctype, name, customer AS party,
@@ -72,3 +83,25 @@ def search_transactions(query: str, company: str | None = None) -> list[dict]:
     """, {"company": company, "q": like}, as_dict=True)
 
     return sorted(invoices + payments, key=lambda r: str(r.get("date") or ""), reverse=True)
+
+
+def _get_aging_buckets(company: str, as_of: str) -> dict:
+    """AR aging summary — bucketed by days overdue."""
+    rows = frappe.db.sql("""
+        SELECT
+            SUM(CASE WHEN DATEDIFF(%(today)s, due_date) <= 0  THEN outstanding_amount ELSE 0 END) AS current_amt,
+            SUM(CASE WHEN DATEDIFF(%(today)s, due_date) BETWEEN  1 AND 30 THEN outstanding_amount ELSE 0 END) AS d1_30,
+            SUM(CASE WHEN DATEDIFF(%(today)s, due_date) BETWEEN 31 AND 60 THEN outstanding_amount ELSE 0 END) AS d31_60,
+            SUM(CASE WHEN DATEDIFF(%(today)s, due_date) BETWEEN 61 AND 90 THEN outstanding_amount ELSE 0 END) AS d61_90,
+            SUM(CASE WHEN DATEDIFF(%(today)s, due_date) > 90 THEN outstanding_amount ELSE 0 END)              AS over_90
+        FROM `tabSales Invoice`
+        WHERE company = %(company)s AND docstatus = 1 AND outstanding_amount > 0
+    """, {"company": company, "today": as_of}, as_dict=True)
+    r = rows[0] if rows else {}
+    return {
+        "current":  flt(r.get("current_amt")),
+        "1_30":     flt(r.get("d1_30")),
+        "31_60":    flt(r.get("d31_60")),
+        "61_90":    flt(r.get("d61_90")),
+        "over_90":  flt(r.get("over_90")),
+    }

@@ -50,7 +50,10 @@ def seed_naming_series():
 
 
 def create_default_accounts():
-    company = frappe.db.get_single_value("Global Defaults", "default_company")
+    try:
+        company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+    except Exception:
+        company = ""
     if not company:
         return
 

@@ -13,7 +13,11 @@ def get_dashboard_kpis(company: str | None = None) -> dict:
     Return KPI dict for the Books dashboard.
     Called from the desk homepage widget.
     """
-    company = company or frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
     if not company:
         return {}
 
@@ -45,7 +49,11 @@ def get_monthly_revenue_trend(company: str | None = None, months: int = 6) -> li
     Revenue and expense per month for the last N months.
     Returns list of {month, revenue, expense, net}.
     """
-    company = company or frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
     rows = frappe.db.sql("""
         SELECT
             DATE_FORMAT(si.posting_date, '%%Y-%%m') AS month,
@@ -65,7 +73,11 @@ def get_aging_buckets(company: str | None = None) -> dict:
     """
     AR aging summary: {current, 1_30, 31_60, 61_90, over_90}
     """
-    company = company or frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
     t = today()
     rows = frappe.db.sql("""
         SELECT
