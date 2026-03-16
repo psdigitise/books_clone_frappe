@@ -1,0 +1,20 @@
+{% extends "templates/web.html" %}
+
+{% block title %}Books — {{ frappe.get_website_settings().get("website_name", "Frappe") }}{% endblock %}
+
+{% block head_include %}
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/assets/zoho_books_clone/css/books.css">
+{% endblock %}
+
+{% block content %}
+<div id="books-app" style="min-height:100vh"></div>
+{% endblock %}
+
+{% block script %}
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
+<script src="/assets/zoho_books_clone/js/books.js"></script>
+{% endblock %}

@@ -1,56 +1,368 @@
+/* ============================================================
+   Zoho Books Clone — Global Stylesheet
+   Loaded via hooks.py → app_include_css
+   All design tokens + base resets live here so they are
+   available even before the Vue SPA mounts.
+   ============================================================ */
+
+/* ── Google Fonts fallback (also declared in index.html) ── */
+@import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap");
+
+/* ── Design tokens ── */
 :root {
-  --books-blue:       #2563EB;
-  --books-blue-light: #EFF6FF;
-  --books-green:      #16A34A;
-  --books-red:        #DC2626;
-  --books-orange:     #EA580C;
-  --books-gray:       #6B7280;
-  --books-border:     #E5E7EB;
-  --books-radius:     8px;
-  --books-shadow:     0 1px 4px rgba(0,0,0,.08);
+  --books-bg:          #0f1117;
+  --books-surface:     #181c27;
+  --books-surface-2:   #1e2336;
+  --books-border:      #2a2f45;
+  --books-accent:      #4f8ef7;
+  --books-accent-soft: rgba(79, 142, 247, 0.12);
+  --books-green:       #34d399;
+  --books-red:         #f87171;
+  --books-amber:       #fbbf24;
+  --books-text:        #e2e8f0;
+  --books-muted:       #6b7280;
+  --books-sidebar-w:   220px;
+  --books-sidebar-w-sm:60px;
+  --radius:            10px;
+  --radius-sm:         6px;
+  --shadow:            0 4px 24px rgba(0, 0, 0, 0.4);
+  --font-display:      "DM Mono", "Fira Code", monospace;
+  --font-body:         "DM Sans", "Outfit", system-ui, sans-serif;
+  --transition:        0.18s ease;
 }
 
-/* ── Indicator pills ──────────────────────────── */
-.indicator.green  { background: var(--books-green); }
-.indicator.red    { background: var(--books-red); }
-.indicator.orange { background: var(--books-orange); }
-.indicator.blue   { background: var(--books-blue); }
+/* ── Hard reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-/* ── Form header brand strip ──────────────────── */
-.books-header-bar {
-  background: var(--books-blue);
-  color: #fff;
-  padding: 12px 20px;
-  border-radius: var(--books-radius) var(--books-radius) 0 0;
-  font-size: 1.1rem;
+html, body {
+  height: 100%;
+}
+
+body {
+  background:  var(--books-bg);
+  color:       var(--books-text);
+  font-family: var(--font-body);
+  font-size:   14px;
+  line-height: 1.5;
+  -webkit-font-smoothing:  antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  color: var(--books-accent);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+input, button, select, textarea {
+  font-family: inherit;
+}
+
+/* ── Scrollbars ── */
+::-webkit-scrollbar       { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--books-surface); }
+::-webkit-scrollbar-thumb { background: var(--books-border); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--books-muted); }
+
+/* ── App mount container ── */
+#books-app {
+  display: contents; /* lets the grid in App.vue take over */
+}
+
+/* ── Loading skeleton animation (global, reused in .vue files) ── */
+@keyframes shimmer {
+  0%   { background-position:  200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.loading-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--books-surface-2) 25%,
+    var(--books-border)    50%,
+    var(--books-surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Pulse animation (used by company-dot) ── */
+@keyframes pulse {
+  0%, 100% { opacity: 1;   transform: scale(1);   }
+  50%       { opacity: 0.5; transform: scale(1.3); }
+}
+
+/* ── Utility helpers used across pages ── */
+.ta-r      { text-align: right; }
+.ta-c      { text-align: center; }
+.text-muted { color: var(--books-muted); }
+.text-green { color: var(--books-green); }
+.text-red   { color: var(--books-red);   }
+.text-amber { color: var(--books-amber); }
+.text-accent{ color: var(--books-accent);}
+.mono       { font-family: var(--font-display); }
+.fw-700     { font-weight: 700; }
+
+/* ── Badge component ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 20px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: .3px;
+  white-space: nowrap;
+}
+.badge-green { background: rgba(52, 211, 153, 0.15); color: var(--books-green); }
+.badge-red   { background: rgba(248, 113, 113, 0.15); color: var(--books-red);  }
+.badge-amber { background: rgba(251, 191, 36,  0.15); color: var(--books-amber);}
+.badge-blue  { background: var(--books-accent-soft);  color: var(--books-accent);}
+.badge-muted { background: rgba(107, 114, 128, 0.15); color: var(--books-muted);}
+
+/* ── Card component ── */
+.books-card {
+  background:    var(--books-surface);
+  border:        1px solid var(--books-border);
+  border-radius: var(--radius);
+  padding:       20px;
 }
 
-/* ── Dashboard KPI cards ──────────────────────── */
-.books-kpi-card {
-  background: #fff;
-  border: 1px solid var(--books-border);
-  border-radius: var(--books-radius);
-  box-shadow: var(--books-shadow);
-  padding: 20px 24px;
-  text-align: center;
-}
-.books-kpi-card .kpi-value {
-  font-size: 1.8rem;
-  font-weight: 700;
-  color: var(--books-blue);
-}
-.books-kpi-card .kpi-label {
-  font-size: .8rem;
-  color: var(--books-gray);
-  margin-top: 4px;
+.books-card-title {
+  font-family:    var(--font-display);
+  font-size:      11px;
+  font-weight:    600;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  letter-spacing: .5px;
+  color:          var(--books-muted);
+  margin-bottom:  16px;
+  display:        block;
 }
 
-/* ── Invoice print ────────────────────────────── */
-@media print {
-  .books-invoice-header { background: var(--books-blue) !important; color: #fff !important; }
-  .books-invoice-table th { background: var(--books-blue) !important; color:#fff !important; }
+/* ── Button component ── */
+.books-btn {
+  display:     inline-flex;
+  align-items: center;
+  gap:         6px;
+  padding:     7px 14px;
+  border-radius: var(--radius-sm);
+  font-size:   12.5px;
+  font-weight: 600;
+  cursor:      pointer;
+  transition:  all var(--transition);
+  border:      none;
+  font-family: var(--font-body);
+  white-space: nowrap;
 }
+
+.books-btn-primary {
+  background: var(--books-accent);
+  color: #fff;
+}
+.books-btn-primary:hover {
+  background:  #3b7be0;
+  transform:   translateY(-1px);
+  box-shadow:  0 4px 12px rgba(79, 142, 247, 0.35);
+}
+
+.books-btn-ghost {
+  background: var(--books-surface-2);
+  color:      var(--books-text);
+  border:     1px solid var(--books-border);
+}
+.books-btn-ghost:hover { background: var(--books-border); }
+
+.books-btn-danger {
+  background: rgba(248, 113, 113, 0.15);
+  color:      var(--books-red);
+  border:     1px solid rgba(248, 113, 113, 0.3);
+}
+.books-btn-danger:hover { background: rgba(248, 113, 113, 0.25); }
+
+/* ── Table component ── */
+.books-table {
+  width:           100%;
+  border-collapse: collapse;
+  font-size:       13px;
+}
+
+.books-table th {
+  text-align:     left;
+  padding:        10px 12px;
+  border-bottom:  1px solid var(--books-border);
+  font-family:    var(--font-display);
+  font-size:      10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color:          var(--books-muted);
+  font-weight:    600;
+  white-space:    nowrap;
+}
+
+.books-table td {
+  padding:       11px 12px;
+  border-bottom: 1px solid rgba(42, 47, 69, 0.6);
+  color:         var(--books-text);
+  vertical-align: middle;
+}
+
+.books-table tr:last-child td {
+  border-bottom: none;
+}
+
+.books-table tr.clickable-row {
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.books-table tr.clickable-row:hover td {
+  background: var(--books-surface-2);
+}
+
+/* ── Form inputs (used in filter bars, date pickers, etc.) ── */
+.books-input {
+  background:    var(--books-surface-2);
+  border:        1px solid var(--books-border);
+  border-radius: var(--radius-sm);
+  padding:       7px 12px;
+  color:         var(--books-text);
+  font-size:     13px;
+  font-family:   var(--font-body);
+  outline:       none;
+  transition:    border-color var(--transition);
+  width:         100%;
+}
+.books-input:focus { border-color: var(--books-accent); }
+.books-input::placeholder { color: var(--books-muted); }
+
+/* ── Page layout helpers ── */
+.page-actions {
+  display:         flex;
+  align-items:     center;
+  justify-content: space-between;
+  gap:             12px;
+  flex-wrap:       wrap;
+}
+
+.filter-group {
+  display:   flex;
+  gap:       6px;
+  flex-wrap: wrap;
+}
+
+.actions-right {
+  display: flex;
+  gap:     8px;
+}
+
+/* ── Filter pill ── */
+.filter-pill {
+  display:     inline-flex;
+  align-items: center;
+  gap:         6px;
+  padding:     6px 14px;
+  border-radius: 20px;
+  font-size:   12.5px;
+  font-weight: 600;
+  border:      1px solid var(--books-border);
+  background:  var(--books-surface);
+  color:       var(--books-muted);
+  cursor:      pointer;
+  transition:  all 0.15s;
+  font-family: var(--font-body);
+  white-space: nowrap;
+}
+.filter-pill:hover {
+  border-color: var(--books-accent);
+  color:        var(--books-text);
+}
+.filter-pill.active {
+  background:   var(--books-accent-soft);
+  border-color: var(--books-accent);
+  color:        var(--books-accent);
+}
+
+/* ── Empty state ── */
+.empty-row {
+  text-align: center;
+  color:      var(--books-muted);
+  padding:    32px !important;
+  font-size:  13px;
+}
+
+/* ── Frappe desk integration overrides ──
+   Hide the default Frappe topbar/sidebar when the Books page is active
+   so the Vue shell has full control of the viewport.               ── */
+body[data-route^="zoho-books"] .navbar,
+body[data-route^="zoho-books"] .page-head,
+body[data-route^="zoho-books"] .layout-side-section {
+  display: none !important;
+}
+
+body[data-route^="zoho-books"] .page-content {
+  padding: 0 !important;
+  margin:  0 !important;
+}
+
+/* ── Dashboard layout ── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 14px;
+}
+@media (max-width: 1400px) { .kpi-grid { grid-template-columns: repeat(3, 1fr); } }
+@media (max-width: 900px)  { .kpi-grid { grid-template-columns: repeat(2, 1fr); } }
+
+.kpi-card  { display: flex; align-items: center; gap: 14px; padding: 16px 18px; }
+.kpi-icon  { width: 42px; height: 42px; border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; flex-shrink: 0; color: var(--books-text); }
+.kpi-body  { min-width: 0; }
+.kpi-label { font-size: 11px; color: var(--books-muted); font-family: var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+.kpi-value { font-size: 18px; font-weight: 700; margin-top: 3px; font-family: var(--font-display); letter-spacing: -.02em; }
+
+.mid-grid  { display: grid; grid-template-columns: 1fr 300px; gap: 14px; }
+@media (max-width: 1100px) { .mid-grid { grid-template-columns: 1fr; } }
+
+.bot-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 1000px) { .bot-grid { grid-template-columns: 1fr; } }
+
+.aging-card {}
+.aging-bars { display: flex; flex-direction: column; gap: 12px; }
+.aging-row  { display: grid; grid-template-columns: 60px 1fr 80px; align-items: center; gap: 10px; }
+.aging-label { font-size: 11.5px; color: var(--books-muted); }
+.aging-bar-wrap { background: var(--books-surface-2); border-radius: 20px; height: 6px; overflow: hidden; }
+.aging-bar { height: 100%; border-radius: 20px; transition: width .6s ease; }
+.aging-amount { font-size: 12px; font-family: var(--font-display); text-align: right; }
+
+.card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+
+/* ── Banking layout ── */
+.cash-strip { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; }
+.cash-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-family: var(--font-display); letter-spacing: .08em; text-transform: uppercase; color: var(--books-muted); }
+.cash-total { font-family: var(--font-display); font-size: 22px; font-weight: 700; color: var(--books-green); }
+.bank-accounts-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; }
+.bank-account-card  { cursor: pointer; transition: all .18s; }
+.bank-account-card:hover   { border-color: var(--books-accent); transform: translateY(-2px); }
+.bank-account-card.selected{ border-color: var(--books-accent); background: var(--books-accent-soft); }
+.acct-top { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+
+/* ── Reports layout ── */
+.report-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.report-tab  { display: flex; align-items: center; gap: 7px; padding: 8px 16px; border-radius: var(--radius-sm); border: 1px solid var(--books-border); background: var(--books-surface); color: var(--books-muted); cursor: pointer; font-size: 13px; font-weight: 600; transition: all .15s; font-family: var(--font-body); }
+.report-tab:hover  { border-color: var(--books-accent); color: var(--books-text); }
+.report-tab.active { background: var(--books-accent-soft); border-color: var(--books-accent); color: var(--books-accent); }
+
+.date-range-bar { display: flex; align-items: center; gap: 12px; padding: 14px 20px; flex-wrap: wrap; }
+.dr-label { font-size: 11px; font-family: var(--font-display); color: var(--books-muted); letter-spacing: .06em; text-transform: uppercase; }
+.dr-input { background: var(--books-surface-2); border: 1px solid var(--books-border); border-radius: var(--radius-sm); padding: 6px 10px; color: var(--books-text); font-size: 12.5px; font-family: var(--font-display); outline: none; }
+.dr-input:focus { border-color: var(--books-accent); }
+
+.report-card { }
+.pl-row { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--books-border); font-size: 14px; }
+.pl-row:last-child { border-bottom: none; }
+
+.bs-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+@media (max-width: 700px) { .bs-grid { grid-template-columns: 1fr; } }
