@@ -1,4 +1,5 @@
 {
+  "doctype": "Report",
   "name": "Profit and Loss Statement",
   "report_type": "Script Report",
   "module": "Reports",

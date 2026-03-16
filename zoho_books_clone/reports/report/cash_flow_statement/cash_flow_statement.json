@@ -1,5 +1,5 @@
 {
-  "doctype":"cash_flow_statement",
+  "doctype": "Report",
   "name": "Cash Flow Statement",
   "report_type": "Script Report",
   "module": "Reports",
