@@ -17,12 +17,23 @@ html,body{height:100%;width:100%;background:#0f1117;color:#e2e8f0;overflow:hidde
 <body>
 <div id="books-app"></div>
 <script>
-window.frappe={
-  csrf_token:"{{ csrf }}",
-  session:{user:"{{ user }}",user_fullname:"{{ fullname }}"},
-  boot:{sysdefaults:{company:""}}
-};
-window.__booksCompany="";
+window.frappe = { session: {}, boot: { sysdefaults: { company: '' } } };
+window.__booksCompany = '';
+// Fetch session info from Frappe API before mounting
+fetch('/api/method/zoho_books_clone.api.session.get_books_session', {
+  credentials: 'same-origin',
+  headers: { 'X-Requested-With': 'XMLHttpRequest' }
+})
+.then(function(r) { return r.json(); })
+.then(function(d) {
+  if (!d.message) { window.location.href = '/login?redirect-to=/books'; return; }
+  window.frappe.csrf_token = d.message.csrf_token;
+  window.frappe.session.user = d.message.user;
+  window.frappe.session.user_fullname = d.message.fullname;
+  window.__booksCompany = d.message.company || '';
+  window.frappe.boot.sysdefaults.company = window.__booksCompany;
+})
+.catch(function() { window.location.href = '/login?redirect-to=/books'; });
 </script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
