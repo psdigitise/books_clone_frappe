@@ -1,38 +1,44 @@
-"""
-REST API endpoints for the Books dashboard.
-Accessible at /api/method/zoho_books_clone.api.dashboard.*
-"""
 import frappe
 from frappe.utils import flt, today, get_first_day, get_last_day
-from zoho_books_clone.db import queries, aggregates
+from zoho_books_clone.db import queries
 
 
 @frappe.whitelist()
 def get_home_dashboard(company: str | None = None) -> dict:
-    """
-    All data needed to render the Books home dashboard in one call.
-    Returns KPIs, revenue trend, aging buckets, and top customers.
-    """
+    """All KPI data for the Books dashboard in one API call."""
     company = company or frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        return {"error": "No default company set. Please configure one in Global Defaults."}
+
     t   = today()
     som = str(get_first_day(t))
     eom = str(get_last_day(t))
 
+    inv  = queries.get_invoice_summary(company, som, eom)
+    pay  = queries.get_payment_summary(company, som, eom)
+    pl   = queries.get_profit_and_loss(company, som, eom)
+    bals = queries.get_balance_sheet_totals(company, t)
+
     return {
-        "kpis":            aggregates.get_dashboard_kpis(company),
-        "revenue_trend":   aggregates.get_monthly_revenue_trend(company, months=6),
-        "aging_buckets":   aggregates.get_aging_buckets(company),
-        "top_customers":   queries.get_top_customers(company, som, eom, limit=5),
-        "overdue_invoices":queries.get_overdue_invoices(company),
-        "gst_summary":     queries.get_gst_summary(company, som, eom),
+        "company":            company,
+        "period":             {"from": som, "to": eom},
+        "month_revenue":      flt(inv.get("total_invoiced")),
+        "month_collected":    flt(inv.get("total_collected")),
+        "month_outstanding":  flt(inv.get("total_outstanding")),
+        "month_payments_in":  flt(pay.get("total_received")),
+        "month_payments_out": flt(pay.get("total_paid")),
+        "net_profit_mtd":     flt(pl.get("net_profit")),
+        "total_assets":       flt(bals.get("total_assets")),
+        "total_liabilities":  flt(bals.get("total_liabilities")),
+        "overdue_count":      len(queries.get_overdue_invoices(company)),
+        "top_customers":      queries.get_top_customers(company, som, eom, limit=5),
+        "overdue_invoices":   queries.get_overdue_invoices(company),
+        "gst_summary":        queries.get_gst_summary(company, som, eom),
     }
 
 
 @frappe.whitelist()
 def get_cash_position(company: str | None = None) -> dict:
-    """
-    Cash & bank balances across all bank accounts + GL cash account.
-    """
     company = company or frappe.db.get_single_value("Global Defaults", "default_company")
     bank_accounts = frappe.get_all(
         "Bank Account",
@@ -45,13 +51,8 @@ def get_cash_position(company: str | None = None) -> dict:
 
 @frappe.whitelist()
 def search_transactions(query: str, company: str | None = None) -> list[dict]:
-    """
-    Full-text search across invoices and payments.
-    Used by the global search bar in the Books UI.
-    """
     company = company or frappe.db.get_single_value("Global Defaults", "default_company")
     like = f"%{query}%"
-
     invoices = frappe.db.sql("""
         SELECT 'Sales Invoice' AS doctype, name, customer AS party,
                grand_total AS amount, posting_date AS date, status
@@ -70,4 +71,4 @@ def search_transactions(query: str, company: str | None = None) -> list[dict]:
         LIMIT 10
     """, {"company": company, "q": like}, as_dict=True)
 
-    return sorted(invoices + payments, key=lambda r: r["date"] or "", reverse=True)
+    return sorted(invoices + payments, key=lambda r: str(r.get("date") or ""), reverse=True)

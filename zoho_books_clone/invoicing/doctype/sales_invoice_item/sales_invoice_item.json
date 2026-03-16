@@ -134,7 +134,7 @@
       "fieldtype": "Float",
       "label": "Qty",
       "reqd": 1,
-      "default": 1,
+      "default": "1",
       "in_list_view": 1,
       "idx": 4,
       "creation": "2026-03-16 04:22:11.189548",
@@ -253,7 +253,8 @@
       "show_days": 1,
       "show_seconds": 1,
       "translatable": 0,
-      "unique": 0
+      "unique": 0,
+      "default": "0"
     },
     {
       "fieldname": "amount",

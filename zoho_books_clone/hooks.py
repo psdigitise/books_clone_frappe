@@ -16,20 +16,10 @@ fixtures = [
     "Property Setter",
 ]
 
-doc_events = {
-    "Sales Invoice": {
-        "on_submit": "zoho_books_clone.invoicing.doctype.sales_invoice.sales_invoice.on_submit",
-        "on_cancel": "zoho_books_clone.invoicing.doctype.sales_invoice.sales_invoice.on_cancel",
-    },
-    "Purchase Invoice": {
-        "on_submit": "zoho_books_clone.invoicing.doctype.purchase_invoice.purchase_invoice.on_submit",
-        "on_cancel": "zoho_books_clone.invoicing.doctype.purchase_invoice.purchase_invoice.on_cancel",
-    },
-    "Payment Entry": {
-        "on_submit": "zoho_books_clone.payments.doctype.payment_entry.payment_entry.on_submit",
-        "on_cancel": "zoho_books_clone.payments.doctype.payment_entry.payment_entry.on_cancel",
-    },
-}
+# NOTE: No doc_events for submit/cancel — the DocType classes handle those
+# directly via on_submit / on_cancel methods. Putting them here too causes
+# double GL posting.
+doc_events = {}
 
 scheduler_events = {
     "daily": [
@@ -50,5 +40,5 @@ global_search_doctypes = {
 app_include_css = ["/assets/zoho_books_clone/css/books.css"]
 app_include_js  = ["/assets/zoho_books_clone/js/books.js"]
 
-# after_install = "zoho_books_clone.setup.install.after_install"
+after_install = "zoho_books_clone.setup.install.after_install"
 after_migrate = "zoho_books_clone.setup.install.after_migrate"

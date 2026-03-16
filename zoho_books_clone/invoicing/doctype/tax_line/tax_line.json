@@ -132,7 +132,7 @@
       "fieldname": "tax_amount",
       "fieldtype": "Currency",
       "label": "Tax Amount",
-      "read_only": 1,
+      "read_only": 0,
       "in_list_view": 1,
       "idx": 4,
       "creation": "2026-03-16 04:22:11.189548",
