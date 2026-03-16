@@ -1,48 +1,65 @@
+---
+no_cache: 1
+---
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Books</title>
-
-  <!-- Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500;600&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-  <!-- Books CSS -->
   <link rel="stylesheet" href="/assets/zoho_books_clone/css/books.css">
-
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body {
-      height: 100%; width: 100%;
-      background: #0f1117; color: #e2e8f0;
-      overflow: hidden;
-    }
+    html, body { height: 100%; width: 100%; background: #0f1117; color: #e2e8f0; overflow: hidden; }
     #books-app { height: 100vh; width: 100vw; display: flex; }
   </style>
 </head>
 <body>
   <div id="books-app"></div>
-
-  <!-- Session bootstrap — safe values only, no DB calls -->
   <script>
+    // Bootstrap: read CSRF token from cookie that Frappe always sets
     window.frappe = window.frappe || {};
-    window.frappe.csrf_token     = "{{ csrf_token }}";
-    window.frappe.session        = {
-      user:          "{{ session_user }}",
-      user_fullname: "{{ user_fullname }}"
-    };
-    window.frappe.boot           = { sysdefaults: { company: "" } };
-    window.__booksCompany        = "";  // filled after app mounts via API
-  </script>
+    window.frappe.session = { user: "", user_fullname: "" };
+    window.frappe.boot    = { sysdefaults: { company: "" } };
+    window.__booksCompany = "";
 
-  <!-- Vue 3 + Vue Router from CDN -->
+    // Read csrf_token from the "sid" cookie Frappe sets on every page
+    function getCookie(name) {
+      const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+      return m ? decodeURIComponent(m[2]) : "";
+    }
+    // Frappe exposes csrf_token via /api/method/frappe.auth.get_logged_user
+    // We fetch session info before mounting the Vue app
+    fetch("/api/method/frappe.auth.get_logged_user", {
+      headers: { "X-Requested-With": "XMLHttpRequest" }
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (!data.message || data.message === "Guest") {
+        window.location.href = "/login?redirect-to=/books";
+        return;
+      }
+      window.frappe.session.user = data.message;
+
+      // Now get csrf_token from /api/method/frappe.utils.get_csrf_token
+      return fetch("/api/method/frappe.utils.get_csrf_token", {
+        headers: { "X-Requested-With": "XMLHttpRequest" }
+      }).then(r => r.json());
+    })
+    .then(data => {
+      if (data && data.message) {
+        window.frappe.csrf_token = data.message;
+      }
+    })
+    .catch(() => {
+      window.location.href = "/login?redirect-to=/books";
+    });
+  </script>
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
-
-  <!-- Books Vue SPA -->
   <script src="/assets/zoho_books_clone/js/books.js"></script>
 </body>
 </html>

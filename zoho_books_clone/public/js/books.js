@@ -28,6 +28,15 @@
     return;
   }
 
+  // Wait for session bootstrap (set in index.html) before mounting
+  // Poll until frappe.csrf_token is available (set by the fetch in index.html)
+  function waitForSession(cb, tries) {
+    tries = tries || 0;
+    if (window.frappe && window.frappe.csrf_token) { cb(); return; }
+    if (tries > 40) { cb(); return; } // give up after 4s and mount anyway
+    setTimeout(() => waitForSession(cb, tries + 1), 100);
+  }
+
   const { createApp, ref, computed, onMounted, defineComponent, h } = Vue;
   const { createRouter, createWebHashHistory, useRoute, useRouter }  = VueRouter;
 
@@ -55,10 +64,7 @@
   // Get CSRF token from cookie (Frappe sets it as "full_name" cookie is not it —
   // Frappe sets X-Frappe-CSRF-Token from frappe.csrf_token injected in the page)
   function getCsrf() {
-    return window.frappe?.csrf_token
-      || document.cookie.split(";").map(c => c.trim())
-          .find(c => c.startsWith("full_name="))?.split("=")?.[1]
-      || "unauthenticated";
+    return window.frappe?.csrf_token || "unauthenticated";
   }
 
   async function frappeCall(method, args) {
@@ -858,8 +864,10 @@
     ],
   });
 
-  const app = createApp(App);
-  app.use(router);
-  app.mount("#books-app");
+  waitForSession(function() {
+    const app = createApp(App);
+    app.use(router);
+    app.mount("#books-app");
+  });
 
 })();
