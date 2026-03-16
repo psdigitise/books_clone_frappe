@@ -8,6 +8,10 @@ if(typeof Vue==="undefined"||typeof VueRouter==="undefined"){
 const{createApp,ref,computed,onMounted,reactive,watch,defineComponent}=Vue;
 const{createRouter,createWebHashHistory,useRoute,useRouter}=VueRouter;
 
+/* Expose URL helpers globally immediately so templates can use them */
+window.docUrl=function(dt,name){return"/app/"+dt.toLowerCase().replace(/ /g,"-")+"/"+encodeURIComponent(name);};
+window.newDocUrl=function(dt){return"/app/"+dt.toLowerCase().replace(/ /g,"-")+"/new";};
+
 /* ─── Config ─────────────────────────────────────────────────── */
 // Frappe v15 new-doc URL pattern
 function newDocUrl(doctype){
@@ -41,9 +45,11 @@ function today(){return new Date().toISOString().slice(0,10);}
 
 /* ─── API ────────────────────────────────────────────────────── */
 async function api(method,args){
+  // Always get freshest CSRF token
+  const csrfToken=window.frappe?.csrf_token||getCsrfFromCookie()||"";
   const r=await fetch("/api/method/"+method,{
     method:"POST",credentials:"same-origin",
-    headers:{"Content-Type":"application/json","X-Frappe-CSRF-Token":csrf(),"Accept":"application/json"},
+    headers:{"Content-Type":"application/json","X-Frappe-CSRF-Token":csrfToken,"Accept":"application/json"},
     body:JSON.stringify(args||{})
   });
   const json=await r.json();
@@ -303,8 +309,12 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }finally{saving.value=false;}
     }
 
+    function onPostingDateChange(){
+      if(!form.due_date||form.due_date<form.posting_date)
+        form.due_date=form.posting_date;
+    }
     return{form,saving,customers,accounts_ar,accounts_income,taxTemplates,isSI,
-           recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast};
+           recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast,onPostingDateChange};
   },
   template:`
 <teleport to="body">
@@ -340,7 +350,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
         <div>
           <label class="mi-label">Invoice Date <span style="color:#C92A2A">*</span></label>
           <input v-model="form.posting_date" type="date" class="mi-input"
-            @change="if(!form.due_date||form.due_date<form.posting_date)form.due_date=form.posting_date"/>
+            @change="onPostingDateChange"/>
         </div>
         <div>
           <label class="mi-label">Due Date</label>
@@ -1456,15 +1466,25 @@ const router=createRouter({
   ]
 });
 
+function getCsrfFromCookie(){
+  // Frappe sets csrf_token as a cookie on every page load
+  const m=document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
+  return m?decodeURIComponent(m.split("=").slice(1).join("=")):"";
+}
 function waitReady(cb,n){
   n=n||0;
-  if(window.frappe?.csrf_token||n>50){cb();return;}
+  // Accept either window.frappe.csrf_token OR cookie OR give up after 5s
+  const token=window.frappe?.csrf_token||getCsrfFromCookie();
+  if(token){
+    if(!window.frappe)window.frappe={};
+    if(!window.frappe.csrf_token)window.frappe.csrf_token=token;
+    cb();return;
+  }
+  if(n>50){cb();return;}
   setTimeout(()=>waitReady(cb,n+1),100);
 }
 waitReady(()=>{
   // Expose helpers to templates
-  window.docUrl=docUrl;
-  window.newDocUrl=newDocUrl;
   createApp(App).use(router).mount("#books-app");
 });
 
