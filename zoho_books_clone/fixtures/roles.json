@@ -1,21 +1,25 @@
 [
   {
     "doctype": "Role",
+    "name": "Books Admin",
     "role_name": "Books Admin",
     "desk_access": 1
   },
   {
     "doctype": "Role",
+    "name": "Accountant",
     "role_name": "Accountant",
     "desk_access": 1
   },
   {
     "doctype": "Role",
+    "name": "Books Manager",
     "role_name": "Books Manager",
     "desk_access": 1
   },
   {
     "doctype": "Role",
+    "name": "Books Viewer",
     "role_name": "Books Viewer",
     "desk_access": 1
   }
