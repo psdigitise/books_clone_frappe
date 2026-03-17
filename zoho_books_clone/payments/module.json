@@ -1,8 +1,9 @@
 {
-  "module_name": "Payments",
-  "app_name": "zoho_books_clone",
-  "color": "#7C3AED",
-  "icon": "octicon octicon-credit-card",
-  "type": "module",
-  "label": "Payments"
+ "module_name": "Payments",
+ "app_name": "zoho_books_clone",
+ "color": "#7C3AED",
+ "icon": "octicon octicon-credit-card",
+ "type": "module",
+ "label": "Payments",
+ "doctype": "Module Def"
 }

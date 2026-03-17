@@ -23,5 +23,6 @@
    "label": "Company",
    "reqd": 1
   }
- ]
+ ],
+ "doctype": "Report"
 }

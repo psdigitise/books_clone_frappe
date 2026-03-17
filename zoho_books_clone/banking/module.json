@@ -1,8 +1,9 @@
 {
-  "module_name": "Banking",
-  "app_name": "zoho_books_clone",
-  "color": "#0891B2",
-  "icon": "octicon octicon-database",
-  "type": "module",
-  "label": "Banking"
+ "module_name": "Banking",
+ "app_name": "zoho_books_clone",
+ "color": "#0891B2",
+ "icon": "octicon octicon-database",
+ "type": "module",
+ "label": "Banking",
+ "doctype": "Module Def"
 }

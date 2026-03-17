@@ -1,8 +1,9 @@
 {
-  "module_name": "Accounts",
-  "app_name": "zoho_books_clone",
-  "color": "#2563EB",
-  "icon": "octicon octicon-book",
-  "type": "module",
-  "label": "Accounts"
+ "module_name": "Accounts",
+ "app_name": "zoho_books_clone",
+ "color": "#2563EB",
+ "icon": "octicon octicon-book",
+ "type": "module",
+ "label": "Accounts",
+ "doctype": "Module Def"
 }
