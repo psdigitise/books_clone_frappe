@@ -1,0 +1,28 @@
+{
+ "name": "Cash Flow Statement",
+ "report_type": "Script Report",
+ "module": "Reports",
+ "ref_doctype": "General Ledger Entry",
+ "is_standard": "Yes",
+ "filters": [
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "label": "To Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Data",
+   "label": "Company",
+   "reqd": 1
+  }
+ ],
+ "doctype": "Report"
+}

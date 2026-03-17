@@ -1,0 +1,3 @@
+zoho_books_clone.patches.v1_0.create_indexes
+zoho_books_clone.patches.v1_0.seed_default_currency
+zoho_books_clone.patches.v1_0.seed_modes_of_payment

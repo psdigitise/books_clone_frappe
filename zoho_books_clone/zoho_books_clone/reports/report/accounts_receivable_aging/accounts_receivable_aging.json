@@ -1,0 +1,22 @@
+{
+ "name": "Accounts Receivable Aging",
+ "report_type": "Script Report",
+ "module": "Reports",
+ "ref_doctype": "Sales Invoice",
+ "is_standard": "Yes",
+ "filters": [
+  {
+   "fieldname": "as_of_date",
+   "fieldtype": "Date",
+   "label": "As of Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Data",
+   "label": "Company",
+   "reqd": 1
+  }
+ ],
+ "doctype": "Report"
+}
