@@ -18,8 +18,10 @@ def after_migrate():
     seed_naming_series()
     seed_currencies()
     seed_uoms()
-    seed_modes_of_payment()
-    seed_payment_terms()
+    if frappe.db.exists("DocType", "Books Payment Mode"):
+        seed_modes_of_payment()
+    if frappe.db.exists("DocType", "Payment Terms"):
+        seed_payment_terms()
     frappe.db.commit()
 
 
