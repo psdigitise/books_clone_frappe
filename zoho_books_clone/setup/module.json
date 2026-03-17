@@ -1,9 +1,9 @@
 {
- "module_name": "Setup",
- "app_name": "zoho_books_clone",
- "color": "#374151",
- "icon": "octicon octicon-settings",
- "type": "module",
- "label": "Setup",
- "doctype": "Module Def"
+  "module_name": "Books Setup",
+  "app_name": "zoho_books_clone",
+  "color": "#374151",
+  "icon": "octicon octicon-settings",
+  "type": "module",
+  "label": "Books Setup",
+  "doctype": "Module Def"
 }

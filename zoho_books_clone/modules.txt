@@ -4,4 +4,4 @@ Payments
 Banking
 Taxes
 Reports
-Setup
+Books Setup
