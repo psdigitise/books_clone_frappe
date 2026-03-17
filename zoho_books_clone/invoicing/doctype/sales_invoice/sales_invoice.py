@@ -75,7 +75,7 @@ class SalesInvoice(Document):
             # Try payment terms first
             if self.payment_terms and self.posting_date:
                 try:
-                    from zoho_books_clone.setup.doctype.payment_terms.payment_terms import get_due_date
+                    from zoho_books_clone.books_setup.doctype.payment_terms.payment_terms import get_due_date
                     self.due_date = get_due_date(self.payment_terms, self.posting_date)
                     return
                 except Exception:
