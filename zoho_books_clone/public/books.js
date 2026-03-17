@@ -906,7 +906,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
           <input v-model.number="form.paid_amount" type="number" min="0" step="0.01" class="mi-input" style="font-weight:700;font-size:15px"/>
         </div>
         <div>
-          <label class="mi-label">Mode of Payment</label>
+          <label class="mi-label">Books Payment Mode</label>
           <select v-model="form.mode_of_payment" class="mi-input">
             <option>Bank Transfer</option><option>NEFT</option><option>RTGS</option>
             <option>UPI</option><option>Cash</option><option>Cheque</option>

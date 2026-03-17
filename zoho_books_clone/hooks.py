@@ -47,7 +47,7 @@ global_search_doctypes = {
     "Setup": [
         {"doctype": "Currency"},
         {"doctype": "UOM"},
-        {"doctype": "Mode of Payment"},
+        {"doctype": "Books Payment Mode"},
         {"doctype": "Payment Terms"},
     ],
 }

@@ -280,7 +280,7 @@ function _payment_dialog(frm) {
       { fieldname: "payment_date",    label: __("Date"),            fieldtype: "Date",
         default: frappe.datetime.get_today(), reqd: 1 },
       { fieldname: "mode_of_payment", label: __("Mode"),            fieldtype: "Link",
-        options: "Mode of Payment", default: "Bank Transfer" },
+        options: "Books Payment Mode", default: "Bank Transfer" },
       { fieldname: "reference_no",    label: __("Reference / UTR"), fieldtype: "Data" },
       { fieldname: "paid_to",         label: __("Deposit To (Bank/Cash Account)"),
         fieldtype: "Link", options: "Account", reqd: 1,

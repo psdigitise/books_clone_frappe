@@ -6,8 +6,8 @@ MODES = ["Cash", "Bank Transfer", "NEFT", "RTGS", "UPI", "Cheque", "Credit Card"
 
 def execute():
     for mode in MODES:
-        if not frappe.db.exists("Mode of Payment", mode):
-            frappe.get_doc({"doctype": "Mode of Payment", "mode_of_payment": mode}).insert(
+        if not frappe.db.exists("Books Payment Mode", mode):
+            frappe.get_doc({"doctype": "Books Payment Mode", "mode_of_payment": mode}).insert(
                 ignore_permissions=True
             )
     frappe.db.commit()

@@ -169,7 +169,7 @@ function _pi_pay_dialog(frm) {
     fields:[
       {fieldname:"paid_amount",label:__("Amount"),fieldtype:"Currency",default:outstanding,reqd:1},
       {fieldname:"payment_date",label:__("Date"),fieldtype:"Date",default:frappe.datetime.get_today(),reqd:1},
-      {fieldname:"mode_of_payment",label:__("Mode"),fieldtype:"Link",options:"Mode of Payment",default:"Bank Transfer"},
+      {fieldname:"mode_of_payment",label:__("Mode"),fieldtype:"Link",options:"Books Payment Mode",default:"Bank Transfer"},
       {fieldname:"reference_no",label:__("Reference No"),fieldtype:"Data"},
       {fieldname:"paid_from",label:__("Pay From (Bank/Cash Account)"),fieldtype:"Link",options:"Account",reqd:1,
        get_query:()=>({filters:{account_type:["in",["Bank","Cash"]],company:frm.doc.company,is_group:0}})},

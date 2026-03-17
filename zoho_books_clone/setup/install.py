@@ -117,9 +117,9 @@ def seed_modes_of_payment():
         ("Demand Draft",  "Bank"),
     ]
     for name, mtype in modes:
-        if not frappe.db.exists("Mode of Payment", name):
+        if not frappe.db.exists("Books Payment Mode", name):
             frappe.get_doc({
-                "doctype":        "Mode of Payment",
+                "doctype":        "Books Payment Mode",
                 "mode_of_payment": name,
                 "type":           mtype,
                 "enabled":        1,
