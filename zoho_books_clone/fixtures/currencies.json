@@ -6,7 +6,8 @@
     "fraction": "Paise",
     "fraction_units": 100,
     "number_format": "#,##,###.##",
-    "enabled": 1
+    "enabled": 1,
+    "name": "INR"
   },
   {
     "doctype": "Currency",
@@ -15,7 +16,8 @@
     "fraction": "Cents",
     "fraction_units": 100,
     "number_format": "#,###.##",
-    "enabled": 1
+    "enabled": 1,
+    "name": "USD"
   },
   {
     "doctype": "Currency",
@@ -24,7 +26,8 @@
     "fraction": "Cents",
     "fraction_units": 100,
     "number_format": "#,###.##",
-    "enabled": 1
+    "enabled": 1,
+    "name": "EUR"
   },
   {
     "doctype": "Currency",
@@ -33,6 +36,7 @@
     "fraction": "Pence",
     "fraction_units": 100,
     "number_format": "#,###.##",
-    "enabled": 1
+    "enabled": 1,
+    "name": "GBP"
   }
 ]

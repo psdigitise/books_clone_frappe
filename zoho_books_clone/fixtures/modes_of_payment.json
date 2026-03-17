@@ -3,48 +3,56 @@
     "doctype": "Mode of Payment",
     "mode_of_payment": "Cash",
     "type": "Cash",
-    "enabled": 1
+    "enabled": 1,
+    "name": "Cash"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "Bank Transfer",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "Bank Transfer"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "NEFT",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "NEFT"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "RTGS",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "RTGS"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "UPI",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "UPI"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "Cheque",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "Cheque"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "Credit Card",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "Credit Card"
   },
   {
     "doctype": "Mode of Payment",
     "mode_of_payment": "Debit Card",
     "type": "Bank",
-    "enabled": 1
+    "enabled": 1,
+    "name": "Debit Card"
   }
 ]
