@@ -978,6 +978,6 @@
    "if_owner": 0
   }
  ],
- "autoname": "naming_series:CUST-.YYYY.-.#####",
+ "autoname": "CUST-.YYYY.-.#####",
  "title_field": "customer_name"
 }

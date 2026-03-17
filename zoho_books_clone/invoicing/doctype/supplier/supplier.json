@@ -913,6 +913,6 @@
    "if_owner": 0
   }
  ],
- "autoname": "naming_series:SUPP-.YYYY.-.#####",
+ "autoname": "SUPP-.YYYY.-.#####",
  "title_field": "supplier_name"
 }
