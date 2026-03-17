@@ -55,5 +55,6 @@ global_search_doctypes = {
 app_include_css = ["/assets/zoho_books_clone/css/books.css"]
 app_include_js  = ["/assets/zoho_books_clone/js/books.js"]
 
+before_migrate = "zoho_books_clone.books_setup.install.before_migrate"
 after_install = "zoho_books_clone.books_setup.install.after_install"
 after_migrate = "zoho_books_clone.books_setup.install.after_migrate"
