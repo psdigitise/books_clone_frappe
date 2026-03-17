@@ -87,8 +87,7 @@ async function apiLinkValues(doctype,txt,filters){
 async function resolveCompany(){
   if(window.__booksCompany)return window.__booksCompany;
   try{
-    const rows=await apiList("Company",{fields:["name"],limit:1,order:"creation asc"});
-    const c=rows?.[0]?.name||"";
+    const c=(await api("zoho_books_clone.api.books_data.get_company",{}))||"";
     window.__booksCompany=c;
     if(window.frappe?.boot?.sysdefaults)window.frappe.boot.sysdefaults.company=c;
     return c;
@@ -204,29 +203,21 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       form.company=c;
       // Load AR accounts
       try{
-        accounts_ar.value=await apiList("Account",{
-          fields:["name"],
-          filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],
-          limit:20
-        });
+        accounts_ar.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Receivable"});
         if(accounts_ar.value.length&&!form.debit_to)form.debit_to=accounts_ar.value[0].name;
       }catch{}
       // Load Income accounts
       try{
-        accounts_income.value=await apiList("Account",{
-          fields:["name"],
-          filters:[["account_type","=","Income"],["company","=",c],["is_group","=",0]],
-          limit:20
-        });
+        accounts_income.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Income"});
         if(accounts_income.value.length&&!form.income_account)form.income_account=accounts_income.value[0].name;
       }catch{}
       // Load customers
       try{
-        customers.value=await apiList("Customer",{fields:["name","customer_name"],limit:50,order:"customer_name asc"});
+        customers.value=await api("zoho_books_clone.api.books_data.get_customers",{});
       }catch{}
       // Load tax templates
       try{
-        taxTemplates.value=await apiList("Tax Template",{fields:["name","template_name"],limit:20});
+        taxTemplates.value=await api("zoho_books_clone.api.books_data.get_tax_templates",{});
       }catch{}
     }
 
@@ -235,7 +226,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 
     async function applyTaxTemplate(tplName){
       try{
-        const tpl=await apiGet("Tax Template",tplName);
+        const tpl=await api("zoho_books_clone.api.books_data.get_tax_template",{name:tplName});
         form.taxes=[];
         (tpl.taxes||[]).forEach(t=>{
           form.taxes.push({
@@ -573,13 +564,13 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{suppliers.value=await apiList("Supplier",{fields:["name","supplier_name"],limit:50,order:"supplier_name asc"});}catch{}
+      try{suppliers.value=await api("zoho_books_clone.api.books_data.get_suppliers",{});}catch{}
       try{
-        accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});
+        accounts_ap.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Payable"});
         if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
       }catch{}
       try{
-        accounts_exp.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Expense"],["company","=",c],["is_group","=",0]],limit:20});
+        accounts_exp.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Expense"});
         if(accounts_exp.value.length&&!form.expense_account)form.expense_account=accounts_exp.value[0].name;
       }catch{}
     }
@@ -744,11 +735,11 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{accounts_bank.value=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["company","=",c],["is_group","=",0]],limit:20});}catch{}
-      try{accounts_ar.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
-      try{accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
-      try{customers.value=await apiList("Customer",{fields:["name","customer_name"],limit:50,order:"customer_name asc"});}catch{}
-      try{suppliers.value=await apiList("Supplier",{fields:["name","supplier_name"],limit:50,order:"supplier_name asc"});}catch{}
+      try{accounts_bank.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_types:"Bank,Cash"});}catch{}
+      try{accounts_ar.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Receivable"});}catch{}
+      try{accounts_ap.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Payable"});}catch{}
+      try{customers.value=await api("zoho_books_clone.api.books_data.get_customers",{});}catch{}
+      try{suppliers.value=await api("zoho_books_clone.api.books_data.get_suppliers",{});}catch{}
       _autoFillAccounts();
     }
 
@@ -1052,7 +1043,7 @@ const Invoices=defineComponent({name:"Invoices",
     function pillBadge(k){return{Draft:"b-badge-muted",Submitted:"b-badge-amber",Overdue:"b-badge-red",Paid:"b-badge-green"}[k]||"b-badge-muted";}
     async function load(){
       loading.value=true;
-      try{list.value=await apiList("Sales Invoice",{fields:["name","customer","customer_name","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
+      try{list.value=await api("zoho_books_clone.api.books_data.get_sales_invoices",{});}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1105,7 +1096,7 @@ const Purchases=defineComponent({name:"Purchases",
     const list=ref([]),loading=ref(true),showNew=ref(false);
     async function load(){
       loading.value=true;
-      try{list.value=await apiList("Purchase Invoice",{fields:["name","supplier","supplier_name","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
+      try{list.value=await api("zoho_books_clone.api.books_data.get_purchase_invoices",{});}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1152,7 +1143,7 @@ const Payments=defineComponent({name:"Payments",
     const filtered=computed(()=>active.value==="all"?list.value:list.value.filter(p=>p.payment_type===active.value));
     async function load(){
       loading.value=true;
-      try{list.value=await apiList("Payment Entry",{fields:["name","party","party_type","paid_amount","payment_type","payment_date","mode_of_payment"],order:"payment_date desc"});}
+      try{list.value=await api("zoho_books_clone.api.books_data.get_payment_entries",{});}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1196,7 +1187,7 @@ const Banking=defineComponent({name:"Banking",
     async function loadCash(){cashLoad.value=true;try{cash.value=await api("zoho_books_clone.api.dashboard.get_cash_position");}finally{cashLoad.value=false;}}
     async function pickAcct(a){
       sel.value=a.name;txnLoad.value=true;
-      try{txns.value=await apiList("Bank Transaction",{fields:["name","date","description","debit","credit","balance","reference_number","status"],filters:[["bank_account","=",a.name]],order:"date desc",limit:30});}
+      try{txns.value=await api("zoho_books_clone.api.books_data.get_bank_transactions",{bank_account:a.name});}
       finally{txnLoad.value=false;}
     }
     onMounted(loadCash);
@@ -1254,7 +1245,7 @@ const Accounts=defineComponent({name:"Accounts",
     const TC={Asset:"b-badge-blue",Liability:"b-badge-red",Equity:"b-badge-amber",Income:"b-badge-green",Expense:"b-badge-red",Bank:"b-badge-blue",Cash:"b-badge-green",Receivable:"b-badge-blue",Payable:"b-badge-red",Tax:"b-badge-amber"};
     async function load(){
       loading.value=true;
-      try{list.value=await apiList("Account",{fields:["name","account_name","account_type","parent_account","is_group","balance"],limit:100,order:"account_type asc, account_name asc"});}
+      try{list.value=await api("zoho_books_clone.api.books_data.get_accounts_full",{});}
       finally{loading.value=false;}
     }
     onMounted(load);
