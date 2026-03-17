@@ -962,7 +962,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon};
+    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1056,7 +1056,7 @@ const Invoices=defineComponent({name:"Invoices",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon};
+    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1200,7 +1200,7 @@ const Banking=defineComponent({name:"Banking",
       finally{txnLoad.value=false;}
     }
     onMounted(loadCash);
-    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge};
+    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
   },
   template:`
 <div class="b-page">
@@ -1258,7 +1258,7 @@ const Accounts=defineComponent({name:"Accounts",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,TC,load,fmt,icon};
+    return{list,loading,active,types,filtered,TC,load,fmt,icon,flt};
   },
   template:`
 <div class="b-page">
