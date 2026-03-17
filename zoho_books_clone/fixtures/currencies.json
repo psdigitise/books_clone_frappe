@@ -1,0 +1,38 @@
+[
+  {
+    "doctype": "Currency",
+    "currency_name": "INR",
+    "currency_symbol": "\u20b9",
+    "fraction": "Paise",
+    "fraction_units": 100,
+    "number_format": "#,##,###.##",
+    "enabled": 1
+  },
+  {
+    "doctype": "Currency",
+    "currency_name": "USD",
+    "currency_symbol": "$",
+    "fraction": "Cents",
+    "fraction_units": 100,
+    "number_format": "#,###.##",
+    "enabled": 1
+  },
+  {
+    "doctype": "Currency",
+    "currency_name": "EUR",
+    "currency_symbol": "\u20ac",
+    "fraction": "Cents",
+    "fraction_units": 100,
+    "number_format": "#,###.##",
+    "enabled": 1
+  },
+  {
+    "doctype": "Currency",
+    "currency_name": "GBP",
+    "currency_symbol": "\u00a3",
+    "fraction": "Pence",
+    "fraction_units": 100,
+    "number_format": "#,###.##",
+    "enabled": 1
+  }
+]

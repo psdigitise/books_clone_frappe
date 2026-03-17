@@ -1,0 +1,32 @@
+[
+  {
+    "doctype": "Payment Terms",
+    "payment_terms_name": "Net 30",
+    "credit_days": 30,
+    "due_date_based_on": "Day(s) after invoice date"
+  },
+  {
+    "doctype": "Payment Terms",
+    "payment_terms_name": "Net 15",
+    "credit_days": 15,
+    "due_date_based_on": "Day(s) after invoice date"
+  },
+  {
+    "doctype": "Payment Terms",
+    "payment_terms_name": "Net 7",
+    "credit_days": 7,
+    "due_date_based_on": "Day(s) after invoice date"
+  },
+  {
+    "doctype": "Payment Terms",
+    "payment_terms_name": "Due on Receipt",
+    "credit_days": 0,
+    "due_date_based_on": "Day(s) after invoice date"
+  },
+  {
+    "doctype": "Payment Terms",
+    "payment_terms_name": "End of Month",
+    "credit_days": 0,
+    "due_date_based_on": "Day(s) after the end of the invoice month"
+  }
+]

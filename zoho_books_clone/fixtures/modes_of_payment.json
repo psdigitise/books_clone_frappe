@@ -1,0 +1,50 @@
+[
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "Cash",
+    "type": "Cash",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "Bank Transfer",
+    "type": "Bank",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "NEFT",
+    "type": "Bank",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "RTGS",
+    "type": "Bank",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "UPI",
+    "type": "Bank",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "Cheque",
+    "type": "Bank",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "Credit Card",
+    "type": "Bank",
+    "enabled": 1
+  },
+  {
+    "doctype": "Mode of Payment",
+    "mode_of_payment": "Debit Card",
+    "type": "Bank",
+    "enabled": 1
+  }
+]

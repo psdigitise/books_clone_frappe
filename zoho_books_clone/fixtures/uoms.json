@@ -1,0 +1,67 @@
+[
+  {
+    "doctype": "UOM",
+    "uom_name": "Nos",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Kg",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Gram",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Liter",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Meter",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Hour",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Day",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Month",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Box",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Pair",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Dozen",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Sq Meter",
+    "enabled": 1
+  },
+  {
+    "doctype": "UOM",
+    "uom_name": "Sq Foot",
+    "enabled": 1
+  }
+]

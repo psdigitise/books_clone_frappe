@@ -16,9 +16,7 @@ fixtures = [
     "Property Setter",
 ]
 
-# NOTE: No doc_events for submit/cancel — the DocType classes handle those
-# directly via on_submit / on_cancel methods. Putting them here too causes
-# double GL posting.
+# No doc_events for submit/cancel — handled by the DocType classes directly
 doc_events = {}
 
 scheduler_events = {
@@ -32,9 +30,26 @@ scheduler_events = {
 }
 
 global_search_doctypes = {
-    "Accounts":  [{"doctype": "Account"}, {"doctype": "Customer"}, {"doctype": "Supplier"}],
-    "Invoicing": [{"doctype": "Sales Invoice"}, {"doctype": "Purchase Invoice"}],
-    "Payments":  [{"doctype": "Payment Entry"}],
+    "Accounts":  [
+        {"doctype": "Account"},
+        {"doctype": "Cost Center"},
+    ],
+    "Invoicing": [
+        {"doctype": "Sales Invoice"},
+        {"doctype": "Purchase Invoice"},
+        {"doctype": "Customer"},
+        {"doctype": "Supplier"},
+        {"doctype": "Item"},
+    ],
+    "Payments": [
+        {"doctype": "Payment Entry"},
+    ],
+    "Setup": [
+        {"doctype": "Currency"},
+        {"doctype": "UOM"},
+        {"doctype": "Mode of Payment"},
+        {"doctype": "Payment Terms"},
+    ],
 }
 
 app_include_css = ["/assets/zoho_books_clone/css/books.css"]

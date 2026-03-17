@@ -5,6 +5,10 @@ from frappe import _
 def after_install():
     create_roles()
     seed_naming_series()
+    seed_currencies()
+    seed_uoms()
+    seed_modes_of_payment()
+    seed_payment_terms()
     create_default_accounts()
     frappe.db.commit()
     print("✅  Zoho Books Clone installed successfully!")
@@ -12,48 +16,140 @@ def after_install():
 
 def after_migrate():
     seed_naming_series()
+    seed_currencies()
+    seed_uoms()
+    seed_modes_of_payment()
+    seed_payment_terms()
     frappe.db.commit()
 
 
+# ─── Roles ───────────────────────────────────────────────────────────────────
 def create_roles():
     for role in ["Books Admin", "Accountant", "Books Manager", "Books Viewer"]:
         if not frappe.db.exists("Role", role):
             frappe.get_doc({"doctype": "Role", "role_name": role}).insert(ignore_permissions=True)
 
 
+# ─── Naming Series ───────────────────────────────────────────────────────────
 def seed_naming_series():
-    """
-    Ensure naming series exist in the NamingSeries DocType.
-    Without this, "New Sales Invoice" button throws 'Series not found'.
-    """
     series = {
         "Sales Invoice":    "INV-.YYYY.-.#####",
         "Purchase Invoice": "PINV-.YYYY.-.#####",
         "Payment Entry":    "PAY-.YYYY.-.#####",
         "Bank Transaction": "BTXN-.YYYY.-.#####",
+        "Customer":         "CUST-.YYYY.-.#####",
+        "Supplier":         "SUPP-.YYYY.-.#####",
     }
     for doctype, prefix in series.items():
-        # frappe.model.naming stores series in __NamingSeries doc
+        key = f"{prefix}."
         try:
-            ns = frappe.get_doc("Naming Series") if frappe.db.exists("Naming Series") else None
-            current = frappe.db.get_value("Naming Series", None, "user_must_always_select") or ""
+            frappe.db.sql(
+                "INSERT IGNORE INTO `tabSeries` (name, current) VALUES (%s, 0)", key
+            )
         except Exception:
             pass
-        # Ensure the series counter exists
-        key = f"{prefix}."
-        if not frappe.db.exists("Series", key):
-            try:
-                frappe.db.sql("INSERT IGNORE INTO `tabSeries` (name, current) VALUES (%s, 0)", key)
-            except Exception:
-                pass
     frappe.db.commit()
 
 
+# ─── Currencies ──────────────────────────────────────────────────────────────
+def seed_currencies():
+    currencies = [
+        ("INR", "₹", "Paise",  100, "#,##,###.##"),
+        ("USD", "$", "Cents",  100, "#,###.##"),
+        ("EUR", "€", "Cents",  100, "#,###.##"),
+        ("GBP", "£", "Pence",  100, "#,###.##"),
+        ("AED", "د.إ","Fils",  100, "#,###.##"),
+        ("SGD", "S$","Cents",  100, "#,###.##"),
+    ]
+    for code, symbol, fraction, units, fmt in currencies:
+        if not frappe.db.exists("Currency", code):
+            frappe.get_doc({
+                "doctype":        "Currency",
+                "currency_name":  code,
+                "currency_symbol":symbol,
+                "fraction":       fraction,
+                "fraction_units": units,
+                "number_format":  fmt,
+                "enabled":        1,
+            }).insert(ignore_permissions=True)
+
+
+# ─── Units of Measure ────────────────────────────────────────────────────────
+def seed_uoms():
+    uoms = [
+        ("Nos",     "Numbers / Units"),
+        ("Kg",      "Kilogram"),
+        ("Gram",    "Gram"),
+        ("Liter",   "Liter"),
+        ("Meter",   "Meter"),
+        ("Hour",    "Hour"),
+        ("Day",     "Day"),
+        ("Month",   "Month"),
+        ("Box",     "Box"),
+        ("Pair",    "Pair"),
+        ("Dozen",   "Dozen"),
+        ("Quintal", "Quintal (100 Kg)"),
+        ("Tonne",   "Metric Tonne"),
+        ("Sq Meter","Square Meter"),
+        ("Sq Foot", "Square Foot"),
+    ]
+    for name, desc in uoms:
+        if not frappe.db.exists("UOM", name):
+            frappe.get_doc({
+                "doctype": "UOM",
+                "uom_name": name,
+                "description": desc,
+                "enabled": 1,
+            }).insert(ignore_permissions=True)
+
+
+# ─── Modes of Payment ────────────────────────────────────────────────────────
+def seed_modes_of_payment():
+    modes = [
+        ("Cash",          "Cash"),
+        ("Bank Transfer", "Bank"),
+        ("NEFT",          "Bank"),
+        ("RTGS",          "Bank"),
+        ("UPI",           "Bank"),
+        ("Cheque",        "Bank"),
+        ("Credit Card",   "Bank"),
+        ("Debit Card",    "Bank"),
+        ("Demand Draft",  "Bank"),
+    ]
+    for name, mtype in modes:
+        if not frappe.db.exists("Mode of Payment", name):
+            frappe.get_doc({
+                "doctype":        "Mode of Payment",
+                "mode_of_payment": name,
+                "type":           mtype,
+                "enabled":        1,
+            }).insert(ignore_permissions=True)
+
+
+# ─── Payment Terms ───────────────────────────────────────────────────────────
+def seed_payment_terms():
+    terms = [
+        ("Net 30",        30, "Day(s) after invoice date"),
+        ("Net 15",        15, "Day(s) after invoice date"),
+        ("Net 7",          7, "Day(s) after invoice date"),
+        ("Due on Receipt", 0, "Day(s) after invoice date"),
+        ("Net 60",        60, "Day(s) after invoice date"),
+        ("Net 90",        90, "Day(s) after invoice date"),
+        ("End of Month",   0, "Day(s) after the end of the invoice month"),
+    ]
+    for name, days, basis in terms:
+        if not frappe.db.exists("Payment Terms", name):
+            frappe.get_doc({
+                "doctype":           "Payment Terms",
+                "payment_terms_name": name,
+                "credit_days":       days,
+                "due_date_based_on": basis,
+            }).insert(ignore_permissions=True)
+
+
+# ─── Chart of Accounts ───────────────────────────────────────────────────────
 def create_default_accounts():
-    try:
-        company = frappe.db.get_single_value("Books Settings", "default_company") or ""
-    except Exception:
-        company = ""
+    company = frappe.db.get_single_value("Global Defaults", "default_company")
     if not company:
         return
 
@@ -85,13 +181,30 @@ def create_default_accounts():
         if not frappe.db.exists("Account", {"account_name": name, "company": company}):
             try:
                 frappe.get_doc({
-                    "doctype":       "Account",
-                    "account_name":  name,
-                    "account_type":  atype,
+                    "doctype":        "Account",
+                    "account_name":   name,
+                    "account_type":   atype,
                     "parent_account": parent,
-                    "is_group":      is_group,
-                    "company":       company,
-                    "currency":      "INR",
+                    "is_group":       is_group,
+                    "company":        company,
+                    "currency":       "INR",
                 }).insert(ignore_permissions=True)
             except Exception as e:
                 frappe.log_error(str(e), f"Account seed: {name}")
+
+
+# ─── Cost Centers ────────────────────────────────────────────────────────────
+def seed_cost_centers():
+    company = frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        return
+    if not frappe.db.exists("Cost Center", {"cost_center_name": "Main", "company": company}):
+        try:
+            frappe.get_doc({
+                "doctype":          "Cost Center",
+                "cost_center_name": "Main",
+                "is_group":         0,
+                "company":          company,
+            }).insert(ignore_permissions=True)
+        except Exception:
+            pass
