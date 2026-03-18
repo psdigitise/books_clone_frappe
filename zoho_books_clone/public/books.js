@@ -2112,6 +2112,21 @@ if(!document.getElementById("books-modal-css")){
   document.head.appendChild(s);
 }
 
+/* ── Boot ── */
+const router=createRouter({
+  history:createWebHashHistory(),
+  routes:[
+    {path:"/",        component:Dashboard,name:"dashboard"},
+    {path:"/invoices",component:Invoices, name:"invoices"},
+    {path:"/purchases",component:Purchases,name:"purchases"},
+    {path:"/payments", component:Payments, name:"payments"},
+    {path:"/banking",  component:Banking,  name:"banking"},
+    {path:"/accounts", component:Accounts, name:"accounts"},
+    {path:"/reports",  component:Reports,  name:"reports"},
+  ]
+});
+
+
 function getCsrfFromCookie(){
   const m=document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
   return m?decodeURIComponent(m.split("=").slice(1).join("=")):"";
