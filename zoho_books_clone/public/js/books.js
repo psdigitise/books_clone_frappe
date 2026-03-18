@@ -591,6 +591,131 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 `});
 
 /* ═══════════════════════════════════════════════════════════════
+   SEND EMAIL MODAL — uses Frappe's configured email account
+═══════════════════════════════════════════════════════════════ */
+const SendEmailModal=defineComponent({name:"SendEmailModal",
+  props:{show:Boolean,invoiceName:{type:String,default:""}},
+  emits:["close","sent"],
+  setup(props,{emit}){
+    const sending=ref(false),loading=ref(false);
+    const form=reactive({to:"",cc:"",subject:"",body:""});
+    const error=ref("");
+
+    async function loadDefaults(){
+      if(!props.invoiceName)return;
+      loading.value=true; error.value="";
+      try{
+        const d=await apiGET("zoho_books_clone.api.docs.get_invoice_email_defaults",{
+          invoice_name:props.invoiceName
+        });
+        form.to=d.to||"";
+        form.cc="";
+        form.subject=d.subject||"";
+        form.body=d.body||"";
+      }catch(e){error.value="Could not load email defaults: "+e.message;}
+      finally{loading.value=false;}
+    }
+
+    watch(()=>props.show,v=>{if(v&&props.invoiceName)loadDefaults();});
+
+    async function send(){
+      if(!form.to.trim()){error.value="Please enter a recipient email address.";return;}
+      sending.value=true; error.value="";
+      try{
+        await apiGET("zoho_books_clone.api.docs.send_invoice_email",{
+          invoice_name:props.invoiceName,
+          to:form.to,
+          subject:form.subject,
+          body:form.body,
+          cc:form.cc||""
+        });
+        toast("Invoice emailed to "+form.to,"success");
+        emit("sent");
+        emit("close");
+      }catch(e){error.value=e.message||"Failed to send email.";}
+      finally{sending.value=false;}
+    }
+
+    return{form,sending,loading,error,send};
+  },
+  template:`
+<teleport to="body">
+  <div v-if="show" class="mi-overlay" @click.self="$emit('close')">
+    <div class="mi-modal" style="max-width:600px;width:96vw">
+      <!-- Header -->
+      <div class="mi-modal-head">
+        <div style="display:flex;align-items:center;gap:10px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          <span style="font-size:15px;font-weight:700;color:#1a1d23">Send Invoice</span>
+          <span style="font-size:12px;color:#888;background:#f0f4ff;padding:2px 8px;border-radius:20px;font-weight:600">{{invoiceName}}</span>
+        </div>
+        <button class="mi-close" @click="$emit('close')">✕</button>
+      </div>
+
+      <!-- Loading state -->
+      <div v-if="loading" style="padding:32px;text-align:center">
+        <div class="b-shimmer" style="height:14px;border-radius:4px;margin-bottom:10px"></div>
+        <div class="b-shimmer" style="height:14px;border-radius:4px;width:70%"></div>
+      </div>
+
+      <div v-else style="padding:20px 24px">
+        <!-- Error -->
+        <div v-if="error" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#b91c1c;display:flex;align-items:center;gap:8px">
+          <span style="font-size:15px">⚠</span> {{error}}
+        </div>
+
+        <!-- To -->
+        <div class="zb-form-field" style="margin-bottom:12px">
+          <label class="sem-label">To <span style="color:#e03131">*</span></label>
+          <input v-model="form.to" class="sem-input" placeholder="customer@example.com" type="email"/>
+          <span style="font-size:11px;color:#888;margin-top:3px">Comma-separate multiple addresses</span>
+        </div>
+
+        <!-- CC -->
+        <div class="zb-form-field" style="margin-bottom:12px">
+          <label class="sem-label">CC</label>
+          <input v-model="form.cc" class="sem-input" placeholder="optional@example.com"/>
+        </div>
+
+        <!-- Subject -->
+        <div class="zb-form-field" style="margin-bottom:12px">
+          <label class="sem-label">Subject</label>
+          <input v-model="form.subject" class="sem-input" placeholder="Invoice subject"/>
+        </div>
+
+        <!-- Body (rich text preview + editable) -->
+        <div class="zb-form-field" style="margin-bottom:16px">
+          <label class="sem-label">Message</label>
+          <div class="sem-body-wrap">
+            <textarea v-model="form.body" class="sem-textarea" rows="9" placeholder="Email message..."></textarea>
+          </div>
+          <span style="font-size:11px;color:#888;margin-top:3px">The invoice PDF will be automatically attached.</span>
+        </div>
+
+        <!-- Info box -->
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:18px;font-size:12px;color:#1e40af;display:flex;align-items:flex-start;gap:8px">
+          <span style="font-size:14px;margin-top:1px">ℹ</span>
+          <span>This email will be sent using your configured Frappe outgoing email account and a PDF of the invoice will be attached automatically.</span>
+        </div>
+
+        <!-- Actions -->
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button class="zb-ab-btn" @click="$emit('close')" :disabled="sending">Cancel</button>
+          <button class="zb-ab-btn zb-ab-primary" @click="send" :disabled="sending||!form.to.trim()">
+            <span v-if="sending" style="display:inline-block;animation:spin 1s linear infinite">↻</span>
+            <span v-else>
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </span>
+            {{sending ? 'Sending…' : 'Send Email'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</teleport>
+`});
+
+/* ═══════════════════════════════════════════════════════════════
    PURCHASE BILL MODAL — same structure, different fields
 ═══════════════════════════════════════════════════════════════ */
 const PurchaseModal=defineComponent({name:"PurchaseModal",
@@ -1271,10 +1396,12 @@ const Invoices=defineComponent({name:"Invoices",
 
 // ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
 const InvoiceDetail=defineComponent({name:"InvoiceDetail",
+  components:{SendEmailModal},
   setup(){
     const route=useRoute();
     const router=useRouter();
     const invName=computed(()=>route.params.name);
+    const showSendEmail=ref(false);
 
     // ── List (sidebar) ──────────────────────────────────────────
     const list=ref([]),listLoading=ref(true),active=ref("all"),search=ref("");
@@ -1424,7 +1551,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
     return{
       list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,
+      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
@@ -1521,7 +1648,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
         </template>
         <template v-else>
           <button class="zb-ab-btn" @click="startEdit"><span v-html="icon('edit',12)"></span> Edit</button>
-          <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('send',12)"></span> Send</button>
+          <button class="zb-ab-btn" @click="showSendEmail=true"><span v-html="icon('send',12)"></span> Send</button>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
           <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
@@ -1742,6 +1869,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
     </div><!-- /flex row -->
   </div><!-- /detail area -->
+  <SendEmailModal :show="showSendEmail" :invoice-name="invName" @close="showSendEmail=false" @sent="showSendEmail=false"/>
 </div>
 `});
 
@@ -2263,6 +2391,12 @@ const modalCSS=`
 .zb-edit-total-row{display:flex;gap:48px;font-size:12px;color:#555}
 .zb-edit-grand{font-size:15px;font-weight:800;color:#1a1d23;padding-top:5px;border-top:2px solid #1a1d23;width:100%;max-width:260px;justify-content:space-between}
 @keyframes spin{to{transform:rotate(360deg)}}
+/* Send Email Modal */
+.sem-label{font-size:11px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;display:block}
+.sem-input{width:100%;padding:8px 11px;border:1px solid #d0d3d9;border-radius:6px;font-size:13px;font-family:inherit;color:#1a1d23;background:#fff;transition:.12s;box-sizing:border-box}
+.sem-input:focus{outline:none;border-color:#2563EB;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.sem-body-wrap{border:1px solid #d0d3d9;border-radius:6px;overflow:hidden;background:#fff}
+.sem-textarea{width:100%;padding:10px 12px;border:none;outline:none;font-size:13px;font-family:inherit;color:#1a1d23;resize:vertical;min-height:160px;box-sizing:border-box;background:#fff}
 /* Print */
 @media print{
   .no-print{display:none!important}

@@ -1,201 +1,145 @@
-"""
-books_data.py – Whitelisted data-access endpoints for the Books frontend.
-All methods are decorated with @frappe.whitelist() so any logged-in user
-can call them without needing explicit DocType-level read permissions.
-"""
 import frappe
+import json
+from frappe.utils import get_url
 
 
-def _company():
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_invoice_email_defaults(invoice_name):
+    """
+    Return pre-filled To, Subject, and body for the Send Email dialog.
+    Uses the customer's email_id and the invoice's grand_total / due_date.
+    """
+    inv = frappe.get_doc("Sales Invoice", invoice_name)
+    customer_email = frappe.db.get_value("Customer", inv.customer, "email_id") or ""
+
+    subject = f"Invoice {inv.name} from {inv.company or frappe.defaults.get_default('company') or ''}"
+
+    body = (
+        f"Dear {inv.customer_name or inv.customer},<br><br>"
+        f"Please find your invoice <b>{inv.name}</b> details below:<br><br>"
+        f"<table style='border-collapse:collapse;font-size:14px'>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>Invoice #</td><td><b>{inv.name}</b></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>Amount</td><td><b>₹{inv.grand_total:,.2f}</b></td></tr>"
+        f"<tr><td style='padding:4px 12px 4px 0;color:#666'>Due Date</td><td>{inv.due_date}</td></tr>"
+        f"</table><br>"
+        f"Kindly make the payment by the due date.<br><br>"
+        f"Thanks for your business.<br><br>"
+        f"Regards,<br>{inv.company or ''}"
+    )
+
+    return {
+        "to": customer_email,
+        "subject": subject,
+        "body": body,
+        "invoice_name": inv.name,
+        "customer_name": inv.customer_name or inv.customer,
+    }
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def send_invoice_email(invoice_name, to, subject, body, cc=None):
+    """
+    Send invoice email using Frappe's configured outgoing email account.
+    Attaches a PDF of the invoice.
+    """
+    if not to:
+        frappe.throw("Recipient email (To) is required.")
+
+    # Validate invoice exists and user has permission
+    if not frappe.has_permission("Sales Invoice", "read", invoice_name):
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    inv = frappe.get_doc("Sales Invoice", invoice_name)
+
+    # Build recipient list (support comma-separated)
+    recipients = [e.strip() for e in to.split(",") if e.strip()]
+    cc_list = [e.strip() for e in (cc or "").split(",") if e.strip()]
+
+    # Attach PDF of the invoice
     try:
-        rows = frappe.db.get_all("Company", fields=["name"], limit=1, order_by="creation asc")
-        return rows[0].name if rows else ""
+        pdf_attachment = frappe.attach_print(
+            inv.doctype,
+            inv.name,
+            print_format="Sales Invoice",
+            print_letterhead=True,
+        )
+        attachments = [pdf_attachment]
     except Exception:
-        return ""
+        # If print format not found, send without attachment
+        attachments = []
 
-
-# ─── Lookup helpers ──────────────────────────────────────────────────────────
-
-@frappe.whitelist()
-def get_company():
-    return _company()
-
-
-@frappe.whitelist()
-def get_customers(company=None):
-    return frappe.db.get_all(
-        "Customer",
-        fields=["name", "customer_name"],
-        filters={"disabled": 0},
-        order_by="customer_name asc",
-        limit=200,
+    # Send using Frappe's configured email account
+    frappe.sendmail(
+        recipients=recipients,
+        cc=cc_list,
+        subject=subject,
+        message=body,
+        attachments=attachments,
+        reference_doctype="Sales Invoice",
+        reference_name=invoice_name,
+        now=True,  # send immediately (not queued)
     )
 
+    # Log a communication record so it appears in the timeline
+    comm = frappe.get_doc({
+        "doctype": "Communication",
+        "communication_type": "Communication",
+        "communication_medium": "Email",
+        "sent_or_received": "Sent",
+        "email_status": "Sent",
+        "subject": subject,
+        "content": body,
+        "sender": frappe.session.user,
+        "recipients": to,
+        "cc": cc or "",
+        "reference_doctype": "Sales Invoice",
+        "reference_name": invoice_name,
+        "status": "Linked",
+    })
+    comm.insert(ignore_permissions=True)
+    frappe.db.commit()
 
-@frappe.whitelist()
-def get_suppliers(company=None):
-    return frappe.db.get_all(
-        "Supplier",
-        fields=["name", "supplier_name"],
-        filters={"disabled": 0},
-        order_by="supplier_name asc",
-        limit=200,
-    )
+    return {"status": "sent", "to": to, "invoice": invoice_name}
 
 
-@frappe.whitelist()
-def get_accounts(company=None, account_type=None, account_types=None):
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def save_doc(doc):
     """
-    account_type  – single string, e.g. "Receivable"
-    account_types – comma-separated, e.g. "Bank,Cash"
+    Save a document. Accepts GET so CSRF is never required.
+    Called by the Books SPA instead of frappe.client.save.
     """
-    if not company:
-        company = _company()
-    filters = {"company": company, "is_group": 0}
-    if account_type:
-        filters["account_type"] = account_type
-    elif account_types:
-        filters["account_type"] = ["in", [t.strip() for t in account_types.split(",")]]
-    return frappe.db.get_all(
-        "Account",
-        fields=["name", "account_type"],
-        filters=filters,
-        order_by="account_name asc",
-        limit=100,
-    )
+    if isinstance(doc, str):
+        doc = json.loads(doc)
+
+    doctype = doc.get("doctype")
+    if not doctype:
+        frappe.throw("doctype is required")
+
+    # Check permission
+    if not frappe.has_permission(doctype, "write"):
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    name = doc.get("name")
+    if name and frappe.db.exists(doctype, name):
+        # Update existing
+        d = frappe.get_doc(doctype, name)
+        d.update(doc)
+    else:
+        # Create new
+        d = frappe.get_doc(doc)
+
+    d.save(ignore_permissions=False)
+    frappe.db.commit()
+    return d.as_dict()
 
 
-@frappe.whitelist()
-def get_accounts_full(company=None):
-    """All accounts with balance info for the Accounts page."""
-    if not company:
-        company = _company()
-    return frappe.db.get_all(
-        "Account",
-        fields=["name", "account_name", "account_type", "parent_account", "is_group", "balance"],
-        filters={"company": company},
-        order_by="account_type asc, account_name asc",
-        limit=500,
-    )
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def submit_doc(doctype, name):
+    """Submit a document via GET — no CSRF needed."""
+    if not frappe.has_permission(doctype, "submit"):
+        frappe.throw("Not permitted", frappe.PermissionError)
 
-
-@frappe.whitelist()
-def get_tax_templates(company=None):
-    return frappe.db.get_all(
-        "Tax Template",
-        fields=["name", "template_name"],
-        order_by="template_name asc",
-        limit=50,
-    )
-
-
-@frappe.whitelist()
-def get_tax_template(name):
-    doc = frappe.get_doc("Tax Template", name)
-    return doc.as_dict()
-
-
-@frappe.whitelist()
-def get_modes_of_payment():
-    return frappe.db.get_all(
-        "Books Payment Mode",
-        fields=["name", "mode_of_payment", "type"],
-        filters={"enabled": 1},
-        order_by="mode_of_payment asc",
-        limit=50,
-    )
-
-
-# ─── List pages ──────────────────────────────────────────────────────────────
-
-@frappe.whitelist()
-def get_sales_invoices(company=None):
-    if not company:
-        company = _company()
-    return frappe.db.get_all(
-        "Sales Invoice",
-        fields=["name", "customer", "customer_name", "posting_date", "due_date",
-                "grand_total", "outstanding_amount", "status"],
-        filters={"company": company, "docstatus": ["!=", 2]},
-        order_by="posting_date desc",
-        limit=200,
-    )
-
-
-@frappe.whitelist()
-def get_purchase_invoices(company=None):
-    if not company:
-        company = _company()
-    return frappe.db.get_all(
-        "Purchase Invoice",
-        fields=["name", "supplier", "supplier_name", "posting_date", "due_date",
-                "grand_total", "outstanding_amount", "status"],
-        filters={"company": company, "docstatus": ["!=", 2]},
-        order_by="posting_date desc",
-        limit=200,
-    )
-
-
-@frappe.whitelist()
-def get_payment_entries(company=None):
-    if not company:
-        company = _company()
-    return frappe.db.get_all(
-        "Payment Entry",
-        fields=["name", "party", "party_type", "paid_amount", "payment_type",
-                "payment_date", "mode_of_payment"],
-        filters={"company": company, "docstatus": ["!=", 2]},
-        order_by="payment_date desc",
-        limit=200,
-    )
-
-
-@frappe.whitelist()
-def get_bank_transactions(bank_account):
-    return frappe.db.get_all(
-        "Bank Transaction",
-        fields=["name", "date", "description", "debit", "credit",
-                "balance", "reference_number", "status"],
-        filters={"bank_account": bank_account},
-        order_by="date desc",
-        limit=100,
-    )
-
-
-@frappe.whitelist()
-def get_open_invoices(party_type, party, company=None):
-    if not company:
-        company = _company()
-    dt = "Sales Invoice" if party_type == "Customer" else "Purchase Invoice"
-    party_field = "customer" if party_type == "Customer" else "supplier"
-    return frappe.db.get_all(
-        dt,
-        fields=["name", "posting_date", "grand_total", "outstanding_amount"],
-        filters={
-            "company": company,
-            party_field: party,
-            "docstatus": 1,
-            "outstanding_amount": [">", 0],
-        },
-        order_by="posting_date asc",
-        limit=50,
-    )
-
-
-@frappe.whitelist()
-def get_items(search=None):
-    """Items for the invoice dropdown — searches item_code and item_name."""
-    where = "WHERE disabled=0"
-    values = {}
-    if search:
-        where += " AND (item_code LIKE %(s)s OR item_name LIKE %(s)s)"
-        values["s"] = f"%{search}%"
-    return frappe.db.sql(f"""
-        SELECT name, item_code, item_name,
-               standard_rate, description, stock_uom,
-               income_account, expense_account, hsn_code
-        FROM `tabItem`
-        {where}
-        ORDER BY item_name ASC
-        LIMIT 100
-    """, values, as_dict=True)
+    d = frappe.get_doc(doctype, name)
+    d.submit()
+    frappe.db.commit()
+    return d.as_dict()
