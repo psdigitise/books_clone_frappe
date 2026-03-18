@@ -252,22 +252,18 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     async function loadDefaults(){
       const c=await resolveCompany();
       form.company=c;
-      // Load accounts — filter client-side (avoids is_group/account_type server-side issues)
-      let allAccounts=[];
+      // Query AR accounts exactly like Frappe desk does: account_type=Receivable, is_group=0
       try{
-        const filters=c?[["company","=",c]]:[];
-        allAccounts=await apiList("Account",{fields:["name","account_type","is_group"],filters,limit:500});
-        // Filter out group accounts client-side
-        allAccounts=allAccounts.filter(a=>!a.is_group&&a.is_group!==1&&a.is_group!=="1");
-      }catch(e){console.warn("Accounts load failed:",e.message);}
-      // Prefer Receivable type for AR, fallback to all leaf accounts
-      const arAccounts=allAccounts.filter(a=>a.account_type==="Receivable");
-      accounts_ar.value=arAccounts.length?arAccounts:allAccounts;
-      if(accounts_ar.value.length&&!form.debit_to)form.debit_to=accounts_ar.value[0].name;
-      // Prefer Income type for income account
-      const incAccounts=allAccounts.filter(a=>["Income","Income Account"].includes(a.account_type));
-      accounts_income.value=incAccounts.length?incAccounts:allAccounts;
-      if(accounts_income.value.length&&!form.income_account)form.income_account=accounts_income.value[0].name;
+        const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});
+        accounts_ar.value=ar;
+        if(ar.length&&!form.debit_to)form.debit_to=ar[0].name;
+      }catch(e){console.warn("AR accounts failed:",e.message);}
+      // Income accounts
+      try{
+        const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});
+        accounts_income.value=inc;
+        if(inc.length&&!form.income_account)form.income_account=inc[0].name;
+      }catch(e){console.warn("Income accounts failed:",e.message);}
       // Load customers
       try{
         customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});
@@ -608,18 +604,16 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      let allAccounts=[];
       try{
-        const baseF=c?[["company","=",c]]:[];
-        allAccounts=await apiList("Account",{fields:["name","account_type","is_group"],filters:baseF,limit:500});
-        allAccounts=allAccounts.filter(a=>!a.is_group&&a.is_group!==1&&a.is_group!=="1");
-      }catch(e){console.warn("Accounts load failed:",e.message);}
-      const apAccounts=allAccounts.filter(a=>a.account_type==="Payable");
-      accounts_ap.value=apAccounts.length?apAccounts:allAccounts;
-      if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
-      const expAccounts=allAccounts.filter(a=>["Expense","Expense Account","Cost of Goods Sold"].includes(a.account_type));
-      accounts_exp.value=expAccounts.length?expAccounts:allAccounts;
-      if(accounts_exp.value.length&&!form.expense_account)form.expense_account=accounts_exp.value[0].name;
+        const ap=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["is_group","=",0]],limit:50});
+        accounts_ap.value=ap;
+        if(ap.length&&!form.credit_to)form.credit_to=ap[0].name;
+      }catch(e){console.warn("AP accounts failed:",e.message);}
+      try{
+        const exp=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Expense Account","Expense","Cost of Goods Sold"]],["is_group","=",0]],limit:50});
+        accounts_exp.value=exp;
+        if(exp.length&&!form.expense_account)form.expense_account=exp[0].name;
+      }catch(e){console.warn("Expense accounts failed:",e.message);}
       try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
     }
 
@@ -789,18 +783,18 @@ const PaymentModal=defineComponent({name:"PaymentModal",
         const modes=await apiList("Mode of Payment",{fields:["name"],limit:50,order:"name asc"});
         if(modes.length)paymentModes.value=modes;
       }catch{/* fallback to hardcoded defaults above */}
-      let allAccounts=[];
       try{
-        const baseF=c?[["company","=",c]]:[];
-        allAccounts=await apiList("Account",{fields:["name","account_type","is_group"],filters:baseF,limit:500});
-        allAccounts=allAccounts.filter(a=>!a.is_group&&a.is_group!==1&&a.is_group!=="1");
-      }catch(e){console.warn("Accounts load failed:",e.message);}
-      const bankAccs=allAccounts.filter(a=>["Bank","Cash"].includes(a.account_type));
-      accounts_bank.value=bankAccs.length?bankAccs:allAccounts;
-      const arAccs=allAccounts.filter(a=>a.account_type==="Receivable");
-      accounts_ar.value=arAccs.length?arAccs:allAccounts;
-      const apAccs=allAccounts.filter(a=>a.account_type==="Payable");
-      accounts_ap.value=apAccs.length?apAccs:allAccounts;
+        const bank=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["is_group","=",0]],limit:50});
+        accounts_bank.value=bank;
+      }catch(e){console.warn("Bank accounts failed:",e.message);}
+      try{
+        const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});
+        accounts_ar.value=ar;
+      }catch(e){console.warn("AR accounts failed:",e.message);}
+      try{
+        const ap=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["is_group","=",0]],limit:50});
+        accounts_ap.value=ap;
+      }catch(e){console.warn("AP accounts failed:",e.message);}
       try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
       try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       _autoFillAccounts();
