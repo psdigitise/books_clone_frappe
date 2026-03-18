@@ -121,8 +121,11 @@ async function apiSave(doc){
   return await apiPOST("frappe.client.save",{doc});
 }
 
-async function apiSubmit(doctype,name){
-  return await apiPOST("frappe.client.submit",{doc:{doctype,name}});
+async function apiSubmit(doctype,name,modified){
+  // Include modified timestamp so Frappe does not throw TimestampMismatchError
+  const doc={doctype,name};
+  if(modified)doc.modified=modified;
+  return await apiPOST("frappe.client.submit",{doc});
 }
 
 async function apiList(dt,opts){
@@ -209,7 +212,194 @@ function statusBadge(s){
    Opens a fully functional form inside the Books UI.
    Saves to Frappe via API then redirects to the saved doc.
 ═══════════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════════
+   SmartSelect — searchable dropdown with "Add new" support
+   Props:
+     modelValue    — the selected value (name/id)
+     options       — [{value, label, sub?}] array
+     placeholder   — input placeholder
+     addNewLabel   — text for the "Add new" footer (e.g. "+ Add new customer")
+     addNewUrl     — URL to open when "Add new" is clicked
+   ═══════════════════════════════════════════════════════════════ */
+const SmartSelect=defineComponent({name:"SmartSelect",
+  props:{
+    modelValue:{type:String,default:""},
+    options:{type:Array,default:()=>[]},
+    placeholder:{type:String,default:"Search..."},
+    addNewLabel:{type:String,default:""},
+    addNewUrl:{type:String,default:""},
+    disabled:{type:Boolean,default:false},
+  },
+  emits:["update:modelValue","change"],
+  setup(props,{emit}){
+    const{ref,computed,watch,onMounted,onBeforeUnmount}=Vue;
+    const query=ref("");
+    const open=ref(false);
+    const highlighted=ref(-1);
+    const inputRef=ref(null);
+    const dropRef=ref(null);
+
+    // Display value in input — show label of selected item
+    const displayValue=computed(()=>{
+      if(!props.modelValue)return query.value;
+      const found=props.options.find(o=>o.value===props.modelValue);
+      return found?found.label:props.modelValue;
+    });
+
+    const filtered=computed(()=>{
+      const q=(query.value||"").toLowerCase().trim();
+      if(!q)return props.options.slice(0,60);
+      return props.options.filter(o=>
+        (o.label||"").toLowerCase().includes(q)||
+        (o.sub||"").toLowerCase().includes(q)||
+        (o.value||"").toLowerCase().includes(q)
+      ).slice(0,60);
+    });
+
+    function onInput(e){
+      query.value=e.target.value;
+      open.value=true;
+      highlighted.value=-1;
+      // Clear selection if user types something new
+      if(props.modelValue&&e.target.value!==displayValue.value){
+        emit("update:modelValue","");
+        emit("change","",null);
+      }
+    }
+
+    function select(opt){
+      emit("update:modelValue",opt.value);
+      emit("change",opt.value,opt);
+      query.value=opt.label;
+      open.value=false;
+    }
+
+    function onFocus(){
+      query.value="";
+      open.value=true;
+      highlighted.value=-1;
+    }
+
+    function onBlur(){
+      // Delay to allow click on dropdown items
+      setTimeout(()=>{
+        open.value=false;
+        // Restore display value if nothing selected
+        if(!props.modelValue)query.value="";
+        else{
+          const found=props.options.find(o=>o.value===props.modelValue);
+          query.value=found?found.label:props.modelValue;
+        }
+      },180);
+    }
+
+    function onKeydown(e){
+      if(!open.value&&(e.key==="ArrowDown"||e.key==="Enter")){open.value=true;return;}
+      if(e.key==="Escape"){open.value=false;return;}
+      if(e.key==="ArrowDown"){
+        e.preventDefault();
+        highlighted.value=Math.min(highlighted.value+1,filtered.value.length-1);
+        scrollIntoView();
+      } else if(e.key==="ArrowUp"){
+        e.preventDefault();
+        highlighted.value=Math.max(highlighted.value-1,0);
+        scrollIntoView();
+      } else if(e.key==="Enter"&&highlighted.value>=0){
+        e.preventDefault();
+        select(filtered.value[highlighted.value]);
+      }
+    }
+
+    function scrollIntoView(){
+      const drop=dropRef.value;
+      if(!drop)return;
+      const item=drop.querySelectorAll(".ss-opt")[highlighted.value];
+      if(item)item.scrollIntoView({block:"nearest"});
+    }
+
+    function addNew(){
+      if(props.addNewUrl)window.open(props.addNewUrl,"_blank");
+      open.value=false;
+    }
+
+    // Sync input when modelValue changes externally
+    watch(()=>props.modelValue,v=>{
+      if(v){
+        const found=props.options.find(o=>o.value===v);
+        query.value=found?found.label:v;
+      } else {
+        query.value="";
+      }
+    });
+
+    return{query,open,highlighted,filtered,displayValue,inputRef,dropRef,
+           onInput,onFocus,onBlur,onKeydown,select,addNew};
+  },
+  template:`
+<div style="position:relative;width:100%">
+  <input
+    ref="inputRef"
+    :value="query||displayValue"
+    :placeholder="placeholder"
+    :disabled="disabled"
+    class="mi-input"
+    autocomplete="off"
+    @input="onInput"
+    @focus="onFocus"
+    @blur="onBlur"
+    @keydown="onKeydown"
+    style="padding-right:28px"
+  />
+  <span style="position:absolute;right:9px;top:50%;transform:translateY(-50%);
+    pointer-events:none;color:#868E96;font-size:11px">▾</span>
+
+  <div v-if="open&&(filtered.length||addNewLabel)"
+    ref="dropRef"
+    style="position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:99999;
+      background:#fff;border:1px solid #CDD5E0;border-radius:8px;
+      max-height:220px;overflow-y:auto;
+      box-shadow:0 8px 24px rgba(0,0,0,.13)">
+
+    <div v-if="!filtered.length&&!addNewLabel"
+      style="padding:12px 14px;font-size:12.5px;color:#868E96;text-align:center">
+      No results found
+    </div>
+
+    <div
+      v-for="(opt,i) in filtered" :key="opt.value"
+      class="ss-opt"
+      @mousedown.prevent="select(opt)"
+      :style="{
+        padding:'9px 14px',cursor:'pointer',
+        background:i===highlighted?'#EEF2FF':'transparent',
+        borderBottom:'1px solid #F1F3F5',
+      }"
+    >
+      <div style="font-size:13.5px;font-weight:500;color:#1A1D23;
+                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        {{opt.label}}
+      </div>
+      <div v-if="opt.sub" style="font-size:11.5px;color:#868E96;margin-top:1px;
+                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        {{opt.sub}}
+      </div>
+    </div>
+
+    <div v-if="addNewLabel"
+      @mousedown.prevent="addNew"
+      style="padding:10px 14px;cursor:pointer;font-size:12.5px;font-weight:600;
+        color:#3B5BDB;border-top:1px solid #E8ECF0;display:flex;align-items:center;
+        gap:6px;position:sticky;bottom:0;background:#F8F9FF">
+      <span style="font-size:16px;line-height:1">+</span>
+      {{addNewLabel}}
+    </div>
+  </div>
+</div>`
+});
+
 const InvoiceModal=defineComponent({name:"InvoiceModal",
+  components:{SmartSelect},
   props:{show:Boolean,doctype:{type:String,default:"Sales Invoice"}},
   emits:["close","saved"],
   setup(props,{emit}){
@@ -219,6 +409,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     const accounts_ar=ref([]);
     const accounts_income=ref([]);
     const taxTemplates=ref([]);
+    const itemsList=ref([]);  // items from DB
 
     const form=reactive({
       naming_series:"INV-.YYYY.-.#####",
@@ -226,7 +417,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       posting_date:today(),due_date:today(),
       company:co(),currency:"INR",
       debit_to:"",income_account:"",
-      items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
+      items:[{item_code:"",item_name:"",description:"",qty:1,rate:0,amount:0,uom:"Nos"}],
       taxes:[],
       notes:"",
       net_total:0,total_tax:0,grand_total:0,
@@ -284,10 +475,50 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }catch{}
     }
 
-    onMounted(loadDefaults);
-    watch(()=>props.show,v=>{if(v)loadDefaults();});
+    // Load items from DB
+    async function loadItems(search=""){
+      try{
+        const rows=await api("zoho_books_clone.api.books_data.get_items",{search});
+        itemsList.value=(rows||[]);
+      }catch(e){console.warn("Items load failed:",e.message);}
+    }
 
-    async function applyTaxTemplate(tplName){}  // Tax templates not available
+    // Called when an item is selected in the row dropdown
+    function onItemSelect(rowIdx,itemValue,opt){
+      const item=form.items[rowIdx];
+      item.item_code=itemValue;
+      if(opt){
+        item.item_name=opt.item_name||opt.label||itemValue;
+        item.description=opt.description||opt.item_name||"";
+        item.rate=parseFloat(opt.standard_rate)||0;
+        item.uom=opt.stock_uom||"Nos";
+      }
+      recalc();
+    }
+
+    // Computed option lists for SmartSelect
+    const customerOpts=computed(()=>
+      customers.value.map(c=>({value:c.name,label:c.name,sub:c.customer_name&&c.customer_name!==c.name?c.customer_name:""}))
+    );
+    const arOpts=computed(()=>accounts_ar.value.map(a=>({value:a.name,label:a.name})));
+    const incomeOpts=computed(()=>accounts_income.value.map(a=>({value:a.name,label:a.name})));
+    const itemOpts=computed(()=>
+      itemsList.value.map(i=>({
+        value:i.name,
+        label:i.item_name||i.item_code||i.name,
+        sub:i.item_code&&i.item_code!==i.item_name?i.item_code:"",
+        standard_rate:i.standard_rate,
+        description:i.description,
+        stock_uom:i.stock_uom,
+        income_account:i.income_account,
+        item_name:i.item_name,
+      }))
+    );
+
+    onMounted(()=>{loadDefaults();loadItems();});
+    watch(()=>props.show,v=>{if(v){loadDefaults();loadItems();}});
+
+    async function applyTaxTemplate(tplName){}
 
     async function save(andSubmit){
       if(!form.customer){toast("Please select a Customer","error");return;}
@@ -330,7 +561,9 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       try{
         const saved=await apiSave(doc);
         if(andSubmit){
-          await apiSubmit(props.doctype,saved.name);
+          // Fetch fresh doc to get latest modified timestamp before submit
+          const fresh=await apiGet(props.doctype,saved.name);
+          await apiSubmit(props.doctype,saved.name,fresh?.modified||saved.modified);
           toast("Invoice "+saved.name+" submitted!");
         } else {
           toast("Invoice "+saved.name+" saved as Draft");
@@ -338,7 +571,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
         emit("saved",saved.name);
         emit("close");
         // Navigate to the saved doc in Frappe desk
-        setTimeout(()=>window.open(docUrl(props.doctype,saved.name),"_blank"),300);
+        setTimeout(()=>openDoc(docUrl(props.doctype,saved.name)),300);
       }catch(e){
         toast(e.message||"Could not save invoice","error");
       }finally{saving.value=false;}
@@ -377,10 +610,14 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
         <div style="grid-column:1">
           <label class="mi-label">Customer <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.customer" @change="onCustomer" class="mi-input">
-            <option value="">— Select Customer —</option>
-            <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
-          </select>
+          <SmartSelect
+            v-model="form.customer"
+            :options="customerOpts"
+            placeholder="Search customer..."
+            add-new-label="+ Add new customer"
+            :add-new-url="newDocUrl('Customer')"
+            @change="onCustomer"
+          />
         </div>
         <div>
           <label class="mi-label">Invoice Date <span style="color:#C92A2A">*</span></label>
@@ -397,17 +634,23 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
         <div>
           <label class="mi-label">Debit To (AR Account) <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.debit_to" class="mi-input">
-            <option value="">— Select —</option>
-            <option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <SmartSelect
+            v-model="form.debit_to"
+            :options="arOpts"
+            placeholder="Search AR account..."
+            add-new-label="+ Add new account"
+            :add-new-url="newDocUrl('Account')"
+          />
         </div>
         <div>
           <label class="mi-label">Income Account <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.income_account" class="mi-input">
-            <option value="">— Select —</option>
-            <option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <SmartSelect
+            v-model="form.income_account"
+            :options="incomeOpts"
+            placeholder="Search income account..."
+            add-new-label="+ Add new account"
+            :add-new-url="newDocUrl('Account')"
+          />
         </div>
       </div>
 
@@ -429,8 +672,16 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i"
                 :style="i%2===1?'background:#FAFBFC':''">
-              <td class="mi-td">
-                <input v-model="item.item_name" class="mi-cell-input" placeholder="Item name"/>
+              <td class="mi-td" style="min-width:180px">
+                <SmartSelect
+                  :model-value="item.item_code||item.item_name"
+                  :options="itemOpts"
+                  placeholder="Search item..."
+                  add-new-label="+ Add new item"
+                  :add-new-url="newDocUrl('Item')"
+                  @change="(val,opt)=>onItemSelect(i,val,opt)"
+                  style="font-size:13.5px"
+                />
               </td>
               <td class="mi-td">
                 <input v-model="item.description" class="mi-cell-input" placeholder="Description"/>
@@ -585,6 +836,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
    PURCHASE BILL MODAL — same structure, different fields
 ═══════════════════════════════════════════════════════════════ */
 const PurchaseModal=defineComponent({name:"PurchaseModal",
+  components:{SmartSelect},
   props:{show:Boolean},
   emits:["close","saved"],
   setup(props,{emit}){
@@ -666,15 +918,15 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
       };
       try{
         const saved=await apiSave(doc);
-        if(andSubmit){await apiSubmit("Purchase Invoice",saved.name);toast("Bill "+saved.name+" submitted!");}
+        if(andSubmit){await apiSubmit("Purchase Invoice",saved.name,(await apiGet("Purchase Invoice",saved.name))?.modified||saved.modified);toast("Bill "+saved.name+" submitted!");}
         else{toast("Bill "+saved.name+" saved as Draft");}
         emit("saved",saved.name);emit("close");
-        setTimeout(()=>window.open(docUrl("Purchase Invoice",saved.name),"_blank"),300);
+        setTimeout(()=>openDoc(docUrl("Purchase Invoice",saved.name)),300);
       }catch(e){toast(e.message||"Could not save bill","error");}
       finally{saving.value=false;}
     }
 
-    return{form,saving,suppliers,accounts_ap,accounts_exp,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
+    return{form,saving,suppliers,supplierOpts,accounts_ap,accounts_exp,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
   },
   template:`
 <teleport to="body">
@@ -695,10 +947,14 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px">
         <div style="grid-column:1/3">
           <label class="mi-label">Supplier <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.supplier" @change="onSupplier" class="mi-input">
-            <option value="">— Select Supplier —</option>
-            <option v-for="s in suppliers" :key="s.name" :value="s.name">{{s.name}}</option>
-          </select>
+          <SmartSelect
+            v-model="form.supplier"
+            :options="supplierOpts"
+            placeholder="Search supplier..."
+            add-new-label="+ Add new supplier"
+            :add-new-url="newDocUrl('Supplier')"
+            @change="(val)=>{form.supplier=val;onSupplier();}"
+          />
         </div>
         <div>
           <label class="mi-label">Supplier Invoice No</label>
@@ -771,6 +1027,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
    PAYMENT MODAL
 ═══════════════════════════════════════════════════════════════ */
 const PaymentModal=defineComponent({name:"PaymentModal",
+  components:{SmartSelect},
   props:{show:Boolean},
   emits:["close","saved"],
   setup(props,{emit}){
@@ -891,17 +1148,17 @@ const PaymentModal=defineComponent({name:"PaymentModal",
             remarks:form.remarks,
           };
           const saved=await apiSave(doc);
-          await apiSubmit("Payment Entry",saved.name);
+          await apiSubmit("Payment Entry",saved.name,(await apiGet("Payment Entry",saved.name))?.modified||saved.modified);
           peName=saved.name;
         }
         toast("Payment "+peName+" recorded!");
         emit("saved",peName);emit("close");
-        setTimeout(()=>window.open(docUrl("Payment Entry",peName),"_blank"),300);
+        setTimeout(()=>openDoc(docUrl("Payment Entry",peName)),300);
       }catch(e){toast(e.message||"Could not save payment","error");}
       finally{saving.value=false;}
     }
 
-    return{form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,onParty,save,fmt,flt,icon,paymentModes};
+    return{form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,partyOpts,onParty,save,fmt,flt,icon,paymentModes};
   },
   template:`
 <teleport to="body">
@@ -929,10 +1186,14 @@ const PaymentModal=defineComponent({name:"PaymentModal",
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
         <div>
           <label class="mi-label">{{form.party_type}} <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.party" @change="onParty" class="mi-input">
-            <option value="">— Select —</option>
-            <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.name}}</option>
-          </select>
+          <SmartSelect
+            v-model="form.party"
+            :options="partyOpts"
+            :placeholder="'Search '+form.party_type+'...'"
+            :add-new-label="'+ Add new '+form.party_type.toLowerCase()"
+            :add-new-url="newDocUrl(form.party_type)"
+            @change="(val)=>{form.party=val;onParty();}"
+          />
         </div>
         <div>
           <label class="mi-label">Payment Date</label>
@@ -1058,7 +1319,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       <div v-if="loading" style="padding:20px"><div v-for="n in 5" :key="n" class="b-shimmer" style="height:14px;margin-bottom:16px"></div></div>
       <table v-else class="b-table"><thead><tr><th>Customer</th><th>Invoice</th><th>Date</th><th>Status</th></tr></thead>
         <tbody>
-          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">
+          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="openDoc(docUrl('Sales Invoice',inv.name))">
             <td class="fw-600">{{inv.customer}}</td>
             <td class="mono c-accent" style="font-size:12px">{{inv.name}}</td>
             <td class="c-muted" style="font-size:12px">{{fmtShort(inv.due_date)}}</td>
@@ -1154,14 +1415,14 @@ const Invoices=defineComponent({name:"Invoices",
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
           <tr v-for="inv in filtered" :key="inv.name" class="clickable">
-            <td @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{inv.customer}}</td>
-            <td class="c-muted" style="font-size:12.5px" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmtDate(inv.posting_date)}}</td>
-            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmt(inv.outstanding_amount)}}</td>
-            <td @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="window.open(docUrl('Sales Invoice',inv.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
+            <td @click="openDoc(docUrl('Sales Invoice',inv.name))"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
+            <td class="fw-600" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{inv.customer}}</td>
+            <td class="c-muted" style="font-size:12.5px" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.posting_date)}}</td>
+            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.due_date)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmt(inv.grand_total)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmt(inv.outstanding_amount)}}</td>
+            <td @click="openDoc(docUrl('Sales Invoice',inv.name))"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
+            <td><button @click.stop="openDoc(docUrl('Sales Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No invoices found</td></tr>
         </template>
@@ -1199,7 +1460,7 @@ const Purchases=defineComponent({name:"Purchases",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="window.open(docUrl('Purchase Invoice',inv.name),'_blank')">
+          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="openDoc(docUrl('Purchase Invoice',inv.name))">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
             <td class="fw-600">{{inv.supplier}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.posting_date)}}</td>
@@ -1207,7 +1468,7 @@ const Purchases=defineComponent({name:"Purchases",
             <td class="ta-r mono fw-600" style="font-size:13px">{{fmt(inv.grand_total)}}</td>
             <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'">{{fmt(inv.outstanding_amount)}}</td>
             <td><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="window.open(docUrl('Purchase Invoice',inv.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="openDoc(docUrl('Purchase Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!list.length"><td colspan="8" class="b-empty">No bills found</td></tr>
         </template>
@@ -1247,14 +1508,14 @@ const Payments=defineComponent({name:"Payments",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="window.open(docUrl('Payment Entry',p.name),'_blank')">
+          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="openDoc(docUrl('Payment Entry',p.name))">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{p.name}}</span></td>
             <td class="fw-600">{{p.party}}</td>
             <td class="c-muted">{{p.mode_of_payment||'—'}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(p.payment_date)}}</td>
             <td><span class="b-badge" :class="statusBadge(p.payment_type)">{{p.payment_type}}</span></td>
             <td class="ta-r mono fw-700" :class="p.payment_type==='Receive'?'c-green':'c-red'">{{fmt(p.paid_amount)}}</td>
-            <td><button @click.stop="window.open(docUrl('Payment Entry',p.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="openDoc(docUrl('Payment Entry',p.name))" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="7" class="b-empty">No payments found</td></tr>
         </template>
@@ -1339,7 +1600,7 @@ const Accounts=defineComponent({name:"Accounts",
     <div class="b-filter-row"><button v-for="t in types" :key="t" class="b-pill" :class="{active:active===t}" @click="active=t">{{t}}</button></div>
     <div style="display:flex;gap:8px">
       <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="b-btn b-btn-primary" @click="window.open(newDocUrl('Account'),'_blank')"><span v-html="icon('plus',13)"></span> New Account</button>
+      <button class="b-btn b-btn-primary" @click="openDoc(newDocUrl('Account'))"><span v-html="icon('plus',13)"></span> New Account</button>
     </div>
   </div>
   <div class="b-card" style="padding:0;overflow:hidden">
@@ -1348,7 +1609,7 @@ const Accounts=defineComponent({name:"Accounts",
       <tbody>
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="4" style="padding:14px"><div class="b-shimmer" style="height:12px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="window.open(docUrl('Account',a.name),'_blank')">
+          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="openDoc(docUrl('Account',a.name))">
             <td><div class="fw-700">{{a.account_name}}</div><div class="mono c-muted" style="font-size:11px">{{a.is_group?'Group':'Ledger'}}</div></td>
             <td><span class="b-badge" :class="TC[a.account_type]||'b-badge-muted'">{{a.account_type}}</span></td>
             <td class="c-muted" style="font-size:13px">{{a.parent_account||'—'}}</td>
