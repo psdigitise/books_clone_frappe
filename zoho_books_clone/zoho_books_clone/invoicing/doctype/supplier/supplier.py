@@ -9,7 +9,7 @@ class Supplier(Document):
         if self.email_id and "@" not in self.email_id:
             frappe.throw(_("Please enter a valid email address"))
 
-    @frappe.whitelist()
+    @frappe.whitelist(methods=["GET", "POST"])
     def get_outstanding_bills(self):
         return frappe.get_all(
             "Purchase Invoice",

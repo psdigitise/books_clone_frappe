@@ -3,7 +3,7 @@ from frappe import _
 from frappe.utils import flt, nowdate
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET", "POST"])
 def get_outstanding_invoices(party_type: str, party: str) -> list[dict]:
     """Return all unpaid invoices for a party."""
     dt = "Sales Invoice" if party_type == "Customer" else "Purchase Invoice"
@@ -16,7 +16,7 @@ def get_outstanding_invoices(party_type: str, party: str) -> list[dict]:
     )
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET", "POST"])
 def make_payment_entry_from_invoice(
     source_name: str,
     paid_amount:     float | None = None,
@@ -76,7 +76,7 @@ def make_payment_entry_from_invoice(
     return pe.name
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET", "POST"])
 def make_payment_entry_from_purchase_invoice(
     source_name: str,
     paid_amount:     float | None = None,
