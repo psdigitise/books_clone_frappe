@@ -772,7 +772,7 @@ const SendEmailModal=defineComponent({name:"SendEmailModal",
           <button @click="removeTag(toTags,i)" class="sem-chip-remove">✕</button>
         </div>
         <input ref="toInput" v-model="toInput" class="sem-chip-input" placeholder="Enter email and press Enter or comma"
-          @keydown="onToKey" @blur="()=>{if(toInput.trim())addTag({value:toInput},toTags);toInput='';}"/>
+          @keydown="onToKey" @blur="()=>{if(toInput.value.trim())addTag(toInput,toTags);}"/>
       </div>
     </div>
 
@@ -786,7 +786,7 @@ const SendEmailModal=defineComponent({name:"SendEmailModal",
           <button @click="removeTag(ccTags,i)" class="sem-chip-remove">✕</button>
         </div>
         <input v-model="ccInput" class="sem-chip-input" placeholder="Add CC recipients"
-          @keydown="onCcKey" @blur="()=>{if(ccInput.trim())addTag({value:ccInput},ccTags);ccInput='';}"/>
+          @keydown="onCcKey" @blur="()=>{if(ccInput.value.trim())addTag(ccInput,ccTags);}"/>
       </div>
     </div>
 
@@ -800,7 +800,7 @@ const SendEmailModal=defineComponent({name:"SendEmailModal",
           <button @click="removeTag(bccTags,i)" class="sem-chip-remove">✕</button>
         </div>
         <input v-model="bccInput" class="sem-chip-input" placeholder="Add BCC recipients"
-          @keydown="onBccKey" @blur="()=>{if(bccInput.trim())addTag({value:bccInput},bccTags);bccInput='';}"/>
+          @keydown="onBccKey" @blur="()=>{if(bccInput.value.trim())addTag(bccInput,bccTags);}"/>
       </div>
     </div>
 
