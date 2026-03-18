@@ -16,7 +16,7 @@ def _get_company() -> str:
         return ""
 
 
-@frappe.whitelist(allow_guest=False)
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
 def get_books_session():
     """Returns session info needed to bootstrap the Books Vue SPA."""
     user = frappe.session.user

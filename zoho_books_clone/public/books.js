@@ -73,8 +73,22 @@ async function apiGET(method,params){
   return _parseResponse(json,r.status);
 }
 
-/* POST — for write operations; sends CSRF token via header + body */
+/* Refresh CSRF token from session endpoint (GET — no CSRF needed) */
+async function refreshCsrfToken(){
+  try{
+    const r=await fetch("/api/method/zoho_books_clone.api.session.get_books_session",{
+      method:"GET",credentials:"same-origin",headers:{"Accept":"application/json"}
+    });
+    const data=await r.json();
+    const token=data?.message?.csrf_token;
+    if(token&&token!=="None")window.frappe.csrf_token=token;
+  }catch{}
+}
+
+/* POST — for write operations; always re-fetches CSRF token first */
 async function apiPOST(method,args){
+  // Always refresh the token before posting — prevents stale token errors
+  await refreshCsrfToken();
   const csrfToken=window.frappe?.csrf_token||getCsrfFromCookie()||"";
   const body=new URLSearchParams();
   if(csrfToken)body.append("csrf_token",csrfToken);
@@ -1521,33 +1535,44 @@ function getCsrfFromCookie(){
 }
 
 async function bootstrapCsrf(){
-  // Wait for the session fetch in books.html to complete first (sets csrf_token)
-  if(window.__booksReady){
-    try{await window.__booksReady;}catch{}
-  }
-  // Token should now be set by the session fetch
-  if(window.frappe?.csrf_token&&window.frappe.csrf_token!=="None"){
-    return window.frappe.csrf_token;
-  }
-  // Fallback: read from cookie
+  if(!window.frappe)window.frappe={session:{},boot:{sysdefaults:{company:""}}};
+
+  // Step 1: Try GET /api/method/zoho_books_clone.api.session.get_books_session
+  // This is a GET so no CSRF needed — and it returns the token for future POSTs
+  try{
+    const r=await fetch("/api/method/zoho_books_clone.api.session.get_books_session",{
+      method:"GET",credentials:"same-origin",
+      headers:{"Accept":"application/json"}
+    });
+    if(!r.ok){
+      // Not logged in — redirect to login
+      window.location.href="/login?redirect-to=/books";
+      return "";
+    }
+    const data=await r.json();
+    const msg=data.message||{};
+    if(msg.csrf_token&&msg.csrf_token!=="None"){
+      window.frappe.csrf_token=msg.csrf_token;
+    }
+    if(msg.user)window.frappe.session.user=msg.user;
+    if(msg.company){
+      window.__booksCompany=msg.company;
+      window.frappe.boot.sysdefaults.company=msg.company;
+    }
+    if(window.frappe.csrf_token&&window.frappe.csrf_token!=="None"){
+      return window.frappe.csrf_token;
+    }
+  }catch(e){console.warn("[Books] Session fetch failed:",e.message);}
+
+  // Step 2: Cookie fallback
   const fromCookie=getCsrfFromCookie();
   if(fromCookie&&fromCookie!=="None"){
-    if(!window.frappe)window.frappe={};
     window.frappe.csrf_token=fromCookie;
     return fromCookie;
   }
-  // Last resort: GET frappe.auth.get_logged_user — no CSRF needed for GET
-  try{
-    const r=await fetch("/api/method/frappe.auth.get_logged_user",{credentials:"same-origin"});
-    const data=await r.json();
-    if(!window.frappe)window.frappe={};
-    const token=data.csrf_token||getCsrfFromCookie()||"";
-    if(token&&token!=="None")window.frappe.csrf_token=token;
-    return window.frappe.csrf_token||"";
-  }catch(e){
-    console.warn("[Books] Could not bootstrap CSRF token:",e.message);
-    return "";
-  }
+
+  console.error("[Books] No CSRF token available — POSTs will fail");
+  return "";
 }
 
 bootstrapCsrf().then(()=>{
