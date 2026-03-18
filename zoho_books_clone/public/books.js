@@ -45,55 +45,87 @@ function flt(v){return parseFloat(v)||0;}
 function today(){return new Date().toISOString().slice(0,10);}
 
 /* ─── API ────────────────────────────────────────────────────── */
-async function api(method,args){
-  // Always get freshest CSRF token
+/* ─── API helpers ─────────────────────────────────────────────
+   GET  → read operations  (no CSRF needed in Frappe)
+   POST → write operations (CSRF required)
+──────────────────────────────────────────────────────────── */
+
+function _parseResponse(json,status){
+  if(json.exc||json.exc_type){
+    const match=(json.exc||"").match(/frappe\.exceptions\.\w+: (.+)/);
+    throw new Error(match?match[1]:(json.exc_type||json.message||"Server error "+status));
+  }
+  return json.message;
+}
+
+/* GET — safe for all read-only Frappe methods, no CSRF required */
+async function apiGET(method,params){
+  const qs=new URLSearchParams();
+  for(const[k,v]of Object.entries(params||{})){
+    qs.append(k,typeof v==="string"?v:JSON.stringify(v));
+  }
+  const r=await fetch("/api/method/"+method+"?"+qs.toString(),{
+    method:"GET",credentials:"same-origin",
+    headers:{"Accept":"application/json"}
+  });
+  let json;
+  try{json=await r.json();}catch{throw new Error("Non-JSON response ("+r.status+")");}
+  return _parseResponse(json,r.status);
+}
+
+/* POST — for write operations; sends CSRF token via header + body */
+async function apiPOST(method,args){
   const csrfToken=window.frappe?.csrf_token||getCsrfFromCookie()||"";
-  // Use form-encoded body — Frappe expects this format
   const body=new URLSearchParams();
-  // Include csrf_token in body AS WELL AS header — Frappe checks both
   if(csrfToken)body.append("csrf_token",csrfToken);
   for(const[k,v]of Object.entries(args||{})){
     body.append(k,typeof v==="string"?v:JSON.stringify(v));
   }
   const r=await fetch("/api/method/"+method,{
     method:"POST",credentials:"same-origin",
-    headers:{"Content-Type":"application/x-www-form-urlencoded","X-Frappe-CSRF-Token":csrfToken||"fetch","Accept":"application/json"},
+    headers:{
+      "Content-Type":"application/x-www-form-urlencoded",
+      "X-Frappe-CSRF-Token":csrfToken||"",
+      "Accept":"application/json"
+    },
     body:body.toString()
   });
   let json;
-  try{json=await r.json();}catch{throw new Error("Server returned non-JSON response (status "+r.status+")");}
-  if(!r.ok||json.exc){
-    const match=(json.exc||"").match(/frappe\.exceptions\.\w+: (.+)/);
-    throw new Error(match?match[1]:(json.exc_type||json.message||"Server error "+r.status));
-  }
-  return json.message;
+  try{json=await r.json();}catch{throw new Error("Non-JSON response ("+r.status+")");}
+  return _parseResponse(json,r.status);
 }
 
+/* Legacy alias — kept so any direct api() calls still work (uses GET) */
+async function api(method,args){return await apiGET(method,args);}
+
+/* ── Public helpers ── */
 async function apiGet(doctype,name){
-  return await api("frappe.client.get",{doctype,name});
+  return await apiGET("frappe.client.get",{doctype,name});
 }
 
 async function apiSave(doc){
-  return await api("frappe.client.save",{doc});
+  return await apiPOST("frappe.client.save",{doc});
 }
 
 async function apiSubmit(doctype,name){
-  return await api("frappe.client.submit",{doc:{doctype,name}});
+  return await apiPOST("frappe.client.submit",{doc:{doctype,name}});
 }
 
 async function apiList(dt,opts){
-  return await api("frappe.client.get_list",{
-    doctype:dt,fields:opts.fields||["name"],
-    filters:opts.filters||[],
+  return await apiGET("frappe.client.get_list",{
+    doctype:dt,
+    fields:JSON.stringify(opts.fields||["name"]),
+    filters:JSON.stringify(opts.filters||[]),
     order_by:opts.order||"modified desc",
     limit_page_length:opts.limit||50
   })||[];
 }
 
 async function apiLinkValues(doctype,txt,filters){
-  return await api("frappe.client.get_list",{
-    doctype,fields:["name"],
-    filters:filters?[...filters,["name","like","%"+txt+"%"]]:[["name","like","%"+txt+"%"]],
+  const f=filters?[...filters,["name","like","%"+txt+"%"]]:[["name","like","%"+txt+"%"]];
+  return await apiGET("frappe.client.get_list",{
+    doctype,fields:JSON.stringify(["name"]),
+    filters:JSON.stringify(f),
     limit_page_length:10
   })||[];
 }
@@ -101,9 +133,10 @@ async function apiLinkValues(doctype,txt,filters){
 async function resolveCompany(){
   if(window.__booksCompany)return window.__booksCompany;
   try{
-    const r=await api("frappe.client.get_value",{
-      doctype:"Books Settings",filters:{name:"Books Settings"},
-      fieldname:["default_company"]
+    const r=await apiGET("frappe.client.get_value",{
+      doctype:"Books Settings",
+      filters:JSON.stringify({name:"Books Settings"}),
+      fieldname:JSON.stringify(["default_company"])
     });
     const c=r?.default_company||"";
     window.__booksCompany=c;
@@ -207,7 +240,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     async function onCustomer(){
       if(!form.customer)return;
       try{
-        const r=await api("frappe.client.get_value",{
+        const r=await apiGET("frappe.client.get_value",{
           doctype:"Customer",filters:{name:form.customer},
           fieldname:["default_currency"]
         });
@@ -610,7 +643,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
     async function onSupplier(){
       if(!form.supplier)return;
       try{
-        const r=await api("frappe.client.get_value",{doctype:"Supplier",filters:{name:form.supplier},fieldname:["default_currency"]});
+        const r=await apiGET("frappe.client.get_value",{doctype:"Supplier",filters:JSON.stringify({name:form.supplier}),fieldname:JSON.stringify(["default_currency"])});
         form.supplier_name=form.supplier;
         if(r.default_currency)form.currency=r.default_currency;
       }catch{}
@@ -798,12 +831,12 @@ const PaymentModal=defineComponent({name:"PaymentModal",
       if(!form.party)return;
       try{
         const nameField="name"; // custom doctypes use name as display name
-        const r=await api("frappe.client.get_value",{doctype:form.party_type,filters:{name:form.party},fieldname:[nameField]});
+        const r=await apiGET("frappe.client.get_value",{doctype:form.party_type,filters:JSON.stringify({name:form.party}),fieldname:JSON.stringify([nameField])});
         form.party_name=form.party; // name is display name
       }catch{}
       // Load outstanding invoices
       try{
-        invoices.value=await api("zoho_books_clone.payments.utils.get_outstanding_invoices",{party_type:form.party_type,party:form.party});
+        invoices.value=await apiGET("zoho_books_clone.payments.utils.get_outstanding_invoices",{party_type:form.party_type,party:form.party});
         if(invoices.value.length){
           form.paid_amount=invoices.value.reduce((s,i)=>s+flt(i.outstanding_amount),0);
           form.remarks="Payment against "+(invoices.value.length===1?invoices.value[0].name:invoices.value.length+" invoices");
@@ -822,7 +855,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
         if(invoices.value.length){
           // Use backend utility which handles GL + invoice outstanding update
           const method=form.payment_type==="Receive"?"zoho_books_clone.payments.utils.make_payment_entry_from_invoice":"zoho_books_clone.payments.utils.make_payment_entry_from_purchase_invoice";
-          peName=await api(method,{
+          peName=await apiPOST(method,{
             source_name:invoices.value[0].name,
             paid_amount:form.paid_amount,
             payment_date:form.payment_date,
@@ -973,7 +1006,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       const company=await resolveCompany();
       try{
         // get_home_dashboard returns everything in one whitelisted call
-        const d=await api("zoho_books_clone.api.dashboard.get_home_dashboard",{company});
+        const d=await apiGET("zoho_books_clone.api.dashboard.get_home_dashboard",{company});
         dash.value=d||{};
         // KPIs are embedded in the dashboard response
         kpis.value={
@@ -1224,7 +1257,7 @@ const Payments=defineComponent({name:"Payments",
 const Banking=defineComponent({name:"Banking",
   setup(){
     const cash=ref(null),cashLoad=ref(true),txns=ref([]),txnLoad=ref(false),sel=ref(null);
-    async function loadCash(){cashLoad.value=true;try{cash.value=await api("zoho_books_clone.api.dashboard.get_cash_position");}finally{cashLoad.value=false;}}
+    async function loadCash(){cashLoad.value=true;try{cash.value=await apiGET("zoho_books_clone.api.dashboard.get_cash_position");}finally{cashLoad.value=false;}}
     async function pickAcct(a){
       sel.value=a.name;txnLoad.value=true;
       try{txns.value=await apiList("Bank Transaction",{fields:["name","date","description","debit","credit","balance","reference_number","status"],filters:[["bank_account","=",a.name]],order:"date desc",limit:30});}
@@ -1331,10 +1364,10 @@ const Reports=defineComponent({name:"Reports",
       running.value=true;
       const c=co(),args={company:c,from_date:from.value,to_date:to.value};
       try{
-        if(tab.value==="pl")pl.value=await api("zoho_books_clone.db.queries.get_profit_and_loss",args);
-        else if(tab.value==="bs")bs.value=await api("zoho_books_clone.db.queries.get_balance_sheet_totals",{company:c,as_of_date:to.value});
-        else if(tab.value==="cf")cf.value=await api("zoho_books_clone.db.queries.get_cash_flow",args);
-        else gst.value=await api("zoho_books_clone.db.queries.get_gst_summary",args);
+        if(tab.value==="pl")pl.value=await apiGET("zoho_books_clone.db.queries.get_profit_and_loss",args);
+        else if(tab.value==="bs")bs.value=await apiGET("zoho_books_clone.db.queries.get_balance_sheet_totals",{company:c,as_of_date:to.value});
+        else if(tab.value==="cf")cf.value=await apiGET("zoho_books_clone.db.queries.get_cash_flow",args);
+        else gst.value=await apiGET("zoho_books_clone.db.queries.get_gst_summary",args);
       }catch(e){toast(e.message,"error");}
       finally{running.value=false;}
     }
