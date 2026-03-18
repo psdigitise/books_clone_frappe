@@ -775,9 +775,15 @@ const PaymentModal=defineComponent({name:"PaymentModal",
     });
 
     const customers=ref([]),suppliers=ref([]);
+    const paymentModes=ref([{name:"Bank Transfer"},{name:"Cash"},{name:"Cheque"},{name:"NEFT"},{name:"RTGS"},{name:"UPI"}]);
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
+      // Load Mode of Payment from standard Frappe doctype
+      try{
+        const modes=await apiList("Mode of Payment",{fields:["name"],limit:50,order:"name asc"});
+        if(modes.length)paymentModes.value=modes;
+      }catch{/* fallback to hardcoded defaults above */}
       const baseF=c?[["company","=",c],["is_group","=","0"]]:[["is_group","=","0"]];
       let allAccounts=[];
       try{allAccounts=await apiList("Account",{fields:["name","account_type"],filters:baseF,limit:200});}catch(e){console.warn("Accounts load failed:",e.message);}
@@ -879,7 +885,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
       finally{saving.value=false;}
     }
 
-    return{form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,onParty,save,fmt,flt,icon};
+    return{form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,onParty,save,fmt,flt,icon,paymentModes};
   },
   template:`
 <teleport to="body">
@@ -933,10 +939,10 @@ const PaymentModal=defineComponent({name:"PaymentModal",
           <input v-model.number="form.paid_amount" type="number" min="0" step="0.01" class="mi-input" style="font-weight:700;font-size:15px"/>
         </div>
         <div>
-          <label class="mi-label">Books Payment Mode</label>
+          <label class="mi-label">Mode of Payment</label>
           <select v-model="form.mode_of_payment" class="mi-input">
-            <option>Bank Transfer</option><option>NEFT</option><option>RTGS</option>
-            <option>UPI</option><option>Cash</option><option>Cheque</option>
+            <option value="">— Select —</option>
+            <option v-for="m in paymentModes" :key="m.name" :value="m.name">{{m.name}}</option>
           </select>
         </div>
       </div>
