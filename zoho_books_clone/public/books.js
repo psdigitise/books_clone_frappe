@@ -271,28 +271,14 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }catch{}
       // Load tax templates
       try{
-        // Tax template doctype varies by ERPNext version — skip silently if not found
-        try{taxTemplates.value=await apiList("Sales Taxes and Charges Template",{fields:["name","title"],limit:20});}catch{}
-        if(!taxTemplates.value.length){try{taxTemplates.value=await apiList("Purchase Taxes and Charges Template",{fields:["name","title"],limit:20});}catch{}}
+        // Tax templates not available on this instance — skipped
       }catch{}
     }
 
     onMounted(loadDefaults);
     watch(()=>props.show,v=>{if(v)loadDefaults();});
 
-    async function applyTaxTemplate(tplName){
-      try{
-        const tpl=await apiGet("Sales Taxes and Charges Template",tplName);
-        form.taxes=[];
-        (tpl.taxes||[]).forEach(t=>{
-          form.taxes.push({
-            tax_type:t.tax_type,description:t.tax_type,
-            rate:t.rate,tax_amount:0,account_head:t.account_head||""
-          });
-        });
-        recalc();
-      }catch(e){toast("Could not load tax template: "+e.message,"error");}
-    }
+    async function applyTaxTemplate(tplName){}  // Tax templates not available
 
     async function save(andSubmit){
       if(!form.customer){toast("Please select a Customer","error");return;}
