@@ -7,7 +7,7 @@ from frappe.utils import flt, get_first_day, get_last_day, getdate, today
 from zoho_books_clone.db import queries
 
 
-@frappe.whitelist(methods=["GET", "POST"])
+@frappe.whitelist()
 def get_dashboard_kpis(company: str | None = None) -> dict:
     """
     Return KPI dict for the Books dashboard.
@@ -43,7 +43,7 @@ def get_dashboard_kpis(company: str | None = None) -> dict:
     }
 
 
-@frappe.whitelist(methods=["GET", "POST"])
+@frappe.whitelist()
 def get_monthly_revenue_trend(company: str | None = None, months: int = 6) -> list[dict]:
     """
     Revenue and expense per month for the last N months.
@@ -68,7 +68,7 @@ def get_monthly_revenue_trend(company: str | None = None, months: int = 6) -> li
     return rows
 
 
-@frappe.whitelist(methods=["GET", "POST"])
+@frappe.whitelist()
 def get_aging_buckets(company: str | None = None) -> dict:
     """
     AR aging summary: {current, 1_30, 31_60, 61_90, over_90}

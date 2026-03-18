@@ -51,7 +51,7 @@ def _match_by_amount_and_date(txn: dict) -> str | None:
     return result[0].name if result else None
 
 
-@frappe.whitelist(methods=["GET", "POST"])
+@frappe.whitelist()
 def find_matching_payment(
     bank_account: str, amount: float, date: str, reference: str | None = None
 ) -> list[dict]:
@@ -78,7 +78,7 @@ def find_matching_payment(
     """, {**params, "date": date}, as_dict=True)
 
 
-@frappe.whitelist(methods=["GET", "POST"])
+@frappe.whitelist()
 def reconcile_transaction(bank_transaction: str, payment_entry: str) -> None:
     """Link a payment entry to a bank transaction and mark it reconciled."""
     if not frappe.db.exists("Payment Entry", payment_entry):

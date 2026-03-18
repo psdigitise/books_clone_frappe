@@ -131,7 +131,7 @@ class SalesInvoice(Document):
                 "Cannot cancel {0} — linked payment(s) exist: {1}"
             ).format(self.name, ", ".join(r.parent for r in linked)))
 
-    @frappe.whitelist(methods=["GET", "POST"])
+    @frappe.whitelist()
     def send_invoice_email(self):
         customer_email = frappe.db.get_value("Customer", self.customer, "email_id")
         if not customer_email:
@@ -146,7 +146,7 @@ class SalesInvoice(Document):
         )
         frappe.msgprint(_("Invoice emailed to {0}").format(customer_email))
 
-    @frappe.whitelist(methods=["GET", "POST"])
+    @frappe.whitelist()
     def get_payment_status(self):
         payments = frappe.db.sql("""
             SELECT pe.name, pe.payment_date, per.allocated_amount

@@ -21,8 +21,6 @@ function newDocUrl(doctype){
 function docUrl(doctype,name){
   return "/app/"+doctype.toLowerCase().replace(/ /g,"-")+"/"+encodeURIComponent(name);
 }
-function openDoc(doctype,name){window.open(docUrl(doctype,name),"_blank");}
-function openNew(doctype){window.open(newDocUrl(doctype),"_blank");}
 
 /* ─── Helpers ────────────────────────────────────────────────── */
 function fmt(v,c){
@@ -120,13 +118,11 @@ async function apiGet(doctype,name){
 }
 
 async function apiSave(doc){
-  // Use our custom GET endpoint — no CSRF token needed
-  return await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
+  return await apiPOST("frappe.client.save",{doc});
 }
 
 async function apiSubmit(doctype,name){
-  // Use our custom GET endpoint — no CSRF token needed
-  return await apiGET("zoho_books_clone.api.docs.submit_doc",{doctype,name});
+  return await apiPOST("frappe.client.submit",{doc:{doctype,name}});
 }
 
 async function apiList(dt,opts){
@@ -868,7 +864,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
         if(invoices.value.length){
           // Use backend utility which handles GL + invoice outstanding update
           const method=form.payment_type==="Receive"?"zoho_books_clone.payments.utils.make_payment_entry_from_invoice":"zoho_books_clone.payments.utils.make_payment_entry_from_purchase_invoice";
-          peName=await apiGET(method,{
+          peName=await apiPOST(method,{
             source_name:invoices.value[0].name,
             paid_amount:form.paid_amount,
             payment_date:form.payment_date,
@@ -1036,7 +1032,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,openDoc};
+    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon};
   },
   template:`
 <div class="b-page">
@@ -1062,7 +1058,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       <div v-if="loading" style="padding:20px"><div v-for="n in 5" :key="n" class="b-shimmer" style="height:14px;margin-bottom:16px"></div></div>
       <table v-else class="b-table"><thead><tr><th>Customer</th><th>Invoice</th><th>Date</th><th>Status</th></tr></thead>
         <tbody>
-          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="openDoc('Sales Invoice',inv.name)">
+          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">
             <td class="fw-600">{{inv.customer}}</td>
             <td class="mono c-accent" style="font-size:12px">{{inv.name}}</td>
             <td class="c-muted" style="font-size:12px">{{fmtShort(inv.due_date)}}</td>
@@ -1131,7 +1127,7 @@ const Invoices=defineComponent({name:"Invoices",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt,openDoc};
+    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1158,14 +1154,14 @@ const Invoices=defineComponent({name:"Invoices",
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
           <tr v-for="inv in filtered" :key="inv.name" class="clickable">
-            <td @click="openDoc('Sales Invoice',inv.name)"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600" @click="openDoc('Sales Invoice',inv.name)">{{inv.customer}}</td>
-            <td class="c-muted" style="font-size:12.5px" @click="openDoc('Sales Invoice',inv.name)">{{fmtDate(inv.posting_date)}}</td>
-            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="openDoc('Sales Invoice',inv.name)">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" @click="openDoc('Sales Invoice',inv.name)">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="openDoc('Sales Invoice',inv.name)">{{fmt(inv.outstanding_amount)}}</td>
-            <td @click="openDoc('Sales Invoice',inv.name)"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="openDoc('Sales Invoice',inv.name)" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
+            <td @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
+            <td class="fw-600" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{inv.customer}}</td>
+            <td class="c-muted" style="font-size:12.5px" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmtDate(inv.posting_date)}}</td>
+            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmtDate(inv.due_date)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmt(inv.grand_total)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmt(inv.outstanding_amount)}}</td>
+            <td @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
+            <td><button @click.stop="window.open(docUrl('Sales Invoice',inv.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No invoices found</td></tr>
         </template>
@@ -1185,7 +1181,7 @@ const Purchases=defineComponent({name:"Purchases",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt,openDoc};
+    return{list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1203,7 +1199,7 @@ const Purchases=defineComponent({name:"Purchases",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="openDoc('Purchase Invoice',inv.name)">
+          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="window.open(docUrl('Purchase Invoice',inv.name),'_blank')">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
             <td class="fw-600">{{inv.supplier}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.posting_date)}}</td>
@@ -1211,7 +1207,7 @@ const Purchases=defineComponent({name:"Purchases",
             <td class="ta-r mono fw-600" style="font-size:13px">{{fmt(inv.grand_total)}}</td>
             <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'">{{fmt(inv.outstanding_amount)}}</td>
             <td><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="openDoc('Purchase Invoice',inv.name)" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="window.open(docUrl('Purchase Invoice',inv.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!list.length"><td colspan="8" class="b-empty">No bills found</td></tr>
         </template>
@@ -1233,7 +1229,7 @@ const Payments=defineComponent({name:"Payments",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge,openDoc};
+    return{list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge};
   },
   template:`
 <div class="b-page">
@@ -1251,14 +1247,14 @@ const Payments=defineComponent({name:"Payments",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="openDoc('Payment Entry',p.name)">
+          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="window.open(docUrl('Payment Entry',p.name),'_blank')">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{p.name}}</span></td>
             <td class="fw-600">{{p.party}}</td>
             <td class="c-muted">{{p.mode_of_payment||'—'}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(p.payment_date)}}</td>
             <td><span class="b-badge" :class="statusBadge(p.payment_type)">{{p.payment_type}}</span></td>
             <td class="ta-r mono fw-700" :class="p.payment_type==='Receive'?'c-green':'c-red'">{{fmt(p.paid_amount)}}</td>
-            <td><button @click.stop="openDoc('Payment Entry',p.name)" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="window.open(docUrl('Payment Entry',p.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="7" class="b-empty">No payments found</td></tr>
         </template>
@@ -1335,7 +1331,7 @@ const Accounts=defineComponent({name:"Accounts",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,TC,load,fmt,icon,openDoc,openNew};
+    return{list,loading,active,types,filtered,TC,load,fmt,icon};
   },
   template:`
 <div class="b-page">
@@ -1343,7 +1339,7 @@ const Accounts=defineComponent({name:"Accounts",
     <div class="b-filter-row"><button v-for="t in types" :key="t" class="b-pill" :class="{active:active===t}" @click="active=t">{{t}}</button></div>
     <div style="display:flex;gap:8px">
       <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="b-btn b-btn-primary" @click="openNew('Account')"><span v-html="icon('plus',13)"></span> New Account</button>
+      <button class="b-btn b-btn-primary" @click="window.open(newDocUrl('Account'),'_blank')"><span v-html="icon('plus',13)"></span> New Account</button>
     </div>
   </div>
   <div class="b-card" style="padding:0;overflow:hidden">
@@ -1352,7 +1348,7 @@ const Accounts=defineComponent({name:"Accounts",
       <tbody>
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="4" style="padding:14px"><div class="b-shimmer" style="height:12px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="openDoc('Account',a.name)">
+          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="window.open(docUrl('Account',a.name),'_blank')">
             <td><div class="fw-700">{{a.account_name}}</div><div class="mono c-muted" style="font-size:11px">{{a.is_group?'Group':'Ledger'}}</div></td>
             <td><span class="b-badge" :class="TC[a.account_type]||'b-badge-muted'">{{a.account_type}}</span></td>
             <td class="c-muted" style="font-size:13px">{{a.parent_account||'—'}}</td>

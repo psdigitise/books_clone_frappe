@@ -13,7 +13,7 @@ class Item(Document):
     def on_update(self):
         pass
 
-    @frappe.whitelist(methods=["GET", "POST"])
+    @frappe.whitelist()
     def get_item_details(self, price_list=None, company=None):
         """Return item details for use in invoice line items."""
         return {

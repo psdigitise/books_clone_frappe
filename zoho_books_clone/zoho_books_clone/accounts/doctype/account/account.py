@@ -26,7 +26,7 @@ class Account(Document):
         total = sum(flt(c.balance) for c in children)
         frappe.db.set_value("Account", self.parent_account, "balance", total)
 
-    @frappe.whitelist(methods=["GET", "POST"])
+    @frappe.whitelist()
     def get_account_balance(self):
         res = frappe.db.sql("""
             SELECT SUM(debit) AS d, SUM(credit) AS c
