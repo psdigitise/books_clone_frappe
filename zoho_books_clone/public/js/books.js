@@ -1845,13 +1845,12 @@ const modalCSS=`
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
-`;
-
 .inv-detail-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
 .inv-detail-row:last-child{border-bottom:none}
 .inv-detail-label{font-size:12px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
 .inv-detail-value{font-size:13px;color:var(--text);font-weight:500;text-align:right}
 @keyframes spin{to{transform:rotate(360deg)}}
+`;
 
 if(!document.getElementById("books-modal-css")){
   const s=document.createElement("style");s.id="books-modal-css";s.textContent=modalCSS;
