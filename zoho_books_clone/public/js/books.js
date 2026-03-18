@@ -197,6 +197,9 @@ const IC={
   check:'<polyline points="20 6 9 17 4 12"/>',
   x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
   edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+  print:'<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+  check:'<polyline points="20 6 9 17 4 12"/>',
+  'arrow-left':'<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>',
   ext:'<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
 };
 function icon(k,s){s=s||16;return`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k]||""}</svg>`;}
@@ -1001,6 +1004,335 @@ const PaymentModal=defineComponent({name:"PaymentModal",
    Using the modal components above for New actions
 ═══════════════════════════════════════════════════════════════ */
 
+
+/* ─── Invoice Detail Component ───────────────────────────────── */
+const InvoiceDetail = {
+  setup(){
+    const route=useRoute();
+    const router=useRouter();
+    const inv=ref(null);
+    const loading=ref(true);
+    const error=ref(null);
+    const saving=ref(false);
+    const submitting=ref(false);
+    const printing=ref(false);
+
+    const name=computed(()=>route.params.name);
+
+    async function load(){
+      loading.value=true; error.value=null;
+      try{
+        inv.value=await apiGet("Sales Invoice",name.value);
+      }catch(e){error.value=e.message;}
+      finally{loading.value=false;}
+    }
+
+    async function submitInvoice(){
+      if(!confirm("Submit this invoice? This cannot be undone."))return;
+      submitting.value=true;
+      try{
+        await apiSubmit("Sales Invoice",name.value);
+        toast("Invoice submitted successfully!","success");
+        await load();
+      }catch(e){toast("Submit failed: "+e.message,"error");}
+      finally{submitting.value=false;}
+    }
+
+    async function printInvoice(){
+      printing.value=true;
+      try{
+        window.open("/printview?doctype=Sales+Invoice&name="+encodeURIComponent(name.value)+"&trigger_print=1","_blank");
+      }catch(e){toast("Print failed: "+e.message,"error");}
+      finally{printing.value=false;}
+    }
+
+    onMounted(load);
+    watch(()=>route.params.name,load);
+
+    const statusColor=computed(()=>{
+      const s=inv.value?.status;
+      if(s==="Paid")return"b-badge-green";
+      if(s==="Submitted"||s==="Partly Paid")return"b-badge-blue";
+      if(s==="Overdue")return"b-badge-red";
+      if(s==="Cancelled")return"b-badge-muted";
+      return"b-badge-amber";
+    });
+
+    const isPaid=computed(()=>inv.value?.status==="Paid");
+    const isSubmitted=computed(()=>["Submitted","Partly Paid","Overdue","Paid"].includes(inv.value?.status));
+    const isDraft=computed(()=>inv.value?.status==="Draft"||inv.value?.docstatus===0);
+    const paidPct=computed(()=>{
+      if(!inv.value)return 0;
+      const g=flt(inv.value.grand_total);
+      const o=flt(inv.value.outstanding_amount);
+      if(!g)return 0;
+      return Math.round((g-o)/g*100);
+    });
+
+    return{inv,loading,error,saving,submitting,printing,name,
+           statusColor,isPaid,isSubmitted,isDraft,paidPct,
+           load,submitInvoice,printInvoice,
+           fmt,fmtDate,flt,icon,toast,router};
+  },
+  template:`
+<div class="b-page" style="max-width:960px;margin:0 auto">
+
+  <!-- Loading -->
+  <template v-if="loading">
+    <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
+      <div class="b-shimmer" style="width:200px;height:28px;border-radius:6px"></div>
+      <div class="b-shimmer" style="width:80px;height:24px;border-radius:20px"></div>
+    </div>
+    <div class="b-card"><div class="b-shimmer" style="height:180px"></div></div>
+    <div class="b-card"><div class="b-shimmer" style="height:220px"></div></div>
+  </template>
+
+  <!-- Error -->
+  <div v-else-if="error" class="b-card b-card-body" style="text-align:center;padding:60px 20px">
+    <div v-html="icon('file',40)" style="color:var(--text-4);margin-bottom:16px;opacity:.4"></div>
+    <div style="font-size:16px;font-weight:600;color:var(--text-2);margin-bottom:8px">Failed to load invoice</div>
+    <div style="font-size:13px;color:var(--text-3);margin-bottom:20px">{{error}}</div>
+    <button class="b-btn b-btn-primary" @click="load">Retry</button>
+  </div>
+
+  <template v-else-if="inv">
+
+    <!-- Header Bar -->
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="b-btn b-btn-ghost" @click="router.push('/invoices')" style="padding:6px 10px;font-size:12px;display:flex;align-items:center;gap:6px">
+          <span v-html="icon('arrow-left',13)"></span> Back
+        </button>
+        <div>
+          <div style="font-size:20px;font-weight:800;color:var(--text);letter-spacing:-.3px">{{inv.name}}</div>
+          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Sales Invoice</div>
+        </div>
+        <span class="b-badge" :class="statusColor" style="font-size:12px;padding:4px 10px">{{inv.status||'Draft'}}</span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="b-btn b-btn-ghost" @click="printInvoice" :disabled="printing" style="display:flex;align-items:center;gap:6px;font-size:13px">
+          <span v-html="icon('print',13)"></span> Print
+        </button>
+        <button v-if="isDraft" class="b-btn b-btn-primary" @click="submitInvoice" :disabled="submitting" style="display:flex;align-items:center;gap:6px;font-size:13px">
+          <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+          <span v-else v-html="icon('check',13)"></span>
+          {{submitting?'Submitting...':'Submit'}}
+        </button>
+      </div>
+    </div>
+
+    <!-- Summary Cards Row -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
+      <div class="b-card b-card-body" style="padding:16px 20px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Grand Total</div>
+        <div style="font-size:22px;font-weight:800;color:var(--text);font-family:var(--mono)">{{fmt(inv.grand_total)}}</div>
+      </div>
+      <div class="b-card b-card-body" style="padding:16px 20px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Outstanding</div>
+        <div style="font-size:22px;font-weight:800;font-family:var(--mono)" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</div>
+      </div>
+      <div class="b-card b-card-body" style="padding:16px 20px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Due Date</div>
+        <div style="font-size:18px;font-weight:700;color:var(--text)">{{fmtDate(inv.due_date)}}</div>
+        <div v-if="inv.due_date&&flt(inv.outstanding_amount)>0&&new Date(inv.due_date)<new Date()" style="font-size:11px;color:var(--red-text);margin-top:2px;font-weight:600">● Overdue</div>
+      </div>
+      <div class="b-card b-card-body" style="padding:16px 20px">
+        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:8px">Payment Progress</div>
+        <div style="height:6px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:6px">
+          <div :style="{width:paidPct+'%',height:'100%',background:'var(--green-text)',borderRadius:'4px',transition:'width .6s ease'}"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-3);font-weight:600">{{paidPct}}% paid</div>
+      </div>
+    </div>
+
+    <!-- Main Info + Customer -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+      <!-- Invoice Details -->
+      <div class="b-card">
+        <div class="b-card-head"><span class="b-card-title">Invoice Details</span></div>
+        <div class="b-card-body" style="display:flex;flex-direction:column;gap:14px">
+          <div class="inv-detail-row">
+            <span class="inv-detail-label">Invoice No.</span>
+            <span class="inv-detail-value mono fw-700" style="color:var(--accent)">{{inv.name}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.invoice_number">
+            <span class="inv-detail-label">Invoice Number</span>
+            <span class="inv-detail-value">{{inv.invoice_number}}</span>
+          </div>
+          <div class="inv-detail-row">
+            <span class="inv-detail-label">Invoice Date</span>
+            <span class="inv-detail-value">{{fmtDate(inv.posting_date)}}</span>
+          </div>
+          <div class="inv-detail-row">
+            <span class="inv-detail-label">Due Date</span>
+            <span class="inv-detail-value">{{fmtDate(inv.due_date)}}</span>
+          </div>
+          <div class="inv-detail-row">
+            <span class="inv-detail-label">Status</span>
+            <span class="b-badge" :class="statusColor">{{inv.status||'Draft'}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.currency">
+            <span class="inv-detail-label">Currency</span>
+            <span class="inv-detail-value">{{inv.currency}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.company">
+            <span class="inv-detail-label">Company</span>
+            <span class="inv-detail-value">{{inv.company}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.fiscal_year">
+            <span class="inv-detail-label">Fiscal Year</span>
+            <span class="inv-detail-value">{{inv.fiscal_year}}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Customer & Accounts -->
+      <div class="b-card">
+        <div class="b-card-head"><span class="b-card-title">Customer & Accounts</span></div>
+        <div class="b-card-body" style="display:flex;flex-direction:column;gap:14px">
+          <div style="display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--border)">
+            <div style="width:44px;height:44px;border-radius:12px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:var(--accent)">
+              {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:15px;color:var(--text)">{{inv.customer_name||inv.customer}}</div>
+              <div style="font-size:12px;color:var(--text-3)">{{inv.customer}}</div>
+            </div>
+          </div>
+          <div class="inv-detail-row" v-if="inv.debit_to">
+            <span class="inv-detail-label">AR Account</span>
+            <span class="inv-detail-value">{{inv.debit_to}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.income_account">
+            <span class="inv-detail-label">Income Account</span>
+            <span class="inv-detail-value">{{inv.income_account}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.payment_terms">
+            <span class="inv-detail-label">Payment Terms</span>
+            <span class="inv-detail-value">{{inv.payment_terms}}</span>
+          </div>
+          <div class="inv-detail-row" v-if="inv.cost_center">
+            <span class="inv-detail-label">Cost Center</span>
+            <span class="inv-detail-value">{{inv.cost_center}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Items Table -->
+    <div class="b-card">
+      <div class="b-card-head">
+        <span class="b-card-title">Items</span>
+        <span class="b-badge b-badge-muted">{{(inv.items||[]).length}} item{{(inv.items||[]).length===1?'':'s'}}</span>
+      </div>
+      <div style="overflow-x:auto">
+        <table class="b-table" style="min-width:600px">
+          <thead>
+            <tr>
+              <th style="width:4%;text-align:center;color:var(--text-3)">#</th>
+              <th style="width:24%">Item</th>
+              <th style="width:26%">Description</th>
+              <th style="width:8%;text-align:center">Qty</th>
+              <th style="width:8%;text-align:center">UOM</th>
+              <th style="width:15%;text-align:right">Rate</th>
+              <th style="width:15%;text-align:right">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(item,i) in (inv.items||[])" :key="i">
+              <td style="text-align:center;color:var(--text-4);font-size:12px">{{i+1}}</td>
+              <td>
+                <div style="font-weight:600;color:var(--text)">{{item.item_name||item.item_code||'—'}}</div>
+                <div v-if="item.hsn_code" style="font-size:11px;color:var(--text-3)">HSN: {{item.hsn_code}}</div>
+              </td>
+              <td style="color:var(--text-2);font-size:13px;max-width:200px">
+                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{item.description||'—'}}</div>
+              </td>
+              <td style="text-align:center;font-family:var(--mono);font-weight:600">{{flt(item.qty)}}</td>
+              <td style="text-align:center;color:var(--text-3);font-size:12px">{{item.uom||'—'}}</td>
+              <td style="text-align:right;font-family:var(--mono)">{{fmt(item.rate)}}</td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--text)">{{fmt(item.amount)}}</td>
+            </tr>
+            <tr v-if="!(inv.items||[]).length">
+              <td colspan="7" style="text-align:center;padding:32px;color:var(--text-3)">No items</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Taxes + Totals Row -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
+
+      <!-- Taxes -->
+      <div class="b-card" v-if="(inv.taxes||[]).length">
+        <div class="b-card-head"><span class="b-card-title">Taxes & Charges</span></div>
+        <div style="overflow-x:auto">
+          <table class="b-table">
+            <thead><tr><th>Tax Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Tax Amount</th></tr></thead>
+            <tbody>
+              <tr v-for="(tax,i) in (inv.taxes||[])" :key="i">
+                <td style="font-weight:600">{{tax.tax_type||'—'}}</td>
+                <td style="color:var(--text-2);font-size:13px">{{tax.description||tax.tax_type||'—'}}</td>
+                <td style="text-align:right;font-family:var(--mono)">{{flt(tax.rate)}}%</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(tax.tax_amount)}}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div v-else></div>
+
+      <!-- Totals -->
+      <div class="b-card b-card-body">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--border)">
+            <span style="color:var(--text-2);font-size:14px">Net Total</span>
+            <span style="font-family:var(--mono);font-weight:600">{{fmt(inv.net_total)}}</span>
+          </div>
+          <div v-for="tax in (inv.taxes||[])" :key="tax.tax_type" style="display:flex;justify-content:space-between;align-items:center">
+            <span style="color:var(--text-2);font-size:13px">{{tax.tax_type}} ({{flt(tax.rate)}}%)</span>
+            <span style="font-family:var(--mono);font-size:13px">{{fmt(tax.tax_amount)}}</span>
+          </div>
+          <div v-if="flt(inv.total_tax)" style="display:flex;justify-content:space-between;align-items:center">
+            <span style="color:var(--text-2);font-size:14px">Total Tax</span>
+            <span style="font-family:var(--mono);font-weight:600">{{fmt(inv.total_tax)}}</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--accent-soft);border-radius:var(--radius-sm);margin-top:4px">
+            <span style="font-weight:800;font-size:15px;color:var(--accent-text)">Grand Total</span>
+            <span style="font-family:var(--mono);font-weight:800;font-size:18px;color:var(--accent)">{{fmt(inv.grand_total)}}</span>
+          </div>
+          <div v-if="flt(inv.outstanding_amount)" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border);margin-top:4px">
+            <span style="color:var(--amber-text);font-weight:600;font-size:13px">Outstanding</span>
+            <span style="font-family:var(--mono);font-weight:700;color:var(--amber-text)">{{fmt(inv.outstanding_amount)}}</span>
+          </div>
+          <div v-else style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border);margin-top:4px">
+            <span style="color:var(--green-text);font-weight:600;font-size:13px">✓ Fully Paid</span>
+            <span style="font-family:var(--mono);font-weight:700;color:var(--green-text)">{{fmt(0)}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Notes & Terms -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" v-if="inv.notes||inv.terms">
+      <div class="b-card b-card-body" v-if="inv.notes">
+        <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px">Notes</div>
+        <div style="font-size:13px;color:var(--text-2);line-height:1.6;white-space:pre-wrap">{{inv.notes}}</div>
+      </div>
+      <div class="b-card b-card-body" v-if="inv.terms">
+        <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px">Terms & Conditions</div>
+        <div style="font-size:13px;color:var(--text-2);line-height:1.6;white-space:pre-wrap">{{inv.terms}}</div>
+      </div>
+    </div>
+
+  </template>
+</div>
+`
+};
+
+
 const Dashboard=defineComponent({name:"Dashboard",
   components:{InvoiceModal,PurchaseModal,PaymentModal},
   setup(){
@@ -1062,7 +1394,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       <div v-if="loading" style="padding:20px"><div v-for="n in 5" :key="n" class="b-shimmer" style="height:14px;margin-bottom:16px"></div></div>
       <table v-else class="b-table"><thead><tr><th>Customer</th><th>Invoice</th><th>Date</th><th>Status</th></tr></thead>
         <tbody>
-          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="openDoc('Sales Invoice',inv.name)">
+          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="$router.push('/invoices/'+inv.name)">
             <td class="fw-600">{{inv.customer}}</td>
             <td class="mono c-accent" style="font-size:12px">{{inv.name}}</td>
             <td class="c-muted" style="font-size:12px">{{fmtShort(inv.due_date)}}</td>
@@ -1158,13 +1490,13 @@ const Invoices=defineComponent({name:"Invoices",
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
           <tr v-for="inv in filtered" :key="inv.name" class="clickable">
-            <td @click="openDoc('Sales Invoice',inv.name)"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600" @click="openDoc('Sales Invoice',inv.name)">{{inv.customer}}</td>
-            <td class="c-muted" style="font-size:12.5px" @click="openDoc('Sales Invoice',inv.name)">{{fmtDate(inv.posting_date)}}</td>
-            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="openDoc('Sales Invoice',inv.name)">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" @click="openDoc('Sales Invoice',inv.name)">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="openDoc('Sales Invoice',inv.name)">{{fmt(inv.outstanding_amount)}}</td>
-            <td @click="openDoc('Sales Invoice',inv.name)"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
+            <td @click="$router.push('/invoices/'+inv.name)"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
+            <td class="fw-600" @click="$router.push('/invoices/'+inv.name)">{{inv.customer}}</td>
+            <td class="c-muted" style="font-size:12.5px" @click="$router.push('/invoices/'+inv.name)">{{fmtDate(inv.posting_date)}}</td>
+            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="$router.push('/invoices/'+inv.name)">{{fmtDate(inv.due_date)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" @click="$router.push('/invoices/'+inv.name)">{{fmt(inv.grand_total)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="$router.push('/invoices/'+inv.name)">{{fmt(inv.outstanding_amount)}}</td>
+            <td @click="$router.push('/invoices/'+inv.name)"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
             <td><button @click.stop="openDoc('Sales Invoice',inv.name)" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No invoices found</td></tr>
@@ -1514,6 +1846,13 @@ const modalCSS=`
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
 `;
+
+.inv-detail-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
+.inv-detail-row:last-child{border-bottom:none}
+.inv-detail-label{font-size:12px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
+.inv-detail-value{font-size:13px;color:var(--text);font-weight:500;text-align:right}
+@keyframes spin{to{transform:rotate(360deg)}}
+
 if(!document.getElementById("books-modal-css")){
   const s=document.createElement("style");s.id="books-modal-css";s.textContent=modalCSS;
   document.head.appendChild(s);
@@ -1525,6 +1864,7 @@ const router=createRouter({
   routes:[
     {path:"/",        component:Dashboard,name:"dashboard"},
     {path:"/invoices",component:Invoices, name:"invoices"},
+    {path:"/invoices/:name",component:InvoiceDetail,name:"invoice-detail"},
     {path:"/purchases",component:Purchases,name:"purchases"},
     {path:"/payments",component:Payments, name:"payments"},
     {path:"/banking", component:Banking,  name:"banking"},
