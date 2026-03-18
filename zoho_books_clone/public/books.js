@@ -171,7 +171,116 @@ function toast(msg,type="success"){
     background:${bg};color:#fff;padding:12px 20px;border-radius:8px;
     font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif;
     box-shadow:0 4px 20px rgba(0,0,0,.2);max-width:360px;line-height:1.4;
-    animation:toastIn .2s ease`;
+    animation:toastIn .2s ease
+/* ═══ Zoho Books Master-Detail Layout ═══ */
+.zb-master-detail{display:flex;height:calc(100vh - var(--topbar-h));overflow:hidden;background:#f4f5f7}
+/* LEFT LIST PANE */
+.zb-list-pane{width:300px;flex-shrink:0;border-right:1px solid #e0e2e7;background:#fff;display:flex;flex-direction:column;overflow:hidden}
+.zb-list-header{padding:14px 14px 0;flex-shrink:0;border-bottom:1px solid #f0f0f0}
+.zb-list-search{display:flex;align-items:center;gap:7px;background:#f5f6f8;border:1px solid #e8eaed;border-radius:6px;padding:6px 10px;margin-bottom:10px}
+.zb-list-search-input{border:none;outline:none;background:none;font-size:12px;font-family:inherit;color:#1a1d23;width:100%}
+.zb-list-pills{display:flex;gap:4px;flex-wrap:wrap;padding-bottom:10px}
+.zb-list-pill{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid #e8eaed;background:#fff;color:#666;transition:.12s;display:inline-flex;align-items:center;gap:4px;font-family:inherit}
+.zb-list-pill:hover{background:#f5f6f8}
+.zb-list-pill.active{background:#2563EB;color:#fff;border-color:#2563EB}
+.zb-pill-count{background:rgba(255,255,255,.25);padding:1px 5px;border-radius:10px;font-size:10px}
+.zb-list-pill:not(.active) .zb-pill-count{background:#e8eaed;color:#666}
+.zb-list-items{flex:1;overflow-y:auto}
+.zb-list-item{padding:12px 14px;border-bottom:1px solid #f4f5f7;cursor:pointer;transition:.1s;position:relative}
+.zb-list-item:hover{background:#f8f9fb}
+.zb-list-item.selected{background:#eff6ff;border-right:3px solid #2563EB}
+.zb-list-item-shimmer{padding:12px 14px;border-bottom:1px solid #f4f5f7}
+.zb-list-item-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+.zb-list-item-name{font-size:13px;font-weight:700;color:#1a1d23}
+.zb-list-item-amount{font-size:13px;font-weight:700;font-family:monospace;color:#1a1d23}
+.zb-list-item-mid{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+.zb-list-item-num{font-size:11px;color:#2563EB;font-weight:600}
+.zb-list-item-dot{font-size:10px;color:#ccc}
+.zb-list-item-date{font-size:11px;color:#888}
+.zb-list-item-bot{display:flex;align-items:center;gap:8px}
+.zb-list-status-tag{font-size:10px;font-weight:700;padding:2px 7px;border-radius:3px;text-transform:uppercase;letter-spacing:.04em}
+.zb-list-draft{background:#f3f4f6;color:#6b7280}
+.zb-list-unpaid{background:#fef3c7;color:#92400e}
+.zb-list-overdue{background:#fee2e2;color:#991b1b}
+.zb-list-paid{background:#d1fae5;color:#065f46}
+.zb-list-empty{padding:40px 20px;text-align:center}
+.zb-icon-btn{width:28px;height:28px;border-radius:5px;border:1px solid #e8eaed;background:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#555;transition:.1s}
+.zb-icon-btn:hover{background:#f5f6f8}
+/* RIGHT DETAIL AREA */
+.zb-detail-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+.zb-actionbar{display:flex;align-items:center;justify-content:space-between;padding:9px 16px;background:#fff;border-bottom:1px solid #e0e2e7;flex-shrink:0;gap:12px}
+.zb-ab-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #d0d3d9;background:#fff;color:#444;transition:.12s;font-family:inherit}
+.zb-ab-btn:hover{background:#f5f6f8}
+.zb-ab-primary{background:#2563EB!important;color:#fff!important;border-color:#2563EB!important}
+.zb-ab-primary:hover{background:#1d4ed8!important;opacity:1}
+.zb-ab-primary:disabled{opacity:.65;cursor:not-allowed}
+.zb-banner{display:flex;align-items:center;gap:10px;padding:9px 16px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#92400e;flex-shrink:0}
+/* PDF wrap */
+.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;justify-content:center;align-items:flex-start}
+.zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:hidden}
+.zb-draft-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#6b7280;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
+.zb-pdf-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #ddd}
+.zb-pdf-co-name{font-size:17px;font-weight:800;color:#1a1d23}
+.zb-pdf-co-meta{font-size:11px;color:#666;line-height:1.6}
+.zb-pdf-inv-title{font-size:22px;font-weight:900;color:#1a1d23;letter-spacing:1px}
+.zb-pdf-info-table{width:100%;border-collapse:collapse;margin-bottom:0}
+.zb-pdf-info-table th{background:#f5f6f8;font-size:10px;font-weight:700;color:#555;padding:6px 8px;border:1px solid #ddd;text-align:left}
+.zb-pdf-info-table td{font-size:12px;color:#1a1d23;padding:6px 8px;border:1px solid #ddd}
+.zb-pdf-bill-section{padding:10px 0;border-bottom:1px solid #ddd;margin-bottom:0}
+.zb-pdf-bill-label{font-size:10px;font-weight:700;color:#666;margin-bottom:3px}
+.zb-pdf-bill-name{font-size:13px;font-weight:600;color:#2563EB}
+.zb-pdf-items{width:100%;border-collapse:collapse}
+.zb-pdf-th{font-size:10px;font-weight:700;color:#555;padding:7px 8px;background:#f5f6f8;border:1px solid #ddd;text-align:left}
+.zb-pdf-td{padding:8px 8px;border:1px solid #ddd;font-size:12px;vertical-align:top}
+.zb-pdf-item-row:nth-child(even) .zb-pdf-td{background:#fafafa}
+.zb-pdf-bottom{display:flex;border-top:1px solid #ddd}
+.zb-pdf-words-block{flex:1;padding:12px 10px;border-right:1px solid #ddd;font-size:11px}
+.zb-pdf-words-lbl{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#aaa;margin-bottom:3px}
+.zb-pdf-words-val{font-size:11px;color:#333;line-height:1.5}
+.zb-pdf-totals-block{width:240px;padding:8px 12px;display:flex;flex-direction:column;gap:0}
+.zb-pdf-total-row{display:flex;justify-content:space-between;font-size:12px;color:#444;padding:4px 0;border-bottom:1px solid #f0f0f0}
+.zb-pdf-total-row:last-child{border-bottom:none}
+.zb-pdf-total-bold{font-weight:800;font-size:14px;color:#1a1d23;padding:7px 0}
+.zb-pdf-balance{font-weight:800;font-size:14px;color:#1a1d23;border-top:2px solid #1a1d23!important;padding-top:7px}
+.zb-pdf-sig-row{display:flex;justify-content:flex-end;padding:14px 0 6px}
+.zb-pdf-sig-box{width:180px;text-align:center;border-top:1px solid #999;padding-top:5px;font-size:10px;color:#666}
+.zb-pdf-footer{text-align:right;font-size:10px;color:#aaa;border-top:1px solid #eee;padding-top:8px;margin-top:2px}
+/* Right panel */
+.zb-right-panel{width:260px;flex-shrink:0;border-left:1px solid #e0e2e7;background:#fff;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.zb-panel-card{border:1px solid #e8eaed;border-radius:8px;padding:12px}
+.zb-panel-title{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px}
+.zb-panel-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;color:var(--text-2);border-bottom:1px solid var(--border)}
+.zb-panel-row:last-child{border-bottom:none}
+/* Edit form */
+.zb-edit-wrap{flex:1;overflow-y:auto;padding:20px 24px;background:#f4f5f7}
+.zb-edit-form{max-width:780px;background:#fff;border-radius:8px;padding:24px 28px;box-shadow:0 1px 6px rgba(0,0,0,.06)}
+.zb-form-section-title{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#888;margin-bottom:10px;padding-bottom:7px;border-bottom:1px solid #f0f0f0}
+.zb-form-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
+.zb-form-field{display:flex;flex-direction:column;gap:4px}
+.zb-form-label{font-size:10px;font-weight:700;color:#666;text-transform:uppercase;letter-spacing:.05em}
+.zb-form-input{padding:7px 10px;border:1px solid #d0d3d9;border-radius:5px;font-size:13px;font-family:inherit;color:#1a1d23;background:#fff;transition:.12s;width:100%;box-sizing:border-box}
+.zb-form-input:focus{outline:none;border-color:#2563EB;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.zb-items-table{width:100%;border-collapse:collapse;margin-bottom:6px}
+.zb-items-table th{font-size:10px;font-weight:700;color:#888;padding:5px 6px;border-bottom:2px solid #f0f0f0;text-align:left;background:#fafafa}
+.zb-items-table td{padding:4px 3px;border-bottom:1px solid #f5f5f5;vertical-align:middle}
+.zb-cell-input{width:100%;border:1px solid transparent;border-radius:3px;padding:4px 6px;font-size:12px;font-family:inherit;background:#fafafa;transition:.1s;box-sizing:border-box}
+.zb-cell-input:focus{outline:none;border-color:#2563EB;background:#fff}
+.zb-cell-num{text-align:right;width:70px}
+.zb-add-row{background:none;border:none;color:#2563EB;font-size:11px;font-weight:600;cursor:pointer;padding:5px 2px;font-family:inherit}
+.zb-edit-totals{display:flex;flex-direction:column;align-items:flex-end;margin-top:14px;padding-top:10px;border-top:1px solid #f0f0f0;gap:5px}
+.zb-edit-total-row{display:flex;gap:48px;font-size:12px;color:#555}
+.zb-edit-grand{font-size:15px;font-weight:800;color:#1a1d23;padding-top:5px;border-top:2px solid #1a1d23;width:100%;max-width:260px;justify-content:space-between}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* Print */
+@media print{
+  .no-print{display:none!important}
+  .zb-master-detail{height:auto!important;overflow:visible!important;display:block!important}
+  .zb-list-pane{display:none!important}
+  .zb-detail-area{display:block!important;overflow:visible!important}
+  .zb-pdf-wrap{background:#fff!important;padding:0!important;overflow:visible!important;display:block!important}
+  .zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}
+  .zb-right-panel{display:none!important}
+}`;
   el.textContent=msg;
   const style=document.createElement("style");
   style.textContent="@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}";
@@ -1007,493 +1116,6 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 
 /* ─── Invoice Detail Component ───────────────────────────────── */
 
-const InvoiceDetail = {
-  setup(){
-    const route=useRoute();
-    const router=useRouter();
-    const inv=ref(null);
-    const loading=ref(true);
-    const error=ref(null);
-    const editing=ref(false);
-    const saving=ref(false);
-    const submitting=ref(false);
-
-    // Edit form state
-    const customers=ref([]);
-    const accounts_ar=ref([]);
-    const accounts_income=ref([]);
-    const form=reactive({
-      customer:"",posting_date:"",due_date:"",debit_to:"",income_account:"",
-      currency:"INR",notes:"",company:"",
-      items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
-      taxes:[]
-    });
-
-    const name=computed(()=>route.params.name);
-
-    function toAmountWords(n){
-      // Simple Indian number-to-words
-      const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine",
-               "Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen",
-               "Seventeen","Eighteen","Nineteen"];
-      const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
-      function words(n){
-        if(n===0)return"";
-        if(n<20)return a[n]+" ";
-        if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");
-        if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?words(n%100):"");
-        if(n<100000)return words(Math.floor(n/1000))+"Thousand "+(n%1000?words(n%1000):"");
-        if(n<10000000)return words(Math.floor(n/100000))+"Lakh "+(n%100000?words(n%100000):"");
-        return words(Math.floor(n/10000000))+"Crore "+(n%10000000?words(n%10000000):"");
-      }
-      const rupees=Math.floor(n);
-      const paise=Math.round((n-rupees)*100);
-      let w="Indian Rupee "+words(rupees).trim();
-      if(paise)w+=" and "+words(paise).trim()+" Paise";
-      return w+" Only";
-    }
-
-    async function load(){
-      loading.value=true; error.value=null;
-      try{
-        inv.value=await apiGet("Sales Invoice",name.value);
-      }catch(e){error.value=e.message;}
-      finally{loading.value=false;}
-    }
-
-    async function loadFormDefaults(){
-      try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
-      try{
-        const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});
-        accounts_ar.value=ar;
-      }catch{}
-      try{
-        const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});
-        accounts_income.value=inc;
-      }catch{}
-    }
-
-    function startEdit(){
-      if(!inv.value)return;
-      Object.assign(form,{
-        customer:inv.value.customer||"",
-        posting_date:inv.value.posting_date||"",
-        due_date:inv.value.due_date||"",
-        debit_to:inv.value.debit_to||"",
-        income_account:inv.value.income_account||"",
-        currency:inv.value.currency||"INR",
-        notes:inv.value.notes||"",
-        company:inv.value.company||"",
-        items:(inv.value.items||[]).map(i=>({...i})),
-        taxes:(inv.value.taxes||[]).map(t=>({...t})),
-      });
-      if(!form.items.length)form.items=[{item_name:"",description:"",qty:1,rate:0,amount:0}];
-      loadFormDefaults();
-      editing.value=true;
-    }
-
-    function recalc(){
-      form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
-      const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
-      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
-    }
-
-    function addItem(){form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0});}
-    function removeItem(i){if(form.items.length>1)form.items.splice(i,1);recalc();}
-    function addTax(){form.taxes.push({tax_type:"GST",description:"GST",rate:18,tax_amount:0});}
-    function removeTax(i){form.taxes.splice(i,1);recalc();}
-
-    const netTotal=computed(()=>form.items.reduce((s,i)=>s+flt(i.amount),0));
-    const totalTax=computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
-    const grandTotal=computed(()=>netTotal.value+totalTax.value);
-
-    async function saveEdit(){
-      saving.value=true;
-      try{
-        recalc();
-        const doc={
-          doctype:"Sales Invoice",
-          name:inv.value.name,
-          customer:form.customer,
-          posting_date:form.posting_date,
-          due_date:form.due_date,
-          debit_to:form.debit_to,
-          income_account:form.income_account,
-          currency:form.currency,
-          notes:form.notes,
-          company:form.company,
-          items:form.items.filter(i=>i.item_name||flt(i.rate)).map((i,idx)=>({
-            doctype:"Sales Invoice Item",
-            idx:idx+1,
-            item_name:i.item_name,
-            description:i.description,
-            qty:flt(i.qty)||1,
-            rate:flt(i.rate),
-            amount:flt(i.amount),
-          })),
-          taxes:form.taxes.map(t=>({
-            doctype:"Tax Line",
-            tax_type:t.tax_type,
-            description:t.description||t.tax_type,
-            rate:flt(t.rate),
-            tax_amount:flt(t.tax_amount),
-          })),
-        };
-        const saved=await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
-        inv.value=saved;
-        editing.value=false;
-        toast("Invoice saved!","success");
-      }catch(e){toast("Save failed: "+e.message,"error");}
-      finally{saving.value=false;}
-    }
-
-    async function submitInvoice(){
-      if(!confirm("Submit this invoice? This cannot be undone."))return;
-      submitting.value=true;
-      try{
-        await apiSubmit("Sales Invoice",name.value);
-        toast("Invoice submitted!","success");
-        await load();
-      }catch(e){toast("Submit failed: "+e.message,"error");}
-      finally{submitting.value=false;}
-    }
-
-    function printPdf(){window.print();}
-
-    onMounted(load);
-    watch(()=>route.params.name,()=>{editing.value=false;load();});
-
-    const statusBadgeCls=computed(()=>{
-      const s=inv.value?.status;
-      if(s==="Paid")return"b-badge-green";
-      if(s==="Submitted"||s==="Partly Paid")return"b-badge-blue";
-      if(s==="Overdue")return"b-badge-red";
-      if(s==="Cancelled")return"b-badge-muted";
-      return"b-badge-amber";
-    });
-    const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
-    const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
-    const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
-
-    return{inv,loading,error,editing,saving,submitting,form,customers,accounts_ar,accounts_income,
-           name,statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
-           startEdit,saveEdit,submitInvoice,printPdf,addItem,removeItem,addTax,removeTax,recalc,toAmountWords,
-           fmt,fmtDate,flt,icon,router};
-  },
-  template:`
-<div class="zb-detail-shell" v-if="!loading&&!error&&inv">
-
-  <!-- ══ TOP ACTION BAR ══ -->
-  <div class="zb-actionbar no-print">
-    <div style="display:flex;align-items:center;gap:8px">
-      <button class="zb-ab-btn" @click="router.push('/invoices')">
-        <span v-html="icon('arrow-left',13)"></span>
-      </button>
-      <span class="zb-ab-title">{{inv.name}}</span>
-      <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
-    </div>
-    <div style="display:flex;gap:6px;align-items:center">
-      <button class="zb-ab-btn zb-ab-outline" @click="startEdit" v-if="!editing">
-        <span v-html="icon('edit',13)"></span> Edit
-      </button>
-      <template v-if="editing">
-        <button class="zb-ab-btn zb-ab-outline" @click="editing=false">Cancel</button>
-        <button class="zb-ab-btn zb-ab-primary" @click="saveEdit" :disabled="saving">
-          <span v-if="saving" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
-          {{saving?'Saving…':'Save'}}
-        </button>
-      </template>
-      <template v-else>
-        <button class="zb-ab-btn zb-ab-outline" @click="printPdf">
-          <span v-html="icon('print',13)"></span> PDF/Print
-        </button>
-        <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
-          <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
-          {{submitting?'Submitting…':'Submit'}}
-        </button>
-        <button class="zb-ab-btn zb-ab-outline" @click="openDoc('Sales Invoice',inv.name)" title="Open in Frappe Desk">
-          <span v-html="icon('ext',13)"></span>
-        </button>
-      </template>
-    </div>
-  </div>
-
-  <!-- ══ WHAT'S NEXT BANNER (Draft only) ══ -->
-  <div class="zb-banner no-print" v-if="isDraft&&!editing">
-    <span class="zb-banner-icon">✦</span>
-    <span class="zb-banner-txt"><b>WHAT'S NEXT?</b> Submit this invoice to lock it, then record a payment when collected.</span>
-    <button class="zb-ab-btn zb-ab-primary" style="padding:5px 14px;font-size:12px" @click="submitInvoice">Submit Invoice</button>
-  </div>
-
-  <!-- ══ MAIN BODY ══ -->
-  <div class="zb-body">
-
-    <!-- ── EDIT FORM (replaces PDF when editing) ── -->
-    <div v-if="editing" class="zb-edit-wrap no-print">
-      <div class="zb-edit-form">
-        <div class="zb-form-section-title">Invoice Details</div>
-        <div class="zb-form-grid3">
-          <div class="zb-form-field">
-            <label class="zb-form-label">Customer *</label>
-            <select v-model="form.customer" class="zb-form-input">
-              <option value="">— Select —</option>
-              <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
-            </select>
-          </div>
-          <div class="zb-form-field">
-            <label class="zb-form-label">Invoice Date *</label>
-            <input type="date" v-model="form.posting_date" class="zb-form-input"/>
-          </div>
-          <div class="zb-form-field">
-            <label class="zb-form-label">Due Date</label>
-            <input type="date" v-model="form.due_date" class="zb-form-input"/>
-          </div>
-          <div class="zb-form-field">
-            <label class="zb-form-label">Debit To (AR Account)</label>
-            <select v-model="form.debit_to" class="zb-form-input">
-              <option value="">— Select —</option>
-              <option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option>
-            </select>
-          </div>
-          <div class="zb-form-field">
-            <label class="zb-form-label">Income Account</label>
-            <select v-model="form.income_account" class="zb-form-input">
-              <option value="">— Select —</option>
-              <option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option>
-            </select>
-          </div>
-          <div class="zb-form-field">
-            <label class="zb-form-label">Currency</label>
-            <input v-model="form.currency" class="zb-form-input"/>
-          </div>
-        </div>
-
-        <div class="zb-form-section-title" style="margin-top:20px">Items</div>
-        <table class="zb-items-table">
-          <thead><tr>
-            <th>#</th><th>Item Name</th><th>Description</th>
-            <th style="text-align:right">Qty</th><th style="text-align:right">Rate</th>
-            <th style="text-align:right">Amount</th><th></th>
-          </tr></thead>
-          <tbody>
-            <tr v-for="(item,i) in form.items" :key="i">
-              <td style="color:#aaa;font-size:12px;text-align:center">{{i+1}}</td>
-              <td><input v-model="item.item_name" class="zb-cell-input" placeholder="Item name" @input="recalc"/></td>
-              <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
-              <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
-              <td><input v-model.number="item.rate" type="number" min="0" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
-              <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:8px">{{fmt(item.amount)}}</td>
-              <td><button @click="removeItem(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:4px" v-html="icon('trash',13)"></button></td>
-            </tr>
-          </tbody>
-        </table>
-        <button class="zb-add-row" @click="addItem">+ Add Row</button>
-
-        <div class="zb-form-section-title" style="margin-top:20px">Taxes & Charges</div>
-        <table class="zb-items-table" v-if="form.taxes.length">
-          <thead><tr><th>Tax Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Amount</th><th></th></tr></thead>
-          <tbody>
-            <tr v-for="(tax,i) in form.taxes" :key="i">
-              <td><input v-model="tax.tax_type" class="zb-cell-input" placeholder="SGST"/></td>
-              <td><input v-model="tax.description" class="zb-cell-input" placeholder="SGST 9%"/></td>
-              <td><input v-model.number="tax.rate" type="number" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
-              <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:8px">{{fmt(tax.tax_amount)}}</td>
-              <td><button @click="removeTax(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:4px" v-html="icon('trash',13)"></button></td>
-            </tr>
-          </tbody>
-        </table>
-        <button class="zb-add-row" @click="addTax">+ Add Tax</button>
-
-        <!-- Edit Totals -->
-        <div class="zb-edit-totals">
-          <div class="zb-edit-total-row"><span>Net Total</span><span class="mono">{{fmt(netTotal)}}</span></div>
-          <div class="zb-edit-total-row"><span>Tax</span><span class="mono">{{fmt(totalTax)}}</span></div>
-          <div class="zb-edit-total-row zb-edit-grand"><span>Grand Total</span><span class="mono">{{fmt(grandTotal)}}</span></div>
-        </div>
-
-        <div class="zb-form-field" style="margin-top:16px">
-          <label class="zb-form-label">Notes</label>
-          <textarea v-model="form.notes" class="zb-form-input" rows="3" placeholder="Payment terms, remarks…" style="resize:vertical"></textarea>
-        </div>
-      </div>
-    </div>
-
-    <!-- ── PDF PAPER (shown when not editing) ── -->
-    <div v-else class="zb-pdf-wrap">
-      <div class="zb-pdf-paper">
-
-        <!-- Draft watermark ribbon -->
-        <div class="zb-draft-ribbon" v-if="isDraft">Draft</div>
-
-        <!-- Header: Company left, TAX INVOICE right -->
-        <div class="zb-pdf-head">
-          <div>
-            <div class="zb-pdf-co-name">{{inv.company||'Your Company'}}</div>
-            <div class="zb-pdf-co-meta" v-if="inv.company_address">{{inv.company_address}}</div>
-          </div>
-          <div class="zb-pdf-inv-title">TAX INVOICE</div>
-        </div>
-
-        <!-- Info Grid: # | Invoice Date | Terms | Due | PO# -->
-        <table class="zb-pdf-info-table">
-          <thead><tr>
-            <th>#</th><th>Invoice Date</th><th>Terms</th><th>Due Date</th><th>P.O.#</th>
-          </tr></thead>
-          <tbody><tr>
-            <td>{{inv.name}}</td>
-            <td>{{fmtDate(inv.posting_date)}}</td>
-            <td>{{inv.payment_terms||'Due on Receipt'}}</td>
-            <td :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</td>
-            <td>{{inv.invoice_number||'—'}}</td>
-          </tr></tbody>
-        </table>
-
-        <!-- Bill To -->
-        <div class="zb-pdf-bill-section">
-          <div class="zb-pdf-bill-label">Bill To</div>
-          <div class="zb-pdf-bill-name">{{inv.customer_name||inv.customer}}</div>
-        </div>
-
-        <!-- Items -->
-        <table class="zb-pdf-items">
-          <thead>
-            <tr>
-              <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
-              <th class="zb-pdf-th">Item &amp; Description</th>
-              <th class="zb-pdf-th" style="text-align:right">Qty</th>
-              <th class="zb-pdf-th" style="text-align:right">Rate</th>
-              <th class="zb-pdf-th" style="text-align:right">Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="(item,i) in (inv.items||[])" :key="i" class="zb-pdf-item-row">
-              <td class="zb-pdf-td" style="text-align:center;color:#aaa;font-size:12px">{{i+1}}</td>
-              <td class="zb-pdf-td">
-                <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
-                <div v-if="item.description" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
-              </td>
-              <td class="zb-pdf-td" style="text-align:right;font-family:monospace">
-                {{flt(item.qty).toFixed(2)}}
-                <div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div>
-              </td>
-              <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
-              <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <!-- Bottom: words left, totals right -->
-        <div class="zb-pdf-bottom">
-          <div class="zb-pdf-words-block">
-            <div class="zb-pdf-words-lbl">Total In Words</div>
-            <div class="zb-pdf-words-val"><i>{{toAmountWords(flt(inv.grand_total))}}</i></div>
-            <div v-if="inv.notes" style="margin-top:12px">
-              <div class="zb-pdf-words-lbl">Notes</div>
-              <div style="font-size:12px;color:#555;margin-top:4px;white-space:pre-wrap">{{inv.notes}}</div>
-            </div>
-          </div>
-          <div class="zb-pdf-totals-block">
-            <div class="zb-pdf-total-row">
-              <span>Sub Total</span>
-              <span>{{fmt(inv.net_total)}}</span>
-            </div>
-            <div class="zb-pdf-total-row" v-for="tax in (inv.taxes||[])" :key="tax.tax_type">
-              <span>{{tax.tax_type}} <span style="color:#aaa;font-size:11px">({{flt(tax.rate)}}%)</span></span>
-              <span>{{fmt(tax.tax_amount)}}</span>
-            </div>
-            <div class="zb-pdf-total-row zb-pdf-total-bold">
-              <span>Total</span>
-              <span>{{fmt(inv.grand_total)}}</span>
-            </div>
-            <div class="zb-pdf-total-row zb-pdf-balance" v-if="flt(inv.outstanding_amount)>0">
-              <span>Balance Due</span>
-              <span>{{fmt(inv.outstanding_amount)}}</span>
-            </div>
-            <div class="zb-pdf-total-row" style="color:#2f9e44;font-weight:700;font-size:13px" v-else>
-              <span>✓ Paid in Full</span>
-              <span>{{fmt(inv.grand_total)}}</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Signature -->
-        <div class="zb-pdf-sig-row">
-          <div></div>
-          <div class="zb-pdf-sig-box">Authorized Signature</div>
-        </div>
-
-        <!-- PDF footer -->
-        <div class="zb-pdf-footer">
-          PDF Template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span>
-        </div>
-
-      </div><!-- /paper -->
-    </div><!-- /pdf-wrap -->
-
-    <!-- ── RIGHT PANEL ── -->
-    <div class="zb-right-panel no-print">
-      <!-- Payment status -->
-      <div class="zb-panel-card">
-        <div class="zb-panel-title">Payment Status</div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-          <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
-          <span style="font-size:11px;color:var(--text-3);font-weight:600">{{paidPct}}% paid</span>
-        </div>
-        <div style="height:7px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:14px">
-          <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'var(--green-text)':'var(--accent)',borderRadius:'4px',transition:'width .6s'}"></div>
-        </div>
-        <div class="zb-panel-row"><span>Grand Total</span><span class="mono fw-700">{{fmt(inv.grand_total)}}</span></div>
-        <div class="zb-panel-row"><span>Paid</span><span class="mono fw-600" style="color:var(--green-text)">{{fmt(paidAmt)}}</span></div>
-        <div class="zb-panel-row" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
-          <span style="font-weight:700">Outstanding</span>
-          <span class="mono fw-700" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</span>
-        </div>
-      </div>
-      <!-- Invoice meta -->
-      <div class="zb-panel-card">
-        <div class="zb-panel-title">Invoice Info</div>
-        <div class="zb-panel-row"><span>Invoice #</span><span class="mono" style="color:var(--accent);font-weight:700">{{inv.name}}</span></div>
-        <div class="zb-panel-row"><span>Date</span><span>{{fmtDate(inv.posting_date)}}</span></div>
-        <div class="zb-panel-row"><span>Due</span><span :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'var(--red-text)':'inherit'}">{{fmtDate(inv.due_date)}}</span></div>
-        <div class="zb-panel-row" v-if="inv.currency"><span>Currency</span><span>{{inv.currency}}</span></div>
-        <div class="zb-panel-row" v-if="inv.payment_terms"><span>Terms</span><span>{{inv.payment_terms}}</span></div>
-      </div>
-      <!-- Customer -->
-      <div class="zb-panel-card">
-        <div class="zb-panel-title">Customer</div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)">
-          <div style="width:36px;height:36px;border-radius:8px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:var(--accent);flex-shrink:0">
-            {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
-          </div>
-          <div>
-            <div style="font-weight:700;font-size:13px">{{inv.customer_name||inv.customer}}</div>
-            <div style="font-size:11px;color:var(--text-3)">{{inv.customer}}</div>
-          </div>
-        </div>
-        <div class="zb-panel-row" v-if="inv.debit_to"><span>AR Account</span><span style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.debit_to">{{inv.debit_to}}</span></div>
-        <div class="zb-panel-row" v-if="inv.income_account"><span>Income Acct</span><span style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.income_account">{{inv.income_account}}</span></div>
-      </div>
-    </div>
-
-  </div><!-- /body -->
-</div>
-
-<!-- Loading skeleton -->
-<div v-else-if="loading" style="display:flex;align-items:center;justify-content:center;height:300px">
-  <div style="text-align:center">
-    <div class="b-shimmer" style="width:220px;height:14px;border-radius:4px;margin:0 auto 10px"></div>
-    <div class="b-shimmer" style="width:140px;height:11px;border-radius:4px;margin:0 auto"></div>
-  </div>
-</div>
-
-<!-- Error -->
-<div v-else-if="error" class="b-card b-card-body" style="text-align:center;padding:60px 20px;margin:20px">
-  <div style="font-size:15px;font-weight:600;color:var(--text-2);margin-bottom:8px">Failed to load invoice</div>
-  <div style="font-size:13px;color:var(--text-3);margin-bottom:20px">{{error}}</div>
-  <button class="b-btn b-btn-primary" @click="load">Retry</button>
-</div>
-`
-};
 
 
 const Dashboard=defineComponent({name:"Dashboard",
@@ -1602,9 +1224,18 @@ const Dashboard=defineComponent({name:"Dashboard",
 const Invoices=defineComponent({name:"Invoices",
   components:{InvoiceModal},
   setup(){
+    // ── List state ──────────────────────────────────────────────
     const list=ref([]),loading=ref(true),active=ref("all"),showNew=ref(false);
     const search=ref("");
-    const filters=[{k:"all",lbl:"All"},{k:"Draft",lbl:"Draft"},{k:"Submitted",lbl:"Unpaid"},{k:"Overdue",lbl:"Overdue"},{k:"Paid",lbl:"Paid"}];
+    const selectedName=ref(null);
+
+    const filters=[
+      {k:"all",lbl:"All Invoices"},
+      {k:"Draft",lbl:"Draft"},
+      {k:"Submitted",lbl:"Unpaid"},
+      {k:"Overdue",lbl:"Overdue"},
+      {k:"Paid",lbl:"Paid"}
+    ];
     const counts=computed(()=>({
       Draft:list.value.filter(i=>i.status==="Draft").length,
       Submitted:list.value.filter(i=>["Submitted","Partly Paid"].includes(i.status)).length,
@@ -1618,56 +1249,522 @@ const Invoices=defineComponent({name:"Invoices",
       if(search.value)r=r.filter(i=>(i.name+(i.customer||"")).toLowerCase().includes(search.value.toLowerCase()));
       return r;
     });
-    function pillBadge(k){return{Draft:"b-badge-muted",Submitted:"b-badge-amber",Overdue:"b-badge-red",Paid:"b-badge-green"}[k]||"b-badge-muted";}
-    async function load(){
+
+    async function loadList(){
       loading.value=true;
-      try{list.value=await apiList("Sales Invoice",{fields:["name","customer","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
-      catch(e){console.error("Sales Invoice load failed:",e.message);toast("Failed to load invoices: "+e.message,"error");}
+      try{
+        list.value=await apiList("Sales Invoice",{
+          fields:["name","customer","posting_date","due_date","grand_total","outstanding_amount","status"],
+          order:"posting_date desc"
+        });
+        // Auto-select first invoice
+        if(list.value.length&&!selectedName.value)selectedName.value=list.value[0].name;
+      }catch(e){toast("Failed to load invoices: "+e.message,"error");}
       finally{loading.value=false;}
     }
-    onMounted(load);
-    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt,openDoc};
+
+    function pillBadge(k){
+      return{Draft:"zb-list-draft",Submitted:"zb-list-unpaid",Overdue:"zb-list-overdue",Paid:"zb-list-paid"}[k]||"zb-list-draft";
+    }
+
+    // ── Detail state ────────────────────────────────────────────
+    const inv=ref(null),detailLoading=ref(false),detailError=ref(null);
+    const editing=ref(false),saving=ref(false),submitting=ref(false);
+    const customers=ref([]),accounts_ar=ref([]),accounts_income=ref([]);
+    const form=reactive({
+      customer:"",posting_date:"",due_date:"",debit_to:"",income_account:"",
+      currency:"INR",notes:"",company:"",
+      items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
+      taxes:[]
+    });
+
+    async function loadDetail(name){
+      if(!name)return;
+      detailLoading.value=true; detailError.value=null; editing.value=false;
+      try{inv.value=await apiGet("Sales Invoice",name);}
+      catch(e){detailError.value=e.message;}
+      finally{detailLoading.value=false;}
+    }
+
+    watch(selectedName,n=>{if(n)loadDetail(n);});
+    onMounted(loadList);
+
+    // ── Edit helpers ────────────────────────────────────────────
+    async function loadFormDefaults(){
+      try{customers.value=await apiList("Customer",{fields:["name"],limit:100,order:"name asc"});}catch{}
+      try{const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});accounts_ar.value=ar;}catch{}
+      try{const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});accounts_income.value=inc;}catch{}
+    }
+
+    function startEdit(){
+      if(!inv.value)return;
+      Object.assign(form,{
+        customer:inv.value.customer||"",posting_date:inv.value.posting_date||"",
+        due_date:inv.value.due_date||"",debit_to:inv.value.debit_to||"",
+        income_account:inv.value.income_account||"",currency:inv.value.currency||"INR",
+        notes:inv.value.notes||"",company:inv.value.company||"",
+        items:(inv.value.items||[]).map(i=>({...i})),
+        taxes:(inv.value.taxes||[]).map(t=>({...t})),
+      });
+      if(!form.items.length)form.items=[{item_name:"",description:"",qty:1,rate:0,amount:0}];
+      loadFormDefaults();
+      editing.value=true;
+    }
+
+    function recalc(){
+      form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
+      const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
+      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
+    }
+    function addItem(){form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0});}
+    function removeItem(i){if(form.items.length>1)form.items.splice(i,1);recalc();}
+    function addTax(){form.taxes.push({tax_type:"SGST",description:"SGST",rate:9,tax_amount:0});}
+    function removeTax(i){form.taxes.splice(i,1);recalc();}
+
+    const netTotal=computed(()=>form.items.reduce((s,i)=>s+flt(i.amount),0));
+    const totalTax=computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
+    const grandTotal=computed(()=>netTotal.value+totalTax.value);
+
+    async function saveEdit(){
+      saving.value=true;
+      try{
+        recalc();
+        const doc={
+          doctype:"Sales Invoice",name:inv.value.name,
+          customer:form.customer,posting_date:form.posting_date,due_date:form.due_date,
+          debit_to:form.debit_to,income_account:form.income_account,
+          currency:form.currency,notes:form.notes,company:form.company,
+          items:form.items.filter(i=>i.item_name||flt(i.rate)).map((i,idx)=>({
+            doctype:"Sales Invoice Item",idx:idx+1,
+            item_name:i.item_name,description:i.description,
+            qty:flt(i.qty)||1,rate:flt(i.rate),amount:flt(i.amount),
+          })),
+          taxes:form.taxes.map(t=>({
+            doctype:"Tax Line",tax_type:t.tax_type,description:t.description||t.tax_type,
+            rate:flt(t.rate),tax_amount:flt(t.tax_amount),
+          })),
+        };
+        const saved=await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
+        inv.value=saved;
+        // Update list item
+        const idx=list.value.findIndex(i=>i.name===saved.name);
+        if(idx>-1)Object.assign(list.value[idx],{
+          grand_total:saved.grand_total,outstanding_amount:saved.outstanding_amount,
+          status:saved.status,posting_date:saved.posting_date,due_date:saved.due_date,
+        });
+        editing.value=false;
+        toast("Invoice saved!","success");
+      }catch(e){toast("Save failed: "+e.message,"error");}
+      finally{saving.value=false;}
+    }
+
+    async function submitInvoice(){
+      if(!confirm("Submit this invoice? This cannot be undone."))return;
+      submitting.value=true;
+      try{
+        await apiSubmit("Sales Invoice",inv.value.name);
+        toast("Invoice submitted!","success");
+        await loadDetail(inv.value.name);
+        await loadList();
+      }catch(e){toast("Submit failed: "+e.message,"error");}
+      finally{submitting.value=false;}
+    }
+
+    function printPdf(){window.print();}
+
+    function toAmountWords(n){
+      const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+      const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+      function w(n){
+        if(!n)return"";
+        if(n<20)return a[n]+" ";
+        if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");
+        if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?w(n%100):"");
+        if(n<100000)return w(Math.floor(n/1000))+"Thousand "+(n%1000?w(n%1000):"");
+        if(n<10000000)return w(Math.floor(n/100000))+"Lakh "+(n%100000?w(n%100000):"");
+        return w(Math.floor(n/10000000))+"Crore "+(n%10000000?w(n%10000000):"");
+      }
+      const r=Math.floor(n),p=Math.round((n-r)*100);
+      return"Indian Rupee "+w(r).trim()+(p?" and "+w(p).trim()+" Paise":"")+" Only";
+    }
+
+    // ── Computed for detail view ─────────────────────────────────
+    const statusBadgeCls=computed(()=>{
+      const s=inv.value?.status;
+      if(s==="Paid")return"b-badge-green";
+      if(s==="Submitted"||s==="Partly Paid")return"b-badge-blue";
+      if(s==="Overdue")return"b-badge-red";
+      if(s==="Cancelled")return"b-badge-muted";
+      return"b-badge-amber";
+    });
+    const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
+    const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
+    const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
+
+    return{
+      list,loading,active,showNew,search,filters,counts,filtered,selectedName,
+      pillBadge,loadList,
+      inv,detailLoading,detailError,editing,saving,submitting,
+      form,customers,accounts_ar,accounts_income,
+      statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
+      startEdit,saveEdit,submitInvoice,printPdf,
+      addItem,removeItem,addTax,removeTax,recalc,toAmountWords,
+      fmt,fmtDate,flt,icon,openDoc
+    };
   },
   template:`
-<div class="b-page">
-  <InvoiceModal :show="showNew" @close="showNew=false" @saved="load"/>
-  <div class="b-action-bar">
-    <div class="b-filter-row">
-      <button v-for="f in filters" :key="f.k" class="b-pill" :class="{active:active===f.k}" @click="active=f.k">
-        {{f.lbl}}<span v-if="f.k!=='all'" class="b-badge" :class="pillBadge(f.k)" style="margin-left:4px;font-size:10px;padding:1px 5px;vertical-align:middle">{{counts[f.k]}}</span>
-      </button>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <div style="display:flex;align-items:center;gap:7px;background:#fff;border:1px solid #E8ECF0;border-radius:20px;padding:6px 12px">
-        <span v-html="icon('search',13)" style="color:#ADB5BD"></span>
-        <input v-model="search" placeholder="Search…" style="border:none;outline:none;font-size:13px;font-family:inherit;width:140px;color:#1A1D23"/>
+<div class="zb-master-detail no-sidebar-pad">
+
+  <!-- ══ LEFT: INVOICE LIST ══ -->
+  <div class="zb-list-pane no-print">
+
+    <!-- List Header -->
+    <div class="zb-list-header">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices</span>
+          <span style="font-size:11px;color:var(--text-3)">▾</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="zb-icon-btn" @click="showNew=true" title="New Invoice">
+            <span v-html="icon('plus',13)"></span>
+          </button>
+          <button class="zb-icon-btn" @click="loadList" title="Refresh">
+            <span v-html="icon('refresh',13)"></span>
+          </button>
+        </div>
       </div>
-      <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="b-btn b-btn-primary" @click="showNew=true"><span v-html="icon('plus',13)"></span> New Invoice</button>
+      <!-- Search -->
+      <div class="zb-list-search">
+        <span v-html="icon('search',12)" style="color:#aaa;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search invoices…" class="zb-list-search-input"/>
+      </div>
+      <!-- Filter pills -->
+      <div class="zb-list-pills">
+        <button v-for="f in filters" :key="f.k"
+          class="zb-list-pill" :class="{active:active===f.k}"
+          @click="active=f.k">
+          {{f.lbl}}
+          <span v-if="f.k!=='all'" class="zb-pill-count">{{counts[f.k]}}</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Invoice Items -->
+    <div class="zb-list-items">
+      <!-- Shimmer loading -->
+      <template v-if="loading">
+        <div v-for="n in 6" :key="n" class="zb-list-item-shimmer">
+          <div class="b-shimmer" style="width:70%;height:13px;border-radius:3px;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="width:50%;height:11px;border-radius:3px;margin-bottom:4px"></div>
+          <div class="b-shimmer" style="width:35%;height:10px;border-radius:3px"></div>
+        </div>
+      </template>
+      <!-- Empty -->
+      <div v-else-if="!filtered.length" class="zb-list-empty">
+        <div v-html="icon('file',32)" style="color:var(--text-4);margin-bottom:10px;opacity:.4"></div>
+        <div style="font-size:13px;color:var(--text-3)">No invoices found</div>
+      </div>
+      <!-- List rows -->
+      <div v-else
+        v-for="inv in filtered" :key="inv.name"
+        class="zb-list-item"
+        :class="{selected:selectedName===inv.name}"
+        @click="selectedName=inv.name">
+        <div class="zb-list-item-top">
+          <span class="zb-list-item-name">{{inv.customer}}</span>
+          <span class="zb-list-item-amount">{{fmt(inv.grand_total)}}</span>
+        </div>
+        <div class="zb-list-item-mid">
+          <span class="zb-list-item-num">{{inv.name}}</span>
+          <span class="zb-list-item-dot">•</span>
+          <span class="zb-list-item-date">{{fmtDate(inv.posting_date)}}</span>
+          <span class="zb-list-item-dot" v-if="inv.invoice_number">•</span>
+          <span class="zb-list-item-date" v-if="inv.invoice_number">{{inv.invoice_number}}</span>
+        </div>
+        <div class="zb-list-item-bot">
+          <span class="zb-list-status-tag" :class="pillBadge(inv.status)">{{inv.status||'Draft'}}</span>
+          <span v-if="flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()"
+            style="font-size:10px;color:#e03131;font-weight:600">OVERDUE</span>
+        </div>
+      </div>
     </div>
   </div>
-  <div class="b-card" style="padding:0;overflow:hidden">
-    <table class="b-table">
-      <thead><tr><th>Invoice #</th><th>Customer</th><th>Date</th><th>Due Date</th><th class="ta-r">Amount</th><th class="ta-r">Outstanding</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-        <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
-        <template v-else>
-          <tr v-for="inv in filtered" :key="inv.name" class="clickable">
-            <td @click="$router.push('/invoices/'+inv.name)"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600" @click="$router.push('/invoices/'+inv.name)">{{inv.customer}}</td>
-            <td class="c-muted" style="font-size:12.5px" @click="$router.push('/invoices/'+inv.name)">{{fmtDate(inv.posting_date)}}</td>
-            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="$router.push('/invoices/'+inv.name)">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" @click="$router.push('/invoices/'+inv.name)">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="$router.push('/invoices/'+inv.name)">{{fmt(inv.outstanding_amount)}}</td>
-            <td @click="$router.push('/invoices/'+inv.name)"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="openDoc('Sales Invoice',inv.name)" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
-          </tr>
-          <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No invoices found</td></tr>
+
+  <!-- ══ RIGHT: DETAIL AREA ══ -->
+  <div class="zb-detail-area" v-if="selectedName">
+
+    <!-- Action bar -->
+    <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:14px;font-weight:700;color:#1a1d23">{{inv.name}}</span>
+        <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
+      </div>
+      <div style="display:flex;gap:6px">
+        <template v-if="editing">
+          <button class="zb-ab-btn" @click="editing=false">Cancel</button>
+          <button class="zb-ab-btn zb-ab-primary" @click="saveEdit" :disabled="saving">
+            <span v-if="saving" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
+            {{saving?'Saving…':'Save'}}
+          </button>
         </template>
-      </tbody>
-    </table>
+        <template v-else>
+          <button class="zb-ab-btn" @click="startEdit">
+            <span v-html="icon('edit',12)"></span> Edit
+          </button>
+          <button class="zb-ab-btn" @click="printPdf">
+            <span v-html="icon('print',12)"></span> PDF/Print
+          </button>
+          <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
+            <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
+            {{submitting?'Submitting…':'Submit'}}
+          </button>
+          <button class="zb-ab-btn" @click="openDoc('Sales Invoice',inv.name)" title="Open in Frappe">
+            <span v-html="icon('ext',12)"></span>
+          </button>
+        </template>
+      </div>
+    </div>
+
+    <!-- What's next banner -->
+    <div class="zb-banner no-print" v-if="inv&&isDraft&&!editing">
+      <span style="color:#f59e0b;font-size:15px">✦</span>
+      <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Submit this invoice to lock it, then record a payment when collected.</span>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:4px 12px" @click="submitInvoice">Submit Invoice</button>
+    </div>
+
+    <!-- Loading shimmer -->
+    <div v-if="detailLoading" style="flex:1;display:flex;align-items:center;justify-content:center">
+      <div style="text-align:center">
+        <div class="b-shimmer" style="width:200px;height:14px;border-radius:4px;margin:0 auto 10px"></div>
+        <div class="b-shimmer" style="width:130px;height:11px;border-radius:4px;margin:0 auto"></div>
+      </div>
+    </div>
+
+    <div v-else-if="inv" style="display:flex;flex:1;overflow:hidden">
+
+      <!-- PDF or Edit form -->
+      <div class="zb-pdf-wrap" v-if="!editing">
+        <div class="zb-pdf-paper">
+          <!-- Draft ribbon -->
+          <div class="zb-draft-ribbon" v-if="isDraft">Draft</div>
+          <!-- Header -->
+          <div class="zb-pdf-head">
+            <div>
+              <div class="zb-pdf-co-name">{{inv.company||'Your Company'}}</div>
+            </div>
+            <div class="zb-pdf-inv-title">TAX INVOICE</div>
+          </div>
+          <!-- Info grid -->
+          <table class="zb-pdf-info-table">
+            <thead><tr><th>#</th><th>Invoice Date</th><th>Terms</th><th>Due Date</th><th>P.O.#</th></tr></thead>
+            <tbody><tr>
+              <td>{{inv.name}}</td>
+              <td>{{fmtDate(inv.posting_date)}}</td>
+              <td>{{inv.payment_terms||'Due on Receipt'}}</td>
+              <td :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</td>
+              <td>{{inv.invoice_number||'—'}}</td>
+            </tr></tbody>
+          </table>
+          <!-- Bill to -->
+          <div class="zb-pdf-bill-section">
+            <div class="zb-pdf-bill-label">Bill To</div>
+            <div class="zb-pdf-bill-name">{{inv.customer_name||inv.customer}}</div>
+          </div>
+          <!-- Items -->
+          <table class="zb-pdf-items">
+            <thead>
+              <tr>
+                <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
+                <th class="zb-pdf-th">Item &amp; Description</th>
+                <th class="zb-pdf-th" style="text-align:right">Qty</th>
+                <th class="zb-pdf-th" style="text-align:right">Rate</th>
+                <th class="zb-pdf-th" style="text-align:right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(item,i) in (inv.items||[])" :key="i" class="zb-pdf-item-row">
+                <td class="zb-pdf-td" style="text-align:center;color:#aaa;font-size:12px">{{i+1}}</td>
+                <td class="zb-pdf-td">
+                  <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
+                  <div v-if="item.description" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
+                </td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace">
+                  {{flt(item.qty).toFixed(2)}}
+                  <div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div>
+                </td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
+              </tr>
+            </tbody>
+          </table>
+          <!-- Bottom -->
+          <div class="zb-pdf-bottom">
+            <div class="zb-pdf-words-block">
+              <div class="zb-pdf-words-lbl">TOTAL IN WORDS</div>
+              <div class="zb-pdf-words-val"><i>{{toAmountWords(flt(inv.grand_total))}}</i></div>
+              <div v-if="inv.notes" style="margin-top:10px">
+                <div class="zb-pdf-words-lbl">Notes</div>
+                <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{inv.notes}}</div>
+              </div>
+            </div>
+            <div class="zb-pdf-totals-block">
+              <div class="zb-pdf-total-row"><span>Sub Total</span><span>{{fmt(inv.net_total)}}</span></div>
+              <div class="zb-pdf-total-row" v-for="tax in (inv.taxes||[])" :key="tax.tax_type">
+                <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
+              </div>
+              <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Total</span><span>{{fmt(inv.grand_total)}}</span></div>
+              <div v-if="flt(inv.outstanding_amount)>0" class="zb-pdf-total-row zb-pdf-balance">
+                <span>Balance Due</span><span>{{fmt(inv.outstanding_amount)}}</span>
+              </div>
+              <div v-else class="zb-pdf-total-row" style="color:#2f9e44;font-weight:700;font-size:12px">
+                <span>✓ Paid in Full</span><span>{{fmt(inv.grand_total)}}</span>
+              </div>
+            </div>
+          </div>
+          <!-- Signature -->
+          <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+          <div class="zb-pdf-footer">PDF Template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></div>
+        </div>
+      </div>
+
+      <!-- Edit form -->
+      <div v-else class="zb-edit-wrap no-print">
+        <div class="zb-edit-form">
+          <div class="zb-form-section-title">Invoice Details</div>
+          <div class="zb-form-grid3">
+            <div class="zb-form-field">
+              <label class="zb-form-label">Customer *</label>
+              <select v-model="form.customer" class="zb-form-input">
+                <option value="">— Select —</option>
+                <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
+              </select>
+            </div>
+            <div class="zb-form-field">
+              <label class="zb-form-label">Invoice Date</label>
+              <input type="date" v-model="form.posting_date" class="zb-form-input"/>
+            </div>
+            <div class="zb-form-field">
+              <label class="zb-form-label">Due Date</label>
+              <input type="date" v-model="form.due_date" class="zb-form-input"/>
+            </div>
+            <div class="zb-form-field">
+              <label class="zb-form-label">AR Account</label>
+              <select v-model="form.debit_to" class="zb-form-input">
+                <option value="">— Select —</option>
+                <option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option>
+              </select>
+            </div>
+            <div class="zb-form-field">
+              <label class="zb-form-label">Income Account</label>
+              <select v-model="form.income_account" class="zb-form-input">
+                <option value="">— Select —</option>
+                <option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option>
+              </select>
+            </div>
+            <div class="zb-form-field">
+              <label class="zb-form-label">Currency</label>
+              <input v-model="form.currency" class="zb-form-input"/>
+            </div>
+          </div>
+          <div class="zb-form-section-title" style="margin-top:18px">Items</div>
+          <table class="zb-items-table">
+            <thead><tr><th>#</th><th>Item Name</th><th>Description</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(item,i) in form.items" :key="i">
+                <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
+                <td><input v-model="item.item_name" class="zb-cell-input" placeholder="Item name" @input="recalc"/></td>
+                <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
+                <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+                <td><input v-model.number="item.rate" type="number" min="0" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+                <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:6px;font-size:13px">{{fmt(item.amount)}}</td>
+                <td><button @click="removeItem(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:3px" v-html="icon('trash',12)"></button></td>
+              </tr>
+            </tbody>
+          </table>
+          <button class="zb-add-row" @click="addItem">+ Add Row</button>
+          <div class="zb-form-section-title" style="margin-top:16px">Taxes</div>
+          <table class="zb-items-table" v-if="form.taxes.length">
+            <thead><tr><th>Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(tax,i) in form.taxes" :key="i">
+                <td><input v-model="tax.tax_type" class="zb-cell-input" placeholder="SGST"/></td>
+                <td><input v-model="tax.description" class="zb-cell-input" placeholder="SGST 9%"/></td>
+                <td><input v-model.number="tax.rate" type="number" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+                <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:6px;font-size:13px">{{fmt(tax.tax_amount)}}</td>
+                <td><button @click="removeTax(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:3px" v-html="icon('trash',12)"></button></td>
+              </tr>
+            </tbody>
+          </table>
+          <button class="zb-add-row" @click="addTax">+ Add Tax</button>
+          <div class="zb-edit-totals">
+            <div class="zb-edit-total-row"><span>Net Total</span><span class="mono">{{fmt(netTotal)}}</span></div>
+            <div class="zb-edit-total-row"><span>Tax</span><span class="mono">{{fmt(totalTax)}}</span></div>
+            <div class="zb-edit-total-row zb-edit-grand"><span>Grand Total</span><span class="mono">{{fmt(grandTotal)}}</span></div>
+          </div>
+          <div class="zb-form-field" style="margin-top:14px">
+            <label class="zb-form-label">Notes</label>
+            <textarea v-model="form.notes" class="zb-form-input" rows="3" placeholder="Payment terms, remarks…" style="resize:vertical"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right panel -->
+      <div class="zb-right-panel no-print">
+        <div class="zb-panel-card">
+          <div class="zb-panel-title">Payment Status</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
+            <span style="font-size:11px;color:var(--text-3)">{{paidPct}}% paid</span>
+          </div>
+          <div style="height:6px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:12px">
+            <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'var(--green-text)':'var(--accent)',borderRadius:'4px',transition:'width .5s'}"></div>
+          </div>
+          <div class="zb-panel-row"><span>Grand Total</span><span class="mono fw-700">{{fmt(inv.grand_total)}}</span></div>
+          <div class="zb-panel-row"><span>Paid</span><span class="mono" style="color:var(--green-text);font-weight:600">{{fmt(paidAmt)}}</span></div>
+          <div class="zb-panel-row" style="font-weight:700">
+            <span>Outstanding</span>
+            <span class="mono" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</span>
+          </div>
+        </div>
+        <div class="zb-panel-card">
+          <div class="zb-panel-title">Invoice Info</div>
+          <div class="zb-panel-row"><span>Invoice #</span><span class="mono" style="color:var(--accent);font-weight:700;font-size:11px">{{inv.name}}</span></div>
+          <div class="zb-panel-row"><span>Date</span><span>{{fmtDate(inv.posting_date)}}</span></div>
+          <div class="zb-panel-row"><span>Due</span><span :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'var(--red-text)':'inherit'}">{{fmtDate(inv.due_date)}}</span></div>
+          <div class="zb-panel-row" v-if="inv.currency"><span>Currency</span><span>{{inv.currency}}</span></div>
+          <div class="zb-panel-row" v-if="inv.payment_terms"><span>Terms</span><span>{{inv.payment_terms}}</span></div>
+        </div>
+        <div class="zb-panel-card">
+          <div class="zb-panel-title">Customer</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+            <div style="width:34px;height:34px;border-radius:8px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:var(--accent)">
+              {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:13px">{{inv.customer_name||inv.customer}}</div>
+              <div style="font-size:11px;color:var(--text-3)">{{inv.customer}}</div>
+            </div>
+          </div>
+          <div class="zb-panel-row" v-if="inv.debit_to"><span>AR Account</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.debit_to">{{inv.debit_to}}</span></div>
+          <div class="zb-panel-row" v-if="inv.income_account"><span>Income Acct</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.income_account">{{inv.income_account}}</span></div>
+        </div>
+      </div>
+
+    </div><!-- /flex row -->
+  </div><!-- /detail area -->
+
+  <!-- Empty state when no invoice selected -->
+  <div v-else class="zb-detail-area" style="align-items:center;justify-content:center;display:flex">
+    <div style="text-align:center;color:var(--text-3)">
+      <div v-html="icon('file',48)" style="opacity:.2;margin-bottom:12px"></div>
+      <div style="font-size:14px">Select an invoice to view</div>
+    </div>
   </div>
-</div>`});
+
+  <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
+</div>
+`});
 
 const Purchases=defineComponent({name:"Purchases",
   components:{PurchaseModal},
@@ -2007,123 +2104,7 @@ const modalCSS=`
 .mi-cell-input{border:none;outline:none;background:transparent;font-family:inherit;font-size:13.5px;
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
-.b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
-/* ═══ Zoho Books Detail Layout ═══ */
-.zb-detail-shell{display:flex;flex-direction:column;height:calc(100vh - var(--topbar-h));overflow:hidden;background:#f4f5f7}
-.zb-actionbar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:#fff;border-bottom:1px solid #e0e2e7;flex-shrink:0;gap:12px}
-.zb-actionbar .zb-ab-title{font-size:14px;font-weight:700;color:#1a1d23}
-.zb-ab-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #d0d3d9;background:#fff;color:#444;transition:.12s;font-family:inherit}
-.zb-ab-btn:hover{background:#f5f6f8}
-.zb-ab-outline{border-color:#c0c4cc}
-.zb-ab-primary{background:#2563EB!important;color:#fff!important;border-color:#2563EB!important}
-.zb-ab-primary:hover{background:#1d4ed8!important}
-.zb-banner{display:flex;align-items:center;gap:10px;padding:10px 20px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:13px;color:#92400e;flex-shrink:0}
-.zb-banner-icon{font-size:16px;color:#f59e0b}
-.zb-banner-txt{flex:1}
-.zb-body{display:flex;flex:1;overflow:hidden}
-/* PDF wrap */
-.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px 32px;display:flex;justify-content:center;align-items:flex-start}
-.zb-pdf-paper{position:relative;width:100%;max-width:680px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:40px 44px;font-family:inherit;overflow:hidden}
-/* Draft ribbon */
-.zb-draft-ribbon{position:absolute;top:28px;left:-28px;width:120px;background:#6b7280;color:#fff;font-size:11px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10;box-shadow:0 2px 6px rgba(0,0,0,.2)}
-/* PDF Header */
-.zb-pdf-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #e0e0e0}
-.zb-pdf-co-name{font-size:18px;font-weight:800;color:#1a1d23;margin-bottom:3px}
-.zb-pdf-co-meta{font-size:11px;color:#666;line-height:1.6}
-.zb-pdf-inv-title{font-size:24px;font-weight:900;color:#1a1d23;letter-spacing:1px;text-align:right}
-/* Info table */
-.zb-pdf-info-table{width:100%;border-collapse:collapse;margin-bottom:0}
-.zb-pdf-info-table th{background:#f5f6f8;font-size:11px;font-weight:700;color:#555;padding:7px 10px;border:1px solid #e0e0e0;text-align:left}
-.zb-pdf-info-table td{font-size:12px;color:#1a1d23;padding:7px 10px;border:1px solid #e0e0e0}
-/* Bill to */
-.zb-pdf-bill-section{padding:12px 0;border-bottom:1px solid #e0e0e0;margin-bottom:0}
-.zb-pdf-bill-label{font-size:11px;font-weight:700;color:#666;margin-bottom:4px}
-.zb-pdf-bill-name{font-size:14px;font-weight:600;color:#2563EB}
-/* Items */
-.zb-pdf-items{width:100%;border-collapse:collapse;margin-bottom:0}
-.zb-pdf-th{font-size:11px;font-weight:700;color:#555;padding:8px 8px;background:#f5f6f8;border:1px solid #e0e0e0;text-align:left}
-.zb-pdf-td{padding:9px 8px;border:1px solid #e0e0e0;font-size:13px;vertical-align:top}
-.zb-pdf-item-row:nth-child(even) .zb-pdf-td{background:#fafafa}
-/* Bottom */
-.zb-pdf-bottom{display:flex;border-top:1px solid #e0e0e0}
-.zb-pdf-words-block{flex:1;padding:14px 12px;border-right:1px solid #e0e0e0;font-size:12px}
-.zb-pdf-words-lbl{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#aaa;margin-bottom:4px}
-.zb-pdf-words-val{font-size:12px;color:#333;line-height:1.5}
-.zb-pdf-totals-block{width:260px;padding:10px 14px;display:flex;flex-direction:column;gap:0}
-.zb-pdf-total-row{display:flex;justify-content:space-between;font-size:12px;color:#444;padding:5px 0;border-bottom:1px solid #f0f0f0}
-.zb-pdf-total-row:last-child{border-bottom:none}
-.zb-pdf-total-bold{font-weight:700;font-size:14px;color:#1a1d23;padding:8px 0}
-.zb-pdf-balance{font-weight:800;font-size:14px;color:#1a1d23;border-top:2px solid #1a1d23!important;padding-top:8px}
-/* Signature */
-.zb-pdf-sig-row{display:flex;justify-content:flex-end;padding:16px 0 8px}
-.zb-pdf-sig-box{width:200px;text-align:center;border-top:1px solid #999;padding-top:6px;font-size:11px;color:#666}
-/* PDF footer */
-.zb-pdf-footer{text-align:right;font-size:11px;color:#aaa;border-top:1px solid #eee;padding-top:10px;margin-top:4px}
-/* Right panel */
-.zb-right-panel{width:270px;flex-shrink:0;border-left:1px solid #e0e2e7;background:#fff;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
-.zb-panel-card{border:1px solid #e8eaed;border-radius:8px;padding:14px}
-.zb-panel-title{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px}
-.zb-panel-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;color:var(--text-2);border-bottom:1px solid var(--border)}
-.zb-panel-row:last-child{border-bottom:none}
-/* Edit form */
-.zb-edit-wrap{flex:1;overflow-y:auto;padding:24px 32px;background:#f4f5f7}
-.zb-edit-form{max-width:820px;background:#fff;border-radius:8px;padding:28px 32px;box-shadow:0 1px 8px rgba(0,0,0,.06)}
-.zb-form-section-title{font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#888;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #f0f0f0}
-.zb-form-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
-.zb-form-field{display:flex;flex-direction:column;gap:5px}
-.zb-form-label{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.04em}
-.zb-form-input{padding:8px 10px;border:1px solid #d0d3d9;border-radius:5px;font-size:13px;font-family:inherit;color:#1a1d23;background:#fff;transition:.12s;width:100%}
-.zb-form-input:focus{outline:none;border-color:#2563EB;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
-.zb-items-table{width:100%;border-collapse:collapse;margin-bottom:8px}
-.zb-items-table th{font-size:11px;font-weight:700;color:#888;padding:6px 8px;border-bottom:2px solid #f0f0f0;text-align:left;background:#fafafa}
-.zb-items-table td{padding:5px 4px;border-bottom:1px solid #f5f5f5;vertical-align:middle}
-.zb-cell-input{width:100%;border:1px solid transparent;border-radius:4px;padding:5px 6px;font-size:13px;font-family:inherit;background:#fafafa;transition:.1s}
-.zb-cell-input:focus{outline:none;border-color:#2563EB;background:#fff;box-shadow:0 0 0 2px rgba(37,99,235,.1)}
-.zb-cell-num{text-align:right;width:80px}
-.zb-add-row{background:none;border:none;color:#2563EB;font-size:12px;font-weight:600;cursor:pointer;padding:6px 4px;font-family:inherit}
-.zb-add-row:hover{text-decoration:underline}
-.zb-edit-totals{display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid #f0f0f0}
-.zb-edit-total-row{display:flex;gap:60px;justify-content:flex-end;font-size:13px;color:#555}
-.zb-edit-grand{font-size:16px;font-weight:800;color:#1a1d23;padding-top:6px;border-top:2px solid #1a1d23;width:100%;max-width:300px;justify-content:space-between}
-/* Print */
-@media print{
-  .no-print{display:none!important}
-  .zb-detail-shell{height:auto!important;overflow:visible!important}
-  .zb-body{display:block!important;overflow:visible!important}
-  .zb-pdf-wrap{background:#fff!important;padding:0!important;overflow:visible!important}
-  .zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}
-}
-`;
-
-if(!document.getElementById("books-modal-css")){
-  const s=document.createElement("style");s.id="books-modal-css";s.textContent=modalCSS;
-  document.head.appendChild(s);
-}
-
-/* ── Boot ── */
-const router=createRouter({
-  history:createWebHashHistory(),
-  routes:[
-    {path:"/",        component:Dashboard,name:"dashboard"},
-    {path:"/invoices",component:Invoices, name:"invoices"},
-    {path:"/invoices/:name",component:InvoiceDetail,name:"invoice-detail"},
-    {path:"/purchases",component:Purchases,name:"purchases"},
-    {path:"/payments",component:Payments, name:"payments"},
-    {path:"/banking", component:Banking,  name:"banking"},
-    {path:"/accounts",component:Accounts, name:"accounts"},
-    {path:"/reports", component:Reports,  name:"reports"},
-  ]
-});
-
-function getCsrfFromCookie(){
-  const m=document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
-  return m?decodeURIComponent(m.split("=").slice(1).join("=")):"";
-}
-
-async function bootstrapCsrf(){
-  if(!window.frappe)window.frappe={session:{},boot:{sysdefaults:{company:""}}};
-
-  // Step 1: Try GET /api/method/zoho_books_clone.api.session.get_books_session
+.b-quick-actions{display:flex;gap:10px;margin-bottom:16px}  // Step 1: Try GET /api/method/zoho_books_clone.api.session.get_books_session
   // This is a GET so no CSRF needed — and it returns the token for future POSTs
   try{
     const r=await fetch("/api/method/zoho_books_clone.api.session.get_books_session",{
