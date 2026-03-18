@@ -183,20 +183,17 @@ def get_open_invoices(party_type, party, company=None):
 
 
 @frappe.whitelist()
-def get_items(search=None, company=None):
-    """Return items for the invoice item dropdown."""
-    filters = {"disabled": 0}
-    conditions = []
+def get_items(search=None):
+    """Items for the invoice dropdown — searches item_code and item_name."""
+    where = "WHERE disabled=0"
     values = {}
     if search:
-        conditions.append("(item_code LIKE %(search)s OR item_name LIKE %(search)s)")
-        values["search"] = f"%{search}%"
-    where = "WHERE disabled=0"
-    if conditions:
-        where += " AND " + " AND ".join(conditions)
+        where += " AND (item_code LIKE %(s)s OR item_name LIKE %(s)s)"
+        values["s"] = f"%{search}%"
     return frappe.db.sql(f"""
-        SELECT name, item_code, item_name, standard_rate, description,
-               stock_uom, income_account, expense_account, hsn_code
+        SELECT name, item_code, item_name,
+               standard_rate, description, stock_uom,
+               income_account, expense_account, hsn_code
         FROM `tabItem`
         {where}
         ORDER BY item_name ASC

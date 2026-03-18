@@ -18,6 +18,9 @@ window.flt=function(v){return parseFloat(v)||0;};
 function newDocUrl(doctype){
   return "/app/"+doctype.toLowerCase().replace(/ /g,"-")+"/new";
 }
+function openDoc(url){
+  if(url)openDoc(url);
+}
 function docUrl(doctype,name){
   return "/app/"+doctype.toLowerCase().replace(/ /g,"-")+"/"+encodeURIComponent(name);
 }
@@ -122,7 +125,6 @@ async function apiSave(doc){
 }
 
 async function apiSubmit(doctype,name,modified){
-  // Include modified timestamp so Frappe does not throw TimestampMismatchError
   const doc={doctype,name};
   if(modified)doc.modified=modified;
   return await apiPOST("frappe.client.submit",{doc});
@@ -213,15 +215,11 @@ function statusBadge(s){
    Saves to Frappe via API then redirects to the saved doc.
 ═══════════════════════════════════════════════════════════════ */
 
-/* ═══════════════════════════════════════════════════════════════
-   SmartSelect — searchable dropdown with "Add new" support
-   Props:
-     modelValue    — the selected value (name/id)
-     options       — [{value, label, sub?}] array
-     placeholder   — input placeholder
-     addNewLabel   — text for the "Add new" footer (e.g. "+ Add new customer")
-     addNewUrl     — URL to open when "Add new" is clicked
-   ═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════
+   SmartSelect — searchable combobox with "+ Add new" footer
+   Props: modelValue, options:[{value,label,sub?}],
+          placeholder, addNewLabel, addNewUrl
+═══════════════════════════════════════════════════════════ */
 const SmartSelect=defineComponent({name:"SmartSelect",
   props:{
     modelValue:{type:String,default:""},
@@ -233,168 +231,129 @@ const SmartSelect=defineComponent({name:"SmartSelect",
   },
   emits:["update:modelValue","change"],
   setup(props,{emit}){
-    const{ref,computed,watch,onMounted,onBeforeUnmount}=Vue;
+    const {ref,computed,watch}=Vue;
     const query=ref("");
     const open=ref(false);
-    const highlighted=ref(-1);
-    const inputRef=ref(null);
-    const dropRef=ref(null);
+    const hi=ref(-1);
+    const wrapRef=ref(null);
 
-    // Display value in input — show label of selected item
-    const displayValue=computed(()=>{
-      if(!props.modelValue)return query.value;
-      const found=props.options.find(o=>o.value===props.modelValue);
-      return found?found.label:props.modelValue;
+    const label=computed(()=>{
+      if(!props.modelValue)return"";
+      const f=props.options.find(o=>o.value===props.modelValue);
+      return f?f.label:props.modelValue;
     });
 
     const filtered=computed(()=>{
-      const q=(query.value||"").toLowerCase().trim();
-      if(!q)return props.options.slice(0,60);
-      return props.options.filter(o=>
+      const q=(query.value||"").toLowerCase();
+      const pool=props.options;
+      if(!q)return pool.slice(0,80);
+      return pool.filter(o=>
         (o.label||"").toLowerCase().includes(q)||
         (o.sub||"").toLowerCase().includes(q)||
         (o.value||"").toLowerCase().includes(q)
-      ).slice(0,60);
+      ).slice(0,80);
     });
 
     function onInput(e){
       query.value=e.target.value;
       open.value=true;
-      highlighted.value=-1;
-      // Clear selection if user types something new
-      if(props.modelValue&&e.target.value!==displayValue.value){
+      hi.value=-1;
+      if(props.modelValue){
         emit("update:modelValue","");
         emit("change","",null);
       }
     }
-
-    function select(opt){
+    function onFocus(){query.value="";open.value=true;hi.value=-1;}
+    function onBlur(){
+      setTimeout(()=>{
+        open.value=false;
+        query.value=label.value;
+      },200);
+    }
+    function pick(opt){
       emit("update:modelValue",opt.value);
       emit("change",opt.value,opt);
       query.value=opt.label;
       open.value=false;
     }
-
-    function onFocus(){
-      query.value="";
-      open.value=true;
-      highlighted.value=-1;
-    }
-
-    function onBlur(){
-      // Delay to allow click on dropdown items
-      setTimeout(()=>{
-        open.value=false;
-        // Restore display value if nothing selected
-        if(!props.modelValue)query.value="";
-        else{
-          const found=props.options.find(o=>o.value===props.modelValue);
-          query.value=found?found.label:props.modelValue;
-        }
-      },180);
-    }
-
-    function onKeydown(e){
-      if(!open.value&&(e.key==="ArrowDown"||e.key==="Enter")){open.value=true;return;}
-      if(e.key==="Escape"){open.value=false;return;}
-      if(e.key==="ArrowDown"){
-        e.preventDefault();
-        highlighted.value=Math.min(highlighted.value+1,filtered.value.length-1);
-        scrollIntoView();
-      } else if(e.key==="ArrowUp"){
-        e.preventDefault();
-        highlighted.value=Math.max(highlighted.value-1,0);
-        scrollIntoView();
-      } else if(e.key==="Enter"&&highlighted.value>=0){
-        e.preventDefault();
-        select(filtered.value[highlighted.value]);
-      }
-    }
-
-    function scrollIntoView(){
-      const drop=dropRef.value;
-      if(!drop)return;
-      const item=drop.querySelectorAll(".ss-opt")[highlighted.value];
-      if(item)item.scrollIntoView({block:"nearest"});
-    }
-
     function addNew(){
-      if(props.addNewUrl)window.open(props.addNewUrl,"_blank");
+      if(props.addNewUrl){openDoc(props.addNewUrl);}
       open.value=false;
     }
-
-    // Sync input when modelValue changes externally
+    function onKey(e){
+      if(!open.value){if(e.key==="ArrowDown"){open.value=true;}return;}
+      if(e.key==="Escape"){open.value=false;return;}
+      if(e.key==="ArrowDown"){e.preventDefault();hi.value=Math.min(hi.value+1,filtered.value.length-1);}
+      else if(e.key==="ArrowUp"){e.preventDefault();hi.value=Math.max(hi.value-1,0);}
+      else if(e.key==="Enter"&&hi.value>=0){e.preventDefault();pick(filtered.value[hi.value]);}
+    }
     watch(()=>props.modelValue,v=>{
-      if(v){
-        const found=props.options.find(o=>o.value===v);
-        query.value=found?found.label:v;
-      } else {
-        query.value="";
+      query.value=v?(props.options.find(o=>o.value===v)?.label||v):"";
+    });
+    watch(()=>props.options,()=>{
+      if(props.modelValue&&!query.value){
+        query.value=props.options.find(o=>o.value===props.modelValue)?.label||props.modelValue;
       }
     });
-
-    return{query,open,highlighted,filtered,displayValue,inputRef,dropRef,
-           onInput,onFocus,onBlur,onKeydown,select,addNew};
+    return{query,open,hi,filtered,label,wrapRef,onInput,onFocus,onBlur,onKey,pick,addNew};
   },
   template:`
-<div style="position:relative;width:100%">
+<div ref="wrapRef" style="position:relative;width:100%">
   <input
-    ref="inputRef"
-    :value="query||displayValue"
+    :value="query||label"
     :placeholder="placeholder"
     :disabled="disabled"
     class="mi-input"
     autocomplete="off"
+    spellcheck="false"
+    style="padding-right:26px"
     @input="onInput"
     @focus="onFocus"
     @blur="onBlur"
-    @keydown="onKeydown"
-    style="padding-right:28px"
+    @keydown="onKey"
   />
   <span style="position:absolute;right:9px;top:50%;transform:translateY(-50%);
-    pointer-events:none;color:#868E96;font-size:11px">▾</span>
+    pointer-events:none;color:#ADB5BD;font-size:10px;line-height:1">▾</span>
 
+  <transition name="ss-fade">
   <div v-if="open&&(filtered.length||addNewLabel)"
-    ref="dropRef"
-    style="position:absolute;top:calc(100% + 3px);left:0;right:0;z-index:99999;
-      background:#fff;border:1px solid #CDD5E0;border-radius:8px;
-      max-height:220px;overflow-y:auto;
-      box-shadow:0 8px 24px rgba(0,0,0,.13)">
-
-    <div v-if="!filtered.length&&!addNewLabel"
-      style="padding:12px 14px;font-size:12.5px;color:#868E96;text-align:center">
-      No results found
-    </div>
+    style="position:absolute;top:calc(100% + 2px);left:0;right:0;z-index:99999;
+      background:#fff;border:1px solid #CDD5E0;border-radius:8px;overflow:hidden;
+      max-height:240px;overflow-y:auto;
+      box-shadow:0 8px 28px rgba(0,0,0,.14);font-size:13.5px">
 
     <div
       v-for="(opt,i) in filtered" :key="opt.value"
-      class="ss-opt"
-      @mousedown.prevent="select(opt)"
+      @mousedown.prevent="pick(opt)"
       :style="{
-        padding:'9px 14px',cursor:'pointer',
-        background:i===highlighted?'#EEF2FF':'transparent',
+        padding:'9px 13px',
+        cursor:'pointer',
+        background:i===hi?'#EEF2FF':'#fff',
         borderBottom:'1px solid #F1F3F5',
       }"
     >
-      <div style="font-size:13.5px;font-weight:500;color:#1A1D23;
-                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-        {{opt.label}}
-      </div>
-      <div v-if="opt.sub" style="font-size:11.5px;color:#868E96;margin-top:1px;
-                  overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-        {{opt.sub}}
-      </div>
+      <div style="font-weight:500;color:#1A1D23;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{opt.label}}</div>
+      <div v-if="opt.sub"
+        style="font-size:11.5px;color:#868E96;margin-top:1px;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{opt.sub}}</div>
+    </div>
+
+    <div v-if="!filtered.length"
+      style="padding:14px;text-align:center;color:#ADB5BD;font-size:13px">
+      No results
     </div>
 
     <div v-if="addNewLabel"
       @mousedown.prevent="addNew"
-      style="padding:10px 14px;cursor:pointer;font-size:12.5px;font-weight:600;
+      style="padding:10px 13px;cursor:pointer;font-size:13px;font-weight:600;
         color:#3B5BDB;border-top:1px solid #E8ECF0;display:flex;align-items:center;
-        gap:6px;position:sticky;bottom:0;background:#F8F9FF">
-      <span style="font-size:16px;line-height:1">+</span>
+        gap:6px;background:#F8F9FF;position:sticky;bottom:0">
+      <span style="font-size:17px;line-height:1;font-weight:400">+</span>
       {{addNewLabel}}
     </div>
   </div>
+  </transition>
 </div>`
 });
 
@@ -409,7 +368,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     const accounts_ar=ref([]);
     const accounts_income=ref([]);
     const taxTemplates=ref([]);
-    const itemsList=ref([]);  // items from DB
+    const itemsList=ref([]);
 
     const form=reactive({
       naming_series:"INV-.YYYY.-.#####",
@@ -417,7 +376,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       posting_date:today(),due_date:today(),
       company:co(),currency:"INR",
       debit_to:"",income_account:"",
-      items:[{item_code:"",item_name:"",description:"",qty:1,rate:0,amount:0,uom:"Nos"}],
+      items:[{item_code:"",item_name:"",description:"",qty:1,rate:0,amount:0}],
       taxes:[],
       notes:"",
       net_total:0,total_tax:0,grand_total:0,
@@ -436,7 +395,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       form.grand_total=Math.round((net+tax)*100)/100;
     }
 
-    function addItem(){form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0});}
+    function addItem(){form.items.push({item_code:"",item_name:"",description:"",qty:1,rate:0,amount:0});}
     function removeItem(i){if(form.items.length>1){form.items.splice(i,1);recalc();}}
     function addTax(){form.taxes.push({tax_type:"CGST",description:"CGST",rate:9,tax_amount:0,account_head:""});}
     function removeTax(i){form.taxes.splice(i,1);recalc();}
@@ -475,50 +434,34 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }catch{}
     }
 
-    // Load items from DB
-    async function loadItems(search=""){
+    // ── computed option lists for SmartSelect ──
+    const customerOpts=computed(()=>customers.value.map(c=>({value:c.name,label:c.name})));
+    const arOpts=computed(()=>accounts_ar.value.map(a=>({value:a.name,label:a.name})));
+    const incomeOpts=computed(()=>accounts_income.value.map(a=>({value:a.name,label:a.name})));
+    const itemOpts=computed(()=>itemsList.value.map(i=>({value:i.name,label:i.item_name||i.item_code||i.name,sub:i.item_code&&i.item_code!==i.item_name?i.item_code:"",standard_rate:i.standard_rate,description:i.description,stock_uom:i.stock_uom,item_name:i.item_name})));
+
+    async function loadItems(){
       try{
-        const rows=await api("zoho_books_clone.api.books_data.get_items",{search});
-        itemsList.value=(rows||[]);
+        const rows=await apiGET("zoho_books_clone.api.books_data.get_items",{});
+        itemsList.value=rows||[];
       }catch(e){console.warn("Items load failed:",e.message);}
     }
 
-    // Called when an item is selected in the row dropdown
-    function onItemSelect(rowIdx,itemValue,opt){
-      const item=form.items[rowIdx];
-      item.item_code=itemValue;
+    function onItemSelect(rowIdx,val,opt){
+      const row=form.items[rowIdx];
+      row.item_code=val;
       if(opt){
-        item.item_name=opt.item_name||opt.label||itemValue;
-        item.description=opt.description||opt.item_name||"";
-        item.rate=parseFloat(opt.standard_rate)||0;
-        item.uom=opt.stock_uom||"Nos";
+        row.item_name=opt.item_name||opt.label||val;
+        row.description=opt.description||"";
+        row.rate=parseFloat(opt.standard_rate)||0;
       }
       recalc();
     }
 
-    // Computed option lists for SmartSelect
-    const customerOpts=computed(()=>
-      customers.value.map(c=>({value:c.name,label:c.name,sub:c.customer_name&&c.customer_name!==c.name?c.customer_name:""}))
-    );
-    const arOpts=computed(()=>accounts_ar.value.map(a=>({value:a.name,label:a.name})));
-    const incomeOpts=computed(()=>accounts_income.value.map(a=>({value:a.name,label:a.name})));
-    const itemOpts=computed(()=>
-      itemsList.value.map(i=>({
-        value:i.name,
-        label:i.item_name||i.item_code||i.name,
-        sub:i.item_code&&i.item_code!==i.item_name?i.item_code:"",
-        standard_rate:i.standard_rate,
-        description:i.description,
-        stock_uom:i.stock_uom,
-        income_account:i.income_account,
-        item_name:i.item_name,
-      }))
-    );
-
     onMounted(()=>{loadDefaults();loadItems();});
     watch(()=>props.show,v=>{if(v){loadDefaults();loadItems();}});
 
-    async function applyTaxTemplate(tplName){}
+    async function applyTaxTemplate(tplName){}  // Tax templates not available
 
     async function save(andSubmit){
       if(!form.customer){toast("Please select a Customer","error");return;}
@@ -561,7 +504,6 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       try{
         const saved=await apiSave(doc);
         if(andSubmit){
-          // Fetch fresh doc to get latest modified timestamp before submit
           const fresh=await apiGet(props.doctype,saved.name);
           await apiSubmit(props.doctype,saved.name,fresh?.modified||saved.modified);
           toast("Invoice "+saved.name+" submitted!");
@@ -581,8 +523,9 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       if(!form.due_date||form.due_date<form.posting_date)
         form.due_date=form.posting_date;
     }
-    return{form,saving,customers,accounts_ar,accounts_income,taxTemplates,isSI,
-           recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast,onPostingDateChange};
+    return{form,saving,customers,accounts_ar,accounts_income,taxTemplates,
+           itemsList,itemOpts,customerOpts,arOpts,incomeOpts,onItemSelect,
+           isSI,recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast,onPostingDateChange};
   },
   template:`
 <teleport to="body">
@@ -613,7 +556,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
           <SmartSelect
             v-model="form.customer"
             :options="customerOpts"
-            placeholder="Search customer..."
+            placeholder="Search or type customer name..."
             add-new-label="+ Add new customer"
             :add-new-url="newDocUrl('Customer')"
             @change="onCustomer"
@@ -672,7 +615,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i"
                 :style="i%2===1?'background:#FAFBFC':''">
-              <td class="mi-td" style="min-width:180px">
+              <td class="mi-td" style="min-width:170px">
                 <SmartSelect
                   :model-value="item.item_code||item.item_name"
                   :options="itemOpts"
@@ -680,7 +623,6 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
                   add-new-label="+ Add new item"
                   :add-new-url="newDocUrl('Item')"
                   @change="(val,opt)=>onItemSelect(i,val,opt)"
-                  style="font-size:13.5px"
                 />
               </td>
               <td class="mi-td">
@@ -841,7 +783,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
   emits:["close","saved"],
   setup(props,{emit}){
     const saving=ref(false);
-    const suppliers=ref([]),accounts_ap=ref([]),accounts_exp=ref([]);
+    const suppliers=ref([]),accounts_ap=ref([]),accounts_exp=ref([]),itemsList_pi=ref([]);
 
     const form=reactive({
       naming_series:"PINV-.YYYY.-.#####",
@@ -883,8 +825,12 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
       try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
     }
 
-    onMounted(loadDefaults);
-    watch(()=>props.show,v=>{if(v)loadDefaults();});
+    const itemOpts_pi=computed(()=>itemsList_pi.value.map(i=>({value:i.name,label:i.item_name||i.item_code||i.name,sub:i.item_code&&i.item_code!==i.item_name?i.item_code:"",standard_rate:i.standard_rate,description:i.description,item_name:i.item_name})));
+    async function loadItemsPI(){try{itemsList_pi.value=(await apiGET("zoho_books_clone.api.books_data.get_items",{}))||[];}catch{}}
+    function onItemSelectPI(idx,val,opt){const row=form.items[idx];row.item_code=val;if(opt){row.item_name=opt.item_name||opt.label||val;row.rate=parseFloat(opt.standard_rate)||0;}recalc();}
+    const supplierOpts=computed(()=>suppliers.value.map(s=>({value:s.name,label:s.supplier_name||s.name,sub:s.name!==s.supplier_name?s.name:""})));
+    onMounted(()=>{loadDefaults();loadItemsPI();});
+    watch(()=>props.show,v=>{if(v){loadDefaults();loadItemsPI();}});
 
     async function onSupplier(){
       if(!form.supplier)return;
@@ -918,15 +864,19 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
       };
       try{
         const saved=await apiSave(doc);
-        if(andSubmit){await apiSubmit("Purchase Invoice",saved.name,(await apiGet("Purchase Invoice",saved.name))?.modified||saved.modified);toast("Bill "+saved.name+" submitted!");}
+        if(andSubmit){
+          const freshP=await apiGet("Purchase Invoice",saved.name);
+          await apiSubmit("Purchase Invoice",saved.name,freshP?.modified||saved.modified);
+          toast("Bill "+saved.name+" submitted!");
+        }
         else{toast("Bill "+saved.name+" saved as Draft");}
         emit("saved",saved.name);emit("close");
-        setTimeout(()=>openDoc(docUrl("Purchase Invoice",saved.name)),300);
+        setTimeout(()=>window.open(docUrl("Purchase Invoice",saved.name),"_blank"),300);
       }catch(e){toast(e.message||"Could not save bill","error");}
       finally{saving.value=false;}
     }
 
-    return{form,saving,suppliers,supplierOpts,accounts_ap,accounts_exp,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
+    return{form,saving,suppliers,supplierOpts,accounts_ap,accounts_exp,itemOpts_pi,onItemSelectPI,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
   },
   template:`
 <teleport to="body">
@@ -950,7 +900,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
           <SmartSelect
             v-model="form.supplier"
             :options="supplierOpts"
-            placeholder="Search supplier..."
+            placeholder="Search or type supplier name..."
             add-new-label="+ Add new supplier"
             :add-new-url="newDocUrl('Supplier')"
             @change="(val)=>{form.supplier=val;onSupplier();}"
@@ -993,7 +943,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
           </tr></thead>
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" :style="i%2===1?'background:#FAFBFC':''">
-              <td class="mi-td"><input v-model="item.item_name" class="mi-cell-input" placeholder="Item name"/></td>
+              <td class="mi-td" style="min-width:160px"><SmartSelect :model-value="item.item_code||item.item_name" :options="itemOpts_pi" placeholder="Search item..." add-new-label="+ Add new item" :add-new-url="newDocUrl('Item')" @change="(val,opt)=>onItemSelectPI(i,val,opt)"/></td>
               <td class="mi-td" style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="mi-cell-input" style="text-align:center;width:60px" @input="recalc"/></td>
               <td class="mi-td" style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="mi-cell-input" style="text-align:right" @input="recalc"/></td>
               <td class="mi-td" style="text-align:right;font-family:monospace;font-size:13px;font-weight:600;padding-right:12px">{{flt(item.amount).toLocaleString("en-IN",{minimumFractionDigits:2})}}</td>
@@ -1092,6 +1042,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
     onMounted(loadDefaults);
 
     const partyList=computed(()=>form.party_type==="Customer"?customers.value:suppliers.value);
+    const partyOpts=computed(()=>partyList.value.map(p=>({value:p.name,label:p.name})));
 
     async function onParty(){
       if(!form.party)return;
@@ -1148,12 +1099,13 @@ const PaymentModal=defineComponent({name:"PaymentModal",
             remarks:form.remarks,
           };
           const saved=await apiSave(doc);
-          await apiSubmit("Payment Entry",saved.name,(await apiGet("Payment Entry",saved.name))?.modified||saved.modified);
+          const freshPay=await apiGet("Payment Entry",saved.name);
+          await apiSubmit("Payment Entry",saved.name,freshPay?.modified||saved.modified);
           peName=saved.name;
         }
         toast("Payment "+peName+" recorded!");
         emit("saved",peName);emit("close");
-        setTimeout(()=>openDoc(docUrl("Payment Entry",peName)),300);
+        setTimeout(()=>window.open(docUrl("Payment Entry",peName),"_blank"),300);
       }catch(e){toast(e.message||"Could not save payment","error");}
       finally{saving.value=false;}
     }
@@ -1189,7 +1141,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
           <SmartSelect
             v-model="form.party"
             :options="partyOpts"
-            :placeholder="'Search '+form.party_type+'...'"
+            :placeholder="'Search '+form.party_type.toLowerCase()+ '...'"
             :add-new-label="'+ Add new '+form.party_type.toLowerCase()"
             :add-new-url="newDocUrl(form.party_type)"
             @change="(val)=>{form.party=val;onParty();}"
@@ -1293,7 +1245,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon};
+    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1388,7 +1340,7 @@ const Invoices=defineComponent({name:"Invoices",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt};
+    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1442,7 +1394,7 @@ const Purchases=defineComponent({name:"Purchases",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt};
+    return{list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1490,7 +1442,7 @@ const Payments=defineComponent({name:"Payments",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge};
+    return{list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1534,7 +1486,7 @@ const Banking=defineComponent({name:"Banking",
       finally{txnLoad.value=false;}
     }
     onMounted(loadCash);
-    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
+    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1592,7 +1544,7 @@ const Accounts=defineComponent({name:"Accounts",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,TC,load,fmt,icon};
+    return{list,loading,active,types,filtered,TC,load,fmt,icon,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1641,7 +1593,7 @@ const Reports=defineComponent({name:"Reports",
       }catch(e){toast(e.message,"error");}
       finally{running.value=false;}
     }
-    return{from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon,flt};
+    return{from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon,flt,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div class="b-page">
@@ -1714,7 +1666,7 @@ const App=defineComponent({name:"BooksApp",
     const fullname=computed(()=>window.frappe?.session?.user_fullname||"Administrator");
     const title=computed(()=>TITLES[route.name]||"Books");
     const collapsed=ref(false);
-    return{cname,initials,fullname,title,NAV,icon,collapsed};
+    return{cname,initials,fullname,title,NAV,icon,collapsed,openDoc,docUrl,newDocUrl};
   },
   template:`
 <div :class="{'books-root':true, collapsed:collapsed}">
