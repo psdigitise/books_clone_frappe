@@ -48,16 +48,23 @@ function today(){return new Date().toISOString().slice(0,10);}
 async function api(method,args){
   // Always get freshest CSRF token
   const csrfToken=window.frappe?.csrf_token||getCsrfFromCookie()||"";
+  // Use form-encoded body — Frappe expects this format
+  const body=new URLSearchParams();
+  // Include csrf_token in body AS WELL AS header — Frappe checks both
+  if(csrfToken)body.append("csrf_token",csrfToken);
+  for(const[k,v]of Object.entries(args||{})){
+    body.append(k,typeof v==="string"?v:JSON.stringify(v));
+  }
   const r=await fetch("/api/method/"+method,{
     method:"POST",credentials:"same-origin",
-    headers:{"Content-Type":"application/json","X-Frappe-CSRF-Token":csrfToken,"Accept":"application/json"},
-    body:JSON.stringify(args||{})
+    headers:{"Content-Type":"application/x-www-form-urlencoded","X-Frappe-CSRF-Token":csrfToken||"fetch","Accept":"application/json"},
+    body:body.toString()
   });
-  const json=await r.json();
-  if(json.exc){
-    // Extract readable error from Frappe exception
+  let json;
+  try{json=await r.json();}catch{throw new Error("Server returned non-JSON response (status "+r.status+")");}
+  if(!r.ok||json.exc){
     const match=(json.exc||"").match(/frappe\.exceptions\.\w+: (.+)/);
-    throw new Error(match?match[1]:(json.exc_type||"Server error"));
+    throw new Error(match?match[1]:(json.exc_type||json.message||"Server error "+r.status));
   }
   return json.message;
 }
@@ -236,7 +243,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }catch{}
       // Load tax templates
       try{
-        taxTemplates.value=await apiList("Tax Template",{fields:["name","template_name"],limit:20});
+        taxTemplates.value=await apiList("Sales Taxes and Charges Template",{fields:["name","title"],limit:20});
       }catch{}
     }
 
@@ -245,7 +252,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 
     async function applyTaxTemplate(tplName){
       try{
-        const tpl=await apiGet("Tax Template",tplName);
+        const tpl=await apiGet("Sales Taxes and Charges Template",tplName);
         form.taxes=[];
         (tpl.taxes||[]).forEach(t=>{
           form.taxes.push({
@@ -444,7 +451,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
             style="font-size:12px;border:1px solid #E8ECF0;border-radius:5px;padding:4px 8px;
                    font-family:inherit;color:#495057;background:#fff;cursor:pointer">
             <option value="">Apply Template…</option>
-            <option v-for="t in taxTemplates" :key="t.name" :value="t.name">{{t.template_name||t.name}}</option>
+            <option v-for="t in taxTemplates" :key="t.name" :value="t.name">{{t.title||t.name}}</option>
           </select>
           <button @click="addTax" style="background:none;border:none;cursor:pointer;
             color:#3B5BDB;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:4px"
@@ -1074,10 +1081,11 @@ const Invoices=defineComponent({name:"Invoices",
     async function load(){
       loading.value=true;
       try{list.value=await apiList("Sales Invoice",{fields:["name","customer","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
+      catch(e){console.error("Sales Invoice load failed:",e.message);toast("Failed to load invoices: "+e.message,"error");}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon};
+    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1127,6 +1135,7 @@ const Purchases=defineComponent({name:"Purchases",
     async function load(){
       loading.value=true;
       try{list.value=await apiList("Purchase Invoice",{fields:["name","supplier","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
+      catch(e){console.error("Purchase Invoice load failed:",e.message);toast("Failed to load bills: "+e.message,"error");}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1174,6 +1183,7 @@ const Payments=defineComponent({name:"Payments",
     async function load(){
       loading.value=true;
       try{list.value=await apiList("Payment Entry",{fields:["name","party","party_type","paid_amount","payment_type","payment_date","mode_of_payment"],order:"payment_date desc"});}
+      catch(e){console.error("Payment Entry load failed:",e.message);toast("Failed to load payments: "+e.message,"error");}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1221,7 +1231,7 @@ const Banking=defineComponent({name:"Banking",
       finally{txnLoad.value=false;}
     }
     onMounted(loadCash);
-    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge};
+    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
   },
   template:`
 <div class="b-page">
@@ -1328,7 +1338,7 @@ const Reports=defineComponent({name:"Reports",
       }catch(e){toast(e.message,"error");}
       finally{running.value=false;}
     }
-    return{from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon};
+    return{from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1478,24 +1488,41 @@ const router=createRouter({
 });
 
 function getCsrfFromCookie(){
-  // Frappe sets csrf_token as a cookie on every page load
   const m=document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
   return m?decodeURIComponent(m.split("=").slice(1).join("=")):"";
 }
-function waitReady(cb,n){
-  n=n||0;
-  // Accept either window.frappe.csrf_token OR cookie OR give up after 5s
-  const token=window.frappe?.csrf_token||getCsrfFromCookie();
-  if(token){
-    if(!window.frappe)window.frappe={};
-    if(!window.frappe.csrf_token)window.frappe.csrf_token=token;
-    cb();return;
+
+async function bootstrapCsrf(){
+  // Wait for the session fetch in books.html to complete first (sets csrf_token)
+  if(window.__booksReady){
+    try{await window.__booksReady;}catch{}
   }
-  if(n>50){cb();return;}
-  setTimeout(()=>waitReady(cb,n+1),100);
+  // Token should now be set by the session fetch
+  if(window.frappe?.csrf_token&&window.frappe.csrf_token!=="None"){
+    return window.frappe.csrf_token;
+  }
+  // Fallback: read from cookie
+  const fromCookie=getCsrfFromCookie();
+  if(fromCookie&&fromCookie!=="None"){
+    if(!window.frappe)window.frappe={};
+    window.frappe.csrf_token=fromCookie;
+    return fromCookie;
+  }
+  // Last resort: GET frappe.auth.get_logged_user — no CSRF needed for GET
+  try{
+    const r=await fetch("/api/method/frappe.auth.get_logged_user",{credentials:"same-origin"});
+    const data=await r.json();
+    if(!window.frappe)window.frappe={};
+    const token=data.csrf_token||getCsrfFromCookie()||"";
+    if(token&&token!=="None")window.frappe.csrf_token=token;
+    return window.frappe.csrf_token||"";
+  }catch(e){
+    console.warn("[Books] Could not bootstrap CSRF token:",e.message);
+    return "";
+  }
 }
-waitReady(()=>{
-  // Expose helpers to templates
+
+bootstrapCsrf().then(()=>{
   createApp(App).use(router).mount("#books-app");
 });
 

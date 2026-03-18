@@ -19,7 +19,8 @@ html,body{height:100%;overflow:hidden;background:#f0f2f5}
 <script>
 window.frappe={session:{},boot:{sysdefaults:{company:''}}};
 window.__booksCompany='';
-fetch('/api/method/zoho_books_clone.api.session.get_books_session',{
+// Expose this promise so books.js can await it before mounting
+window.__booksReady=fetch('/api/method/zoho_books_clone.api.session.get_books_session',{
   credentials:'same-origin',headers:{'X-Requested-With':'XMLHttpRequest'}
 })
 .then(function(r){return r.json();})
