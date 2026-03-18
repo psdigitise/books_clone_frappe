@@ -1114,13 +1114,13 @@ const Dashboard=defineComponent({name:"Dashboard",
   </div>
 </div>`});
 
+// ══ INVOICE LIST PAGE ════════════════════════════════════════════
 const Invoices=defineComponent({name:"Invoices",
   components:{InvoiceModal},
   setup(){
-    // ── List state ──────────────────────────────────────────────
+    const router=useRouter();
     const list=ref([]),loading=ref(true),active=ref("all"),showNew=ref(false);
     const search=ref("");
-    const selectedName=ref(null);
 
     const filters=[
       {k:"all",lbl:"All Invoices"},
@@ -1147,20 +1147,169 @@ const Invoices=defineComponent({name:"Invoices",
       loading.value=true;
       try{
         list.value=await apiList("Sales Invoice",{
-          fields:["name","customer","posting_date","due_date","grand_total","outstanding_amount","status"],
+          fields:["name","customer","customer_name","invoice_number","posting_date","due_date","grand_total","outstanding_amount","status"],
           order:"posting_date desc"
         });
-        // Auto-select first invoice
-        if(list.value.length&&!selectedName.value)selectedName.value=list.value[0].name;
       }catch(e){toast("Failed to load invoices: "+e.message,"error");}
       finally{loading.value=false;}
     }
 
-    function pillBadge(k){
-      return{Draft:"zb-list-draft",Submitted:"zb-list-unpaid",Overdue:"zb-list-overdue",Paid:"zb-list-paid"}[k]||"zb-list-draft";
+    function goToInvoice(name){router.push({name:"invoice-detail",params:{name}});}
+
+    function statusChipCls(row){
+      const s=row.status||"Draft";
+      const over=flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date();
+      if(over)return"zb-chip-overdue";
+      if(s==="Paid")return"zb-chip-paid";
+      if(s==="Draft")return"zb-chip-draft";
+      if(s==="Submitted"||s==="Partly Paid")return"zb-chip-partpaid";
+      return"zb-chip-draft";
+    }
+    function statusLabel(row){
+      const s=row.status||"Draft";
+      const over=flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date();
+      if(over&&s!=="Draft")return"DUE TODAY";
+      if(s==="Submitted")return"SENT";
+      if(s==="Partly Paid")return"PARTIALLY PAID";
+      return s.toUpperCase();
     }
 
-    // ── Detail state ────────────────────────────────────────────
+    onMounted(loadList);
+    return{list,loading,active,showNew,search,filters,counts,filtered,
+      loadList,goToInvoice,statusChipCls,statusLabel,fmt,fmtDate,flt,icon};
+  },
+  template:`
+<div class="zb-root no-sidebar-pad">
+  <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
+
+  <!-- TOOLBAR -->
+  <div class="zb-toolbar no-print">
+    <div class="zb-toolbar-left">
+      <span class="zb-toolbar-title">All Invoices</span>
+      <span class="zb-toolbar-caret">&#9660;</span>
+    </div>
+    <div class="zb-toolbar-right">
+      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true">
+        <span v-html="icon('plus',12)"></span> New
+      </button>
+      <button class="zb-tb-btn" @click="()=>{}">▾</button>
+      <button class="zb-tb-btn" style="padding:5px 8px" @click="loadList" title="Refresh">
+        <span v-html="icon('refresh',13)"></span>
+      </button>
+      <button class="zb-tb-btn" style="padding:5px 8px" title="More">•••</button>
+    </div>
+  </div>
+
+  <!-- FILTER BAR -->
+  <div class="zb-table-filter-bar no-print">
+    <button v-for="f in filters" :key="f.k"
+      class="zb-tf-pill" :class="{active:active===f.k}"
+      @click="active=f.k">
+      {{f.lbl}}
+      <span v-if="f.k!=='all'" class="zb-tf-cnt">{{counts[f.k]}}</span>
+    </button>
+    <div style="flex:1"></div>
+    <div class="zb-tf-search">
+      <span v-html="icon('search',12)" style="color:#aaa"></span>
+      <input v-model="search" placeholder="Search invoices..." class="zb-tf-search-input"/>
+    </div>
+  </div>
+
+  <!-- TABLE -->
+  <div class="zb-table-wrap">
+    <table class="zb-inv-table">
+      <thead>
+        <tr>
+          <th class="zb-th zb-th-check"><input type="checkbox"/></th>
+          <th class="zb-th">DATE</th>
+          <th class="zb-th">INVOICE#</th>
+          <th class="zb-th">ORDER NUMBER</th>
+          <th class="zb-th">CUSTOMER NAME</th>
+          <th class="zb-th">STATUS</th>
+          <th class="zb-th">DUE DATE</th>
+          <th class="zb-th ta-r">AMOUNT</th>
+          <th class="zb-th ta-r">BALANCE DUE</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template v-if="loading">
+          <tr v-for="n in 5" :key="n">
+            <td colspan="9" style="padding:14px 16px"><div class="b-shimmer" style="height:13px;border-radius:3px"></div></td>
+          </tr>
+        </template>
+        <template v-else>
+          <tr v-if="!filtered.length">
+            <td colspan="9" class="zb-table-empty">No invoices found</td>
+          </tr>
+          <tr v-else v-for="row in filtered" :key="row.name"
+            class="zb-inv-row"
+            @click="goToInvoice(row.name)">
+            <td class="zb-td zb-td-check" @click.stop><input type="checkbox"/></td>
+            <td class="zb-td zb-td-date">{{fmtDate(row.posting_date)}}</td>
+            <td class="zb-td">
+              <span class="zb-inv-link" @click.stop="goToInvoice(row.name)">{{row.name}}</span>
+            </td>
+            <td class="zb-td zb-td-muted">{{row.invoice_number||'—'}}</td>
+            <td class="zb-td zb-td-customer">{{row.customer_name||row.customer}}</td>
+            <td class="zb-td">
+              <span class="zb-status-chip" :class="statusChipCls(row)">{{statusLabel(row)}}</span>
+            </td>
+            <td class="zb-td zb-td-date" :style="{color:flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date()?'#e03131':'inherit'}">
+              {{fmtDate(row.due_date)}}
+            </td>
+            <td class="zb-td ta-r zb-td-mono">{{fmt(row.grand_total)}}</td>
+            <td class="zb-td ta-r zb-td-mono" :style="{color:flt(row.outstanding_amount)>0?'#1a1d23':'#2f9e44'}">
+              {{fmt(row.outstanding_amount)}}
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+</div>
+`});
+
+// ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
+const InvoiceDetail=defineComponent({name:"InvoiceDetail",
+  setup(){
+    const route=useRoute();
+    const router=useRouter();
+    const invName=computed(()=>route.params.name);
+
+    // ── List (sidebar) ──────────────────────────────────────────
+    const list=ref([]),listLoading=ref(true),active=ref("all"),search=ref("");
+    const filters=[
+      {k:"all",lbl:"All Invoices"},
+      {k:"Draft",lbl:"Draft"},
+      {k:"Submitted",lbl:"Unpaid"},
+      {k:"Overdue",lbl:"Overdue"},
+      {k:"Paid",lbl:"Paid"}
+    ];
+    const counts=computed(()=>({
+      Draft:list.value.filter(i=>i.status==="Draft").length,
+      Submitted:list.value.filter(i=>["Submitted","Partly Paid"].includes(i.status)).length,
+      Overdue:list.value.filter(isOverdue).length,
+      Paid:list.value.filter(i=>i.status==="Paid").length,
+    }));
+    const filtered=computed(()=>{
+      let r=list.value;
+      if(active.value==="Overdue")r=r.filter(isOverdue);
+      else if(active.value!=="all")r=r.filter(i=>i.status===active.value);
+      if(search.value)r=r.filter(i=>(i.name+(i.customer||"")).toLowerCase().includes(search.value.toLowerCase()));
+      return r;
+    });
+    async function loadList(){
+      listLoading.value=true;
+      try{list.value=await apiList("Sales Invoice",{fields:["name","customer","customer_name","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
+      catch(e){toast("Failed to load invoices","error");}
+      finally{listLoading.value=false;}
+    }
+    function pillBadge(k){
+      return{Draft:"zb-list-draft",Submitted:"zb-list-unpaid",Overdue:"zb-list-overdue","Partly Paid":"zb-list-partpaid",Paid:"zb-list-paid"}[k]||"zb-list-draft";
+    }
+    function goInvoice(name){router.push({name:"invoice-detail",params:{name}});}
+
+    // ── Detail ──────────────────────────────────────────────────
     const inv=ref(null),detailLoading=ref(false),detailError=ref(null);
     const editing=ref(false),saving=ref(false),submitting=ref(false);
     const customers=ref([]),accounts_ar=ref([]),accounts_income=ref([]);
@@ -1179,16 +1328,14 @@ const Invoices=defineComponent({name:"Invoices",
       finally{detailLoading.value=false;}
     }
 
-    watch(selectedName,n=>{if(n)loadDetail(n);});
-    onMounted(loadList);
+    watch(invName,n=>{if(n)loadDetail(n);},{immediate:true});
+    onMounted(()=>{loadList();});
 
-    // ── Edit helpers ────────────────────────────────────────────
     async function loadFormDefaults(){
       try{customers.value=await apiList("Customer",{fields:["name"],limit:100,order:"name asc"});}catch{}
       try{const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});accounts_ar.value=ar;}catch{}
       try{const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});accounts_income.value=inc;}catch{}
     }
-
     function startEdit(){
       if(!inv.value)return;
       Object.assign(form,{
@@ -1203,7 +1350,6 @@ const Invoices=defineComponent({name:"Invoices",
       loadFormDefaults();
       editing.value=true;
     }
-
     function recalc(){
       form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
       const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
@@ -1213,7 +1359,6 @@ const Invoices=defineComponent({name:"Invoices",
     function removeItem(i){if(form.items.length>1)form.items.splice(i,1);recalc();}
     function addTax(){form.taxes.push({tax_type:"SGST",description:"SGST",rate:9,tax_amount:0});}
     function removeTax(i){form.taxes.splice(i,1);recalc();}
-
     const netTotal=computed(()=>form.items.reduce((s,i)=>s+flt(i.amount),0));
     const totalTax=computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
     const grandTotal=computed(()=>netTotal.value+totalTax.value);
@@ -1239,18 +1384,13 @@ const Invoices=defineComponent({name:"Invoices",
         };
         const saved=await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
         inv.value=saved;
-        // Update list item
         const idx=list.value.findIndex(i=>i.name===saved.name);
-        if(idx>-1)Object.assign(list.value[idx],{
-          grand_total:saved.grand_total,outstanding_amount:saved.outstanding_amount,
-          status:saved.status,posting_date:saved.posting_date,due_date:saved.due_date,
-        });
+        if(idx>-1)Object.assign(list.value[idx],{grand_total:saved.grand_total,outstanding_amount:saved.outstanding_amount,status:saved.status,posting_date:saved.posting_date,due_date:saved.due_date});
         editing.value=false;
         toast("Invoice saved!","success");
       }catch(e){toast("Save failed: "+e.message,"error");}
       finally{saving.value=false;}
     }
-
     async function submitInvoice(){
       if(!confirm("Submit this invoice? This cannot be undone."))return;
       submitting.value=true;
@@ -1262,42 +1402,14 @@ const Invoices=defineComponent({name:"Invoices",
       }catch(e){toast("Submit failed: "+e.message,"error");}
       finally{submitting.value=false;}
     }
-
     function printPdf(){window.print();}
-
     function toAmountWords(n){
       const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
       const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
-      function w(n){
-        if(!n)return"";
-        if(n<20)return a[n]+" ";
-        if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");
-        if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?w(n%100):"");
-        if(n<100000)return w(Math.floor(n/1000))+"Thousand "+(n%1000?w(n%1000):"");
-        if(n<10000000)return w(Math.floor(n/100000))+"Lakh "+(n%100000?w(n%100000):"");
-        return w(Math.floor(n/10000000))+"Crore "+(n%10000000?w(n%10000000):"");
-      }
+      function w(n){if(!n)return"";if(n<20)return a[n]+" ";if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?w(n%100):"");if(n<100000)return w(Math.floor(n/1000))+"Thousand "+(n%1000?w(n%1000):"");if(n<10000000)return w(Math.floor(n/100000))+"Lakh "+(n%100000?w(n%100000):"");return w(Math.floor(n/10000000))+"Crore "+(n%10000000?w(n%10000000):"");}
       const r=Math.floor(n),p=Math.round((n-r)*100);
       return"Indian Rupee "+w(r).trim()+(p?" and "+w(p).trim()+" Paise":"")+" Only";
     }
-
-    // ── List status helpers ──────────────────────────────────────
-    function statusChipCls(row){
-      const s=row.status||"Draft";
-      const over=flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date();
-      if(over)return"zb-chip-overdue";
-      if(s==="Paid")return"zb-chip-paid";
-      if(s==="Draft")return"zb-chip-draft";
-      if(s==="Submitted"||s==="Partly Paid")return"zb-chip-due";
-      return"zb-chip-draft";
-    }
-    function statusLabel(row){
-      const s=row.status||"Draft";
-      const over=flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date();
-      if(over)return"DUE TODAY";
-      return s;
-    }
-    // ── Computed for detail view ─────────────────────────────────
     const statusBadgeCls=computed(()=>{
       const s=inv.value?.status;
       if(s==="Paid")return"b-badge-green";
@@ -1310,162 +1422,328 @@ const Invoices=defineComponent({name:"Invoices",
     const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
     const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
 
-    function isOverdueRow(row){return flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date();}
-
     return{
-      list,loading,active,showNew,search,filters,counts,filtered,selectedName,
-      pillBadge,loadList,isOverdueRow,
+      list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
       inv,detailLoading,detailError,editing,saving,submitting,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
       addItem,removeItem,addTax,removeTax,recalc,toAmountWords,
-      fmt,fmtDate,flt,icon,openDoc,
-      statusChipCls,statusLabel
+      fmt,fmtDate,flt,icon,openDoc
     };
   },
   template:`
-<div class="zb-root no-sidebar-pad">
+<div class="zb-master-detail no-sidebar-pad">
 
-  <!-- TOP TOOLBAR -->
-  <div class="zb-toolbar no-print">
-    <div class="zb-toolbar-left">
-      <span class="zb-toolbar-title">All Invoices</span>
-      <span class="zb-toolbar-caret">&#9660;</span>
-    </div>
-    <div class="zb-toolbar-right">
-      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true">
-        <span v-html="icon('plus',12)"></span> New
-      </button>
-      <button class="zb-tb-btn" @click="loadList" title="Refresh">
-        <span v-html="icon('refresh',13)"></span>
-      </button>
-    </div>
-  </div>
-
-  <!-- BODY SPLIT -->
-  <div class="zb-body">
-
-    <!-- LEFT: NARROW INVOICE LIST (shown when detail open) -->
-    <div class="zb-split-list no-print" v-if="selectedName">
-
-      <!-- List Header -->
-      <div class="zb-split-header">
-        <div class="zb-split-search-wrap">
-          <span v-html="icon('search',12)" style="color:#aaa;flex-shrink:0"></span>
-          <input v-model="search" placeholder="Search invoices..." class="zb-split-search-input"/>
+  <!-- ══ LEFT: INVOICE SIDEBAR LIST ══ -->
+  <div class="zb-list-pane no-print">
+    <div class="zb-list-header">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices</span>
+          <span style="font-size:11px;color:var(--text-3)">▾</span>
         </div>
-        <div class="zb-split-pills">
-          <button v-for="f in filters" :key="f.k"
-            class="zb-split-pill" :class="{active:active===f.k}"
-            @click="active=f.k">
-            {{f.lbl}}
-            <span v-if="f.k!=='all'" class="zb-split-pill-cnt">{{counts[f.k]}}</span>
+        <div style="display:flex;gap:4px">
+          <button class="zb-icon-btn" @click="$router.push('/invoices')" title="Back to list">
+            <span v-html="icon('arrow-left',13)"></span>
+          </button>
+          <button class="zb-icon-btn" @click="()=>{}" title="New Invoice">
+            <span v-html="icon('plus',13)"></span>
           </button>
         </div>
       </div>
-
-      <!-- Invoice rows -->
-      <div class="zb-split-items">
-        <template v-if="loading">
-          <div v-for="n in 6" :key="n" class="zb-split-item-shimmer">
-            <div class="b-shimmer" style="width:70%;height:12px;border-radius:3px;margin-bottom:5px"></div>
-            <div class="b-shimmer" style="width:45%;height:10px;border-radius:3px"></div>
-          </div>
-        </template>
-        <div v-else-if="!filtered.length" class="zb-split-empty">No invoices found</div>
-        <div v-else
-          v-for="row in filtered" :key="row.name"
-          class="zb-split-item"
-          :class="{selected:selectedName===row.name}"
-          @click="selectedName=row.name">
-          <div class="zb-split-item-top">
-            <span class="zb-split-item-name">{{row.customer}}</span>
-            <span class="zb-split-item-amt">{{fmt(row.grand_total)}}</span>
-          </div>
-          <div class="zb-split-item-mid">
-            <span class="zb-split-item-num">{{row.name}}</span>
-            <span style="color:#ccc;font-size:10px">•</span>
-            <span class="zb-split-item-date">{{fmtDate(row.posting_date)}}</span>
-          </div>
-          <div class="zb-split-item-bot">
-            <span class="zb-split-status" :class="pillBadge(row.status)">{{row.status||'Draft'}}</span>
-            <span v-if="flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date()"
-              style="font-size:10px;color:#e03131;font-weight:700">OVERDUE</span>
-          </div>
-        </div>
+      <div class="zb-list-search">
+        <span v-html="icon('search',12)" style="color:#aaa;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search invoices…" class="zb-list-search-input"/>
       </div>
-    </div>
-
-    <!-- MAIN TABLE VIEW (when no invoice selected) -->
-    <div class="zb-table-view" v-if="!selectedName">
-      <!-- Filter pills -->
-      <div class="zb-table-filter-bar no-print">
+      <div class="zb-list-pills">
         <button v-for="f in filters" :key="f.k"
-          class="zb-tf-pill" :class="{active:active===f.k}"
+          class="zb-list-pill" :class="{active:active===f.k}"
           @click="active=f.k">
           {{f.lbl}}
-          <span v-if="f.k!=='all'" class="zb-tf-cnt">{{counts[f.k]}}</span>
+          <span v-if="f.k!=='all'" class="zb-pill-count">{{counts[f.k]}}</span>
         </button>
-        <div style="flex:1"></div>
-        <div class="zb-tf-search">
-          <span v-html="icon('search',12)" style="color:#aaa"></span>
-          <input v-model="search" placeholder="Search..." class="zb-tf-search-input"/>
+      </div>
+    </div>
+    <div class="zb-list-items">
+      <template v-if="listLoading">
+        <div v-for="n in 6" :key="n" class="zb-list-item-shimmer">
+          <div class="b-shimmer" style="width:70%;height:13px;border-radius:3px;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="width:50%;height:11px;border-radius:3px;margin-bottom:4px"></div>
+          <div class="b-shimmer" style="width:35%;height:10px;border-radius:3px"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" class="zb-list-empty">
+        <div style="font-size:13px;color:var(--text-3)">No invoices found</div>
+      </div>
+      <div v-else
+        v-for="row in filtered" :key="row.name"
+        class="zb-list-item"
+        :class="{selected:invName===row.name}"
+        @click="goInvoice(row.name)">
+        <div class="zb-list-item-top">
+          <span class="zb-list-item-name">{{row.customer_name||row.customer}}</span>
+          <span class="zb-list-item-amount">{{fmt(row.grand_total)}}</span>
+        </div>
+        <div class="zb-list-item-mid">
+          <span class="zb-list-item-num">{{row.name}}</span>
+          <span class="zb-list-item-dot">•</span>
+          <span class="zb-list-item-date">{{fmtDate(row.posting_date)}}</span>
+        </div>
+        <div class="zb-list-item-bot">
+          <span class="zb-list-status-tag" :class="pillBadge(row.status)">{{row.status||'Draft'}}</span>
+          <span v-if="flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date()"
+            style="font-size:10px;color:#e03131;font-weight:600;margin-left:4px">OVERDUE</span>
+          <span style="margin-left:auto;font-size:11px;color:#888">{{fmt(row.outstanding_amount)}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT: DETAIL AREA ══ -->
+  <div class="zb-detail-area">
+
+    <!-- Action bar -->
+    <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
+      <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+        <span style="font-size:14px;font-weight:700;color:#1a1d23">{{inv.name}}</span>
+        <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">
+          {{inv.status==='Submitted'?'Sent':inv.status||'Draft'}}
+        </span>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap">
+        <template v-if="editing">
+          <button class="zb-ab-btn" @click="editing=false">Cancel</button>
+          <button class="zb-ab-btn zb-ab-primary" @click="saveEdit" :disabled="saving">
+            <span v-if="saving" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
+            {{saving?'Saving…':'Save'}}
+          </button>
+        </template>
+        <template v-else>
+          <button class="zb-ab-btn" @click="startEdit"><span v-html="icon('edit',12)"></span> Edit</button>
+          <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('send',12)"></span> Send</button>
+          <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
+          <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
+          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
+          <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
+            <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
+            {{submitting?'Submitting…':'Submit'}}
+          </button>
+          <button class="zb-ab-btn zb-ab-dots" @click="$router.push('/invoices')" title="Close">✕</button>
+        </template>
+      </div>
+    </div>
+
+    <!-- What's Next banners -->
+    <div class="zb-banner no-print" v-if="inv&&!isDraft&&!editing">
+      <span style="color:#f59e0b;font-size:15px">✦</span>
+      <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Invoice has been sent. Record payment for it as soon as you receive payment. <a href="#" style="color:#2563EB;font-weight:600;text-decoration:none">Learn More</a></span>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0">Record Payment</button>
+    </div>
+    <div class="zb-banner zb-banner-upi no-print" v-if="inv&&!isDraft&&!editing">
+      <span style="font-size:12px;color:#444">🖥 Get paid faster by <a href="#" style="color:#2563EB;text-decoration:none">setting up payment gateways</a> or <a href="#" style="color:#2563EB;text-decoration:none">display a UPI QR code</a>.</span>
+    </div>
+    <div class="zb-banner no-print" v-if="inv&&isDraft&&!editing">
+      <span style="color:#f59e0b;font-size:15px">✦</span>
+      <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Submit this invoice to lock it, then record a payment when collected.</span>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="submitInvoice">Submit Invoice</button>
+    </div>
+
+    <!-- Loading shimmer -->
+    <div v-if="detailLoading" style="flex:1;display:flex;align-items:center;justify-content:center">
+      <div style="text-align:center">
+        <div class="b-shimmer" style="width:200px;height:14px;border-radius:4px;margin:0 auto 10px"></div>
+        <div class="b-shimmer" style="width:130px;height:11px;border-radius:4px;margin:0 auto"></div>
+      </div>
+    </div>
+    <div v-else-if="detailError" style="flex:1;display:flex;align-items:center;justify-content:center;color:#e03131;font-size:13px">
+      Error loading invoice: {{detailError}}
+    </div>
+
+    <div v-else-if="inv" style="display:flex;flex:1;overflow:hidden">
+
+      <!-- PDF view or Edit form -->
+      <div class="zb-pdf-wrap" v-if="!editing">
+        <div class="zb-pdf-paper">
+          <div class="zb-sent-ribbon" v-if="!isDraft">Sent</div>
+          <div class="zb-draft-ribbon" v-else>Draft</div>
+          <div class="zb-pdf-head">
+            <div>
+              <div class="zb-pdf-co-name">{{inv.company||'Your Company'}}</div>
+              <div class="zb-pdf-co-meta" v-if="inv.company_address">{{inv.company_address}}</div>
+              <div class="zb-pdf-co-meta" v-if="inv.company_email">{{inv.company_email}}</div>
+            </div>
+            <div class="zb-pdf-inv-title">TAX INVOICE</div>
+          </div>
+          <table class="zb-pdf-info-table">
+            <thead><tr><th>#</th><th>Invoice Date</th><th>Terms</th><th>Due Date</th><th>P.O.#</th></tr></thead>
+            <tbody><tr>
+              <td>{{inv.name}}</td>
+              <td>{{fmtDate(inv.posting_date)}}</td>
+              <td>{{inv.payment_terms||'Due on Receipt'}}</td>
+              <td :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</td>
+              <td>{{inv.invoice_number||'—'}}</td>
+            </tr></tbody>
+          </table>
+          <div class="zb-pdf-bill-section">
+            <div class="zb-pdf-bill-label">Bill To</div>
+            <div class="zb-pdf-bill-name">{{inv.customer_name||inv.customer}}</div>
+          </div>
+          <table class="zb-pdf-items">
+            <thead><tr>
+              <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
+              <th class="zb-pdf-th">Item &amp; Description</th>
+              <th class="zb-pdf-th" style="text-align:right">Qty</th>
+              <th class="zb-pdf-th" style="text-align:right">Rate</th>
+              <th class="zb-pdf-th" style="text-align:right">Amount</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="(item,i) in (inv.items||[])" :key="i" class="zb-pdf-item-row">
+                <td class="zb-pdf-td" style="text-align:center;color:#aaa;font-size:12px">{{i+1}}</td>
+                <td class="zb-pdf-td">
+                  <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
+                  <div v-if="item.description&&item.description!==item.item_name" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
+                </td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}<div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div></td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="zb-pdf-bottom">
+            <div class="zb-pdf-words-block">
+              <div class="zb-pdf-words-lbl">Total In Words</div>
+              <div class="zb-pdf-words-val"><i>{{toAmountWords(flt(inv.grand_total))}}</i></div>
+              <div v-if="inv.notes" style="margin-top:10px">
+                <div class="zb-pdf-words-lbl">Notes</div>
+                <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{inv.notes}}</div>
+              </div>
+            </div>
+            <div class="zb-pdf-totals-block">
+              <div class="zb-pdf-total-row"><span>Sub Total</span><span>{{fmt(inv.net_total)}}</span></div>
+              <div class="zb-pdf-total-row" v-for="tax in (inv.taxes||[])" :key="tax.tax_type">
+                <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
+              </div>
+              <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Total</span><span>{{fmt(inv.grand_total)}}</span></div>
+              <div v-if="flt(inv.outstanding_amount)>0" class="zb-pdf-total-row zb-pdf-balance">
+                <span>Balance Due</span><span>{{fmt(inv.outstanding_amount)}}</span>
+              </div>
+              <div v-else class="zb-pdf-total-row" style="color:#2f9e44;font-weight:700;font-size:12px">
+                <span>✓ Paid in Full</span><span>{{fmt(inv.grand_total)}}</span>
+              </div>
+            </div>
+          </div>
+          <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+          <div class="zb-pdf-footer">PDF template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></div>
         </div>
       </div>
 
-      <!-- Table -->
-      <div class="zb-table-wrap">
-        <table class="zb-inv-table">
-          <thead>
-            <tr>
-              <th class="zb-th zb-th-check"><input type="checkbox"/></th>
-              <th class="zb-th">DATE</th>
-              <th class="zb-th">INVOICE#</th>
-              <th class="zb-th">ORDER NUMBER</th>
-              <th class="zb-th">CUSTOMER NAME</th>
-              <th class="zb-th">STATUS</th>
-              <th class="zb-th">DUE DATE</th>
-              <th class="zb-th ta-r">AMOUNT</th>
-              <th class="zb-th ta-r">BALANCE DUE</th>
-            </tr>
-          </thead>
-          <tbody>
-            <template v-if="loading">
-              <tr v-for="n in 5" :key="n">
-                <td colspan="9" style="padding:14px 16px"><div class="b-shimmer" style="height:13px;border-radius:3px"></div></td>
+      <!-- Edit form -->
+      <div v-else class="zb-edit-wrap no-print">
+        <div class="zb-edit-form">
+          <div class="zb-form-section-title">Invoice Details</div>
+          <div class="zb-form-grid3">
+            <div class="zb-form-field"><label class="zb-form-label">Customer *</label>
+              <select v-model="form.customer" class="zb-form-input"><option value="">— Select —</option><option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option></select></div>
+            <div class="zb-form-field"><label class="zb-form-label">Invoice Date</label>
+              <input type="date" v-model="form.posting_date" class="zb-form-input"/></div>
+            <div class="zb-form-field"><label class="zb-form-label">Due Date</label>
+              <input type="date" v-model="form.due_date" class="zb-form-input"/></div>
+            <div class="zb-form-field"><label class="zb-form-label">AR Account</label>
+              <select v-model="form.debit_to" class="zb-form-input"><option value="">— Select —</option><option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
+            <div class="zb-form-field"><label class="zb-form-label">Income Account</label>
+              <select v-model="form.income_account" class="zb-form-input"><option value="">— Select —</option><option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
+            <div class="zb-form-field"><label class="zb-form-label">Currency</label>
+              <input v-model="form.currency" class="zb-form-input"/></div>
+          </div>
+          <div class="zb-form-section-title" style="margin-top:18px">Items</div>
+          <table class="zb-items-table">
+            <thead><tr><th>#</th><th>Item Name</th><th>Description</th><th style="text-align:right">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(item,i) in form.items" :key="i">
+                <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
+                <td><input v-model="item.item_name" class="zb-cell-input" placeholder="Item name" @input="recalc"/></td>
+                <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
+                <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+                <td><input v-model.number="item.rate" type="number" min="0" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+                <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:6px;font-size:13px">{{fmt(item.amount)}}</td>
+                <td><button @click="removeItem(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:3px" v-html="icon('trash',12)"></button></td>
               </tr>
-            </template>
-            <template v-else>
-              <tr v-if="!filtered.length">
-                <td colspan="9" class="zb-table-empty">No invoices found</td>
+            </tbody>
+          </table>
+          <button class="zb-add-row" @click="addItem">+ Add Row</button>
+          <div class="zb-form-section-title" style="margin-top:16px">Taxes</div>
+          <table class="zb-items-table" v-if="form.taxes.length">
+            <thead><tr><th>Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+            <tbody>
+              <tr v-for="(tax,i) in form.taxes" :key="i">
+                <td><input v-model="tax.tax_type" class="zb-cell-input" placeholder="SGST"/></td>
+                <td><input v-model="tax.description" class="zb-cell-input" placeholder="SGST 9%"/></td>
+                <td><input v-model.number="tax.rate" type="number" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+                <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:6px;font-size:13px">{{fmt(tax.tax_amount)}}</td>
+                <td><button @click="removeTax(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:3px" v-html="icon('trash',12)"></button></td>
               </tr>
-              <tr v-else v-for="row in filtered" :key="row.name"
-                class="zb-inv-row"
-                @click="selectedName=row.name">
-                <td class="zb-td zb-td-check" @click.stop><input type="checkbox"/></td>
-                <td class="zb-td zb-td-date">{{fmtDate(row.posting_date)}}</td>
-                <td class="zb-td">
-                  <span class="zb-inv-link">{{row.name}}</span>
-                </td>
-                <td class="zb-td zb-td-muted">{{row.invoice_number||'—'}}</td>
-                <td class="zb-td zb-td-customer">{{row.customer_name||row.customer}}</td>
-                <td class="zb-td">
-                  <span class="zb-status-chip" :class="statusChipCls(row)">{{statusLabel(row)}}</span>
-                </td>
-                <td class="zb-td zb-td-date" :style="{color:flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date()?'#e03131':'inherit'}">
-                  {{fmtDate(row.due_date)}}
-                </td>
-                <td class="zb-td ta-r zb-td-mono">{{fmt(row.grand_total)}}</td>
-                <td class="zb-td ta-r zb-td-mono" :style="{color:flt(row.outstanding_amount)>0?'#1a1d23':'#2f9e44'}">
-                  {{fmt(row.outstanding_amount)}}
-                </td>
-              </tr>
-            </template>
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+          <button class="zb-add-row" @click="addTax">+ Add Tax</button>
+          <div class="zb-edit-totals">
+            <div class="zb-edit-total-row"><span>Net Total</span><span class="mono">{{fmt(netTotal)}}</span></div>
+            <div class="zb-edit-total-row"><span>Tax</span><span class="mono">{{fmt(totalTax)}}</span></div>
+            <div class="zb-edit-total-row zb-edit-grand"><span>Grand Total</span><span class="mono">{{fmt(grandTotal)}}</span></div>
+          </div>
+          <div class="zb-form-field" style="margin-top:14px">
+            <label class="zb-form-label">Notes</label>
+            <textarea v-model="form.notes" class="zb-form-input" rows="3" placeholder="Payment terms, remarks…" style="resize:vertical"></textarea>
+          </div>
+        </div>
       </div>
-    </div>
+
+      <!-- Right panel -->
+      <div class="zb-right-panel no-print">
+        <div class="zb-panel-card">
+          <div class="zb-panel-title">Payment Status</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status==='Submitted'?'Sent':inv.status||'Draft'}}</span>
+            <span style="font-size:11px;color:var(--text-3)">{{paidPct}}% paid</span>
+          </div>
+          <div style="height:6px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:12px">
+            <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'#2f9e44':'#2563EB',borderRadius:'4px',transition:'width .5s'}"></div>
+          </div>
+          <div class="zb-panel-row"><span>Grand Total</span><span class="mono fw-700">{{fmt(inv.grand_total)}}</span></div>
+          <div class="zb-panel-row"><span>Paid</span><span class="mono" style="color:#2f9e44;font-weight:600">{{fmt(paidAmt)}}</span></div>
+          <div class="zb-panel-row" style="font-weight:700"><span>Outstanding</span>
+            <span class="mono" :style="{color:flt(inv.outstanding_amount)>0?'#e67700':'#2f9e44'}">{{fmt(inv.outstanding_amount)}}</span>
+          </div>
+        </div>
+        <div class="zb-panel-card">
+          <div class="zb-panel-title">Invoice Info</div>
+          <div class="zb-panel-row"><span>Invoice #</span><span class="mono" style="color:#2563EB;font-weight:700;font-size:11px">{{inv.name}}</span></div>
+          <div class="zb-panel-row"><span>Date</span><span>{{fmtDate(inv.posting_date)}}</span></div>
+          <div class="zb-panel-row"><span>Due</span>
+            <span :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</span>
+          </div>
+          <div class="zb-panel-row" v-if="inv.currency"><span>Currency</span><span>{{inv.currency}}</span></div>
+        </div>
+        <div class="zb-panel-card">
+          <div class="zb-panel-title">Customer</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+            <div style="width:34px;height:34px;border-radius:8px;background:#EEF2FF;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:#2563EB;flex-shrink:0">
+              {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
+            </div>
+            <div>
+              <div style="font-weight:700;font-size:13px">{{inv.customer_name||inv.customer}}</div>
+              <div style="font-size:11px;color:var(--text-3)">{{inv.customer}}</div>
+            </div>
+          </div>
+          <div class="zb-panel-row" v-if="inv.debit_to"><span>AR Account</span><span style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.debit_to">{{inv.debit_to}}</span></div>
+          <div class="zb-panel-row" v-if="inv.income_account"><span>Income Acct</span><span style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.income_account">{{inv.income_account}}</span></div>
+        </div>
+      </div>
+
+    </div><!-- /flex row -->
+  </div><!-- /detail area -->
+</div>
+`});
 
     <!-- RIGHT DETAIL AREA (when invoice selected) -->
     <div class="zb-detail-area" v-if="selectedName">
@@ -1669,80 +1947,7 @@ const Invoices=defineComponent({name:"Invoices",
             <table class="zb-items-table" v-if="form.taxes.length">
               <thead><tr><th>Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Amount</th><th></th></tr></thead>
               <tbody>
-                <tr v-for="(tax,i) in form.taxes" :key="i">
-                  <td><input v-model="tax.tax_type" class="zb-cell-input" placeholder="SGST"/></td>
-                  <td><input v-model="tax.description" class="zb-cell-input" placeholder="SGST 9%"/></td>
-                  <td><input v-model.number="tax.rate" type="number" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
-                  <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:6px;font-size:13px">{{fmt(tax.tax_amount)}}</td>
-                  <td><button @click="removeTax(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:3px" v-html="icon('trash',12)"></button></td>
-                </tr>
-              </tbody>
-            </table>
-            <button class="zb-add-row" @click="addTax">+ Add Tax</button>
-            <div class="zb-edit-totals">
-              <div class="zb-edit-total-row"><span>Net Total</span><span class="mono">{{fmt(netTotal)}}</span></div>
-              <div class="zb-edit-total-row"><span>Tax</span><span class="mono">{{fmt(totalTax)}}</span></div>
-              <div class="zb-edit-total-row zb-edit-grand"><span>Grand Total</span><span class="mono">{{fmt(grandTotal)}}</span></div>
-            </div>
-            <div class="zb-form-field" style="margin-top:14px">
-              <label class="zb-form-label">Notes</label>
-              <textarea v-model="form.notes" class="zb-form-input" rows="3" placeholder="Payment terms, remarks..." style="resize:vertical"></textarea>
-            </div>
-          </div>
-        </div>
 
-        <!-- Right panel -->
-        <div class="zb-right-panel no-print">
-          <div class="zb-panel-card">
-            <div class="zb-panel-title">Payment Status</div>
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-              <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
-              <span style="font-size:11px;color:var(--text-3)">{{paidPct}}% paid</span>
-            </div>
-            <div style="height:6px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:12px">
-              <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'var(--green-text)':' var(--accent)',borderRadius:'4px',transition:'width .5s'}"></div>
-            </div>
-            <div class="zb-panel-row"><span>Grand Total</span><span class="mono fw-700">{{fmt(inv.grand_total)}}</span></div>
-            <div class="zb-panel-row"><span>Paid</span><span class="mono" style="color:var(--green-text);font-weight:600">{{fmt(paidAmt)}}</span></div>
-            <div class="zb-panel-row" style="font-weight:700">
-              <span>Outstanding</span>
-              <span class="mono" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':' var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</span>
-            </div>
-          </div>
-          <div class="zb-panel-card">
-            <div class="zb-panel-title">Invoice Info</div>
-            <div class="zb-panel-row"><span>Invoice #</span><span class="mono" style="color:var(--accent);font-weight:700;font-size:11px">{{inv.name}}</span></div>
-            <div class="zb-panel-row"><span>Date</span><span>{{fmtDate(inv.posting_date)}}</span></div>
-            <div class="zb-panel-row"><span>Due</span><span :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'var(--red-text)':'inherit'}">{{fmtDate(inv.due_date)}}</span></div>
-            <div class="zb-panel-row" v-if="inv.currency"><span>Currency</span><span>{{inv.currency}}</span></div>
-          </div>
-          <div class="zb-panel-card">
-            <div class="zb-panel-title">Customer</div>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)">
-              <div style="width:34px;height:34px;border-radius:8px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;color:var(--accent)">
-                {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
-              </div>
-              <div>
-                <div style="font-weight:700;font-size:13px">{{inv.customer_name||inv.customer}}</div>
-                <div style="font-size:11px;color:var(--text-3)">{{inv.customer}}</div>
-              </div>
-            </div>
-            <div class="zb-panel-row" v-if="inv.debit_to"><span>AR Account</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.debit_to">{{inv.debit_to}}</span></div>
-            <div class="zb-panel-row" v-if="inv.income_account"><span>Income Acct</span><span style="max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.income_account">{{inv.income_account}}</span></div>
-          </div>
-        </div>
-
-      </div><!-- /flex row -->
-    </div><!-- /detail area -->
-
-    <!-- Empty state -->
-    <div v-if="!selectedName" class="zb-no-selection no-print" style="display:none"></div>
-
-  </div><!-- /zb-body -->
-
-  <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
-</div>
-`});
 
 const Purchases=defineComponent({name:"Purchases",
   components:{PurchaseModal},
@@ -2187,6 +2392,7 @@ const modalCSS=`
 .zb-list-draft{background:#f3f4f6;color:#6b7280}
 .zb-list-unpaid{background:#fef3c7;color:#92400e}
 .zb-list-overdue{background:#fee2e2;color:#991b1b}
+.zb-list-partpaid{background:#dbeafe;color:#1e40af}
 .zb-list-paid{background:#d1fae5;color:#065f46}
 .zb-list-empty{padding:40px 20px;text-align:center}
 .zb-icon-btn{width:28px;height:28px;border-radius:5px;border:1px solid #e8eaed;background:#fff;display:inline-flex;align-items:center;justify-content:center;cursor:pointer;color:#555;transition:.1s}
@@ -2282,13 +2488,14 @@ if(!document.getElementById("books-modal-css")){
 const router=createRouter({
   history:createWebHashHistory(),
   routes:[
-    {path:"/",        component:Dashboard,name:"dashboard"},
-    {path:"/invoices",component:Invoices, name:"invoices"},
-    {path:"/purchases",component:Purchases,name:"purchases"},
-    {path:"/payments", component:Payments, name:"payments"},
-    {path:"/banking",  component:Banking,  name:"banking"},
-    {path:"/accounts", component:Accounts, name:"accounts"},
-    {path:"/reports",  component:Reports,  name:"reports"},
+    {path:"/",        component:Dashboard,     name:"dashboard"},
+    {path:"/invoices",component:Invoices,      name:"invoices"},
+    {path:"/invoices/:name",component:InvoiceDetail,name:"invoice-detail"},
+    {path:"/purchases",component:Purchases,   name:"purchases"},
+    {path:"/payments", component:Payments,    name:"payments"},
+    {path:"/banking",  component:Banking,     name:"banking"},
+    {path:"/accounts", component:Accounts,   name:"accounts"},
+    {path:"/reports",  component:Reports,    name:"reports"},
   ]
 });
 
