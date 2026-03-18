@@ -10,6 +10,9 @@ const{createRouter,createWebHashHistory,useRoute,useRouter}=VueRouter;
 
 /* ─── Config ─────────────────────────────────────────────────── */
 // Frappe v15 new-doc URL pattern
+function openDoc(url){
+  if(url&&typeof url==='string') openDoc(url);
+}
 function newDocUrl(doctype){
   return "/app/"+doctype.toLowerCase().replace(/ /g,"-")+"/new";
 }
@@ -87,7 +90,8 @@ async function apiLinkValues(doctype,txt,filters){
 async function resolveCompany(){
   if(window.__booksCompany)return window.__booksCompany;
   try{
-    const c=(await api("zoho_books_clone.api.books_data.get_company",{}))||"";
+    const rows=await apiList("Company",{fields:["name"],limit:1,order:"creation asc"});
+    const c=rows?.[0]?.name||"";
     window.__booksCompany=c;
     if(window.frappe?.boot?.sysdefaults)window.frappe.boot.sysdefaults.company=c;
     return c;
@@ -203,21 +207,29 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       form.company=c;
       // Load AR accounts
       try{
-        accounts_ar.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Receivable"});
+        accounts_ar.value=await apiList("Account",{
+          fields:["name"],
+          filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],
+          limit:20
+        });
         if(accounts_ar.value.length&&!form.debit_to)form.debit_to=accounts_ar.value[0].name;
       }catch{}
       // Load Income accounts
       try{
-        accounts_income.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Income"});
+        accounts_income.value=await apiList("Account",{
+          fields:["name"],
+          filters:[["account_type","=","Income"],["company","=",c],["is_group","=",0]],
+          limit:20
+        });
         if(accounts_income.value.length&&!form.income_account)form.income_account=accounts_income.value[0].name;
       }catch{}
       // Load customers
       try{
-        customers.value=await api("zoho_books_clone.api.books_data.get_customers",{});
+        customers.value=await apiList("Customer",{fields:["name","customer_name"],limit:50,order:"customer_name asc"});
       }catch{}
       // Load tax templates
       try{
-        taxTemplates.value=await api("zoho_books_clone.api.books_data.get_tax_templates",{});
+        taxTemplates.value=await apiList("Tax Template",{fields:["name","template_name"],limit:20});
       }catch{}
     }
 
@@ -226,7 +238,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 
     async function applyTaxTemplate(tplName){
       try{
-        const tpl=await api("zoho_books_clone.api.books_data.get_tax_template",{name:tplName});
+        const tpl=await apiGet("Tax Template",tplName);
         form.taxes=[];
         (tpl.taxes||[]).forEach(t=>{
           form.taxes.push({
@@ -288,13 +300,13 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
         emit("saved",saved.name);
         emit("close");
         // Navigate to the saved doc in Frappe desk
-        setTimeout(()=>window.open(docUrl(props.doctype,saved.name),"_blank"),300);
+        setTimeout(()=>openDoc(docUrl(props.doctype,saved.name)),300);
       }catch(e){
         toast(e.message||"Could not save invoice","error");
       }finally{saving.value=false;}
     }
 
-    return{form,saving,customers,accounts_ar,accounts_income,taxTemplates,isSI,
+    return{openDoc,docUrl,newDocUrl,form,saving,customers,accounts_ar,accounts_income,taxTemplates,isSI,
            recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast};
   },
   template:`
@@ -564,13 +576,13 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{suppliers.value=await api("zoho_books_clone.api.books_data.get_suppliers",{});}catch{}
+      try{suppliers.value=await apiList("Supplier",{fields:["name","supplier_name"],limit:50,order:"supplier_name asc"});}catch{}
       try{
-        accounts_ap.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Payable"});
+        accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});
         if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
       }catch{}
       try{
-        accounts_exp.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Expense"});
+        accounts_exp.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Expense"],["company","=",c],["is_group","=",0]],limit:20});
         if(accounts_exp.value.length&&!form.expense_account)form.expense_account=accounts_exp.value[0].name;
       }catch{}
     }
@@ -613,12 +625,12 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
         if(andSubmit){await apiSubmit("Purchase Invoice",saved.name);toast("Bill "+saved.name+" submitted!");}
         else{toast("Bill "+saved.name+" saved as Draft");}
         emit("saved",saved.name);emit("close");
-        setTimeout(()=>window.open(docUrl("Purchase Invoice",saved.name),"_blank"),300);
+        setTimeout(()=>openDoc(docUrl("Purchase Invoice",saved.name)),300);
       }catch(e){toast(e.message||"Could not save bill","error");}
       finally{saving.value=false;}
     }
 
-    return{form,saving,suppliers,accounts_ap,accounts_exp,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
+    return{openDoc,docUrl,newDocUrl,form,saving,suppliers,accounts_ap,accounts_exp,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
   },
   template:`
 <teleport to="body">
@@ -735,11 +747,11 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{accounts_bank.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_types:"Bank,Cash"});}catch{}
-      try{accounts_ar.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Receivable"});}catch{}
-      try{accounts_ap.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Payable"});}catch{}
-      try{customers.value=await api("zoho_books_clone.api.books_data.get_customers",{});}catch{}
-      try{suppliers.value=await api("zoho_books_clone.api.books_data.get_suppliers",{});}catch{}
+      try{accounts_bank.value=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      try{accounts_ar.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      try{accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      try{customers.value=await apiList("Customer",{fields:["name","customer_name"],limit:50,order:"customer_name asc"});}catch{}
+      try{suppliers.value=await apiList("Supplier",{fields:["name","supplier_name"],limit:50,order:"supplier_name asc"});}catch{}
       _autoFillAccounts();
     }
 
@@ -825,12 +837,12 @@ const PaymentModal=defineComponent({name:"PaymentModal",
         }
         toast("Payment "+peName+" recorded!");
         emit("saved",peName);emit("close");
-        setTimeout(()=>window.open(docUrl("Payment Entry",peName),"_blank"),300);
+        setTimeout(()=>openDoc(docUrl("Payment Entry",peName)),300);
       }catch(e){toast(e.message||"Could not save payment","error");}
       finally{saving.value=false;}
     }
 
-    return{form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,onParty,save,fmt,flt,icon};
+    return{openDoc,docUrl,newDocUrl,form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,onParty,save,fmt,flt,icon};
   },
   template:`
 <teleport to="body">
@@ -953,7 +965,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,flt};
+    return{openDoc,docUrl,newDocUrl,kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -979,7 +991,7 @@ const Dashboard=defineComponent({name:"Dashboard",
       <div v-if="loading" style="padding:20px"><div v-for="n in 5" :key="n" class="b-shimmer" style="height:14px;margin-bottom:16px"></div></div>
       <table v-else class="b-table"><thead><tr><th>Customer</th><th>Invoice</th><th>Date</th><th>Status</th></tr></thead>
         <tbody>
-          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="$open(docUrl('Sales Invoice',inv.name))">
+          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="openDoc(docUrl('Sales Invoice',inv.name))">
             <td class="fw-600">{{inv.customer_name||inv.customer}}</td>
             <td class="mono c-accent" style="font-size:12px">{{inv.name}}</td>
             <td class="c-muted" style="font-size:12px">{{fmtShort(inv.due_date)}}</td>
@@ -1040,10 +1052,10 @@ const Invoices=defineComponent({name:"Invoices",
       if(search.value)r=r.filter(i=>(i.name+i.customer+i.customer_name).toLowerCase().includes(search.value.toLowerCase()));
       return r;
     });
-    function pillBadge(k){return{Draft:"b-badge-muted",Submitted:"b-badge-amber",Overdue:"b-badge-red",Paid:"b-badge-green"}[k]||"b-badge-muted";}
+    function pillBadge(k){return{openDoc,docUrl,newDocUrl,Draft:"b-badge-muted",Submitted:"b-badge-amber",Overdue:"b-badge-red",Paid:"b-badge-green"}[k]||"b-badge-muted";}
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_sales_invoices",{});}
+      try{list.value=await apiList("Sales Invoice",{fields:["name","customer","customer_name","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1074,14 +1086,14 @@ const Invoices=defineComponent({name:"Invoices",
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
           <tr v-for="inv in filtered" :key="inv.name" class="clickable">
-            <td @click="$open(docUrl('Sales Invoice',inv.name))"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600" @click="$open(docUrl('Sales Invoice',inv.name))">{{inv.customer_name||inv.customer}}</td>
-            <td class="c-muted" style="font-size:12.5px" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.posting_date)}}</td>
-            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmt(inv.outstanding_amount)}}</td>
-            <td @click="$open(docUrl('Sales Invoice',inv.name))"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="$open(docUrl('Sales Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
+            <td @click="openDoc(docUrl('Sales Invoice',inv.name))"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
+            <td class="fw-600" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{inv.customer_name||inv.customer}}</td>
+            <td class="c-muted" style="font-size:12.5px" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.posting_date)}}</td>
+            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.due_date)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmt(inv.grand_total)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="openDoc(docUrl('Sales Invoice',inv.name))">{{fmt(inv.outstanding_amount)}}</td>
+            <td @click="openDoc(docUrl('Sales Invoice',inv.name))"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
+            <td><button @click.stop="openDoc(docUrl('Sales Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No invoices found</td></tr>
         </template>
@@ -1096,11 +1108,11 @@ const Purchases=defineComponent({name:"Purchases",
     const list=ref([]),loading=ref(true),showNew=ref(false);
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_purchase_invoices",{});}
+      try{list.value=await apiList("Purchase Invoice",{fields:["name","supplier","supplier_name","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt};
+    return{openDoc,docUrl,newDocUrl,list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1118,7 +1130,7 @@ const Purchases=defineComponent({name:"Purchases",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="$open(docUrl('Purchase Invoice',inv.name))">
+          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="openDoc(docUrl('Purchase Invoice',inv.name))">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
             <td class="fw-600">{{inv.supplier_name||inv.supplier}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.posting_date)}}</td>
@@ -1126,7 +1138,7 @@ const Purchases=defineComponent({name:"Purchases",
             <td class="ta-r mono fw-600" style="font-size:13px">{{fmt(inv.grand_total)}}</td>
             <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'">{{fmt(inv.outstanding_amount)}}</td>
             <td><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="$open(docUrl('Purchase Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="openDoc(docUrl('Purchase Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!list.length"><td colspan="8" class="b-empty">No bills found</td></tr>
         </template>
@@ -1143,11 +1155,11 @@ const Payments=defineComponent({name:"Payments",
     const filtered=computed(()=>active.value==="all"?list.value:list.value.filter(p=>p.payment_type===active.value));
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_payment_entries",{});}
+      try{list.value=await apiList("Payment Entry",{fields:["name","party","party_type","paid_amount","payment_type","payment_date","mode_of_payment"],order:"payment_date desc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge};
+    return{openDoc,docUrl,newDocUrl,list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge};
   },
   template:`
 <div class="b-page">
@@ -1165,14 +1177,14 @@ const Payments=defineComponent({name:"Payments",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="$open(docUrl('Payment Entry',p.name))">
+          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="openDoc(docUrl('Payment Entry',p.name))">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{p.name}}</span></td>
             <td class="fw-600">{{p.party}}</td>
             <td class="c-muted">{{p.mode_of_payment||'—'}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(p.payment_date)}}</td>
             <td><span class="b-badge" :class="statusBadge(p.payment_type)">{{p.payment_type}}</span></td>
             <td class="ta-r mono fw-700" :class="p.payment_type==='Receive'?'c-green':'c-red'">{{fmt(p.paid_amount)}}</td>
-            <td><button @click.stop="$open(docUrl('Payment Entry',p.name))" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="openDoc(docUrl('Payment Entry',p.name))" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="7" class="b-empty">No payments found</td></tr>
         </template>
@@ -1187,11 +1199,11 @@ const Banking=defineComponent({name:"Banking",
     async function loadCash(){cashLoad.value=true;try{cash.value=await api("zoho_books_clone.api.dashboard.get_cash_position");}finally{cashLoad.value=false;}}
     async function pickAcct(a){
       sel.value=a.name;txnLoad.value=true;
-      try{txns.value=await api("zoho_books_clone.api.books_data.get_bank_transactions",{bank_account:a.name});}
+      try{txns.value=await apiList("Bank Transaction",{fields:["name","date","description","debit","credit","balance","reference_number","status"],filters:[["bank_account","=",a.name]],order:"date desc",limit:30});}
       finally{txnLoad.value=false;}
     }
     onMounted(loadCash);
-    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
+    return{openDoc,docUrl,newDocUrl,cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
   },
   template:`
 <div class="b-page">
@@ -1245,11 +1257,11 @@ const Accounts=defineComponent({name:"Accounts",
     const TC={Asset:"b-badge-blue",Liability:"b-badge-red",Equity:"b-badge-amber",Income:"b-badge-green",Expense:"b-badge-red",Bank:"b-badge-blue",Cash:"b-badge-green",Receivable:"b-badge-blue",Payable:"b-badge-red",Tax:"b-badge-amber"};
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_accounts_full",{});}
+      try{list.value=await apiList("Account",{fields:["name","account_name","account_type","parent_account","is_group","balance"],limit:100,order:"account_type asc, account_name asc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,TC,load,fmt,icon,flt};
+    return{openDoc,docUrl,newDocUrl,list,loading,active,types,filtered,TC,load,fmt,icon,flt};
   },
   template:`
 <div class="b-page">
@@ -1257,7 +1269,7 @@ const Accounts=defineComponent({name:"Accounts",
     <div class="b-filter-row"><button v-for="t in types" :key="t" class="b-pill" :class="{active:active===t}" @click="active=t">{{t}}</button></div>
     <div style="display:flex;gap:8px">
       <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="b-btn b-btn-primary" @click="$open(newDocUrl('Account'))"><span v-html="icon('plus',13)"></span> New Account</button>
+      <button class="b-btn b-btn-primary" @click="openDoc(newDocUrl('Account'))"><span v-html="icon('plus',13)"></span> New Account</button>
     </div>
   </div>
   <div class="b-card" style="padding:0;overflow:hidden">
@@ -1266,7 +1278,7 @@ const Accounts=defineComponent({name:"Accounts",
       <tbody>
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="4" style="padding:14px"><div class="b-shimmer" style="height:12px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="$open(docUrl('Account',a.name))">
+          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="openDoc(docUrl('Account',a.name))">
             <td><div class="fw-700">{{a.account_name}}</div><div class="mono c-muted" style="font-size:11px">{{a.is_group?'Group':'Ledger'}}</div></td>
             <td><span class="b-badge" :class="TC[a.account_type]||'b-badge-muted'">{{a.account_type}}</span></td>
             <td class="c-muted" style="font-size:13px">{{a.parent_account||'—'}}</td>
@@ -1298,7 +1310,7 @@ const Reports=defineComponent({name:"Reports",
       }catch(e){toast(e.message,"error");}
       finally{running.value=false;}
     }
-    return{from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon};
+    return{openDoc,docUrl,newDocUrl,from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon};
   },
   template:`
 <div class="b-page">
@@ -1370,7 +1382,7 @@ const App=defineComponent({name:"BooksApp",
     const initials=computed(()=>{const n=window.frappe?.session?.user_fullname||"Admin";return n.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();});
     const fullname=computed(()=>window.frappe?.session?.user_fullname||"Administrator");
     const title=computed(()=>TITLES[route.name]||"Books");
-    return{cname,initials,fullname,title,NAV,icon};
+    return{openDoc,docUrl,newDocUrl,cname,initials,fullname,title,NAV,icon};
   },
   template:`
 <div id="books-root">
@@ -1451,12 +1463,8 @@ waitReady(()=>{
   // Expose helpers to templates
   window.docUrl=docUrl;
   window.newDocUrl=newDocUrl;
-  const app=createApp(App);
-  app.config.globalProperties.$open=(url)=>window.open(url,"_blank");
-  app.config.globalProperties.docUrl=docUrl;
-  app.config.globalProperties.newDocUrl=newDocUrl;
-  app.config.globalProperties.window=window;
-  app.use(router).mount("#books-app");
+  window.openDoc=openDoc;
+  createApp(App).use(router).mount("#books-app");
 });
 
 })();

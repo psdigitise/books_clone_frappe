@@ -8,6 +8,11 @@ if(typeof Vue==="undefined"||typeof VueRouter==="undefined"){
 const{createApp,ref,computed,onMounted,reactive,watch,defineComponent}=Vue;
 const{createRouter,createWebHashHistory,useRoute,useRouter}=VueRouter;
 
+/* Expose URL helpers globally immediately so templates can use them */
+window.docUrl=function(dt,name){return"/app/"+dt.toLowerCase().replace(/ /g,"-")+"/"+encodeURIComponent(name);};
+window.newDocUrl=function(dt){return"/app/"+dt.toLowerCase().replace(/ /g,"-")+"/new";};
+window.flt=function(v){return parseFloat(v)||0;};
+
 /* ─── Config ─────────────────────────────────────────────────── */
 // Frappe v15 new-doc URL pattern
 function newDocUrl(doctype){
@@ -41,9 +46,11 @@ function today(){return new Date().toISOString().slice(0,10);}
 
 /* ─── API ────────────────────────────────────────────────────── */
 async function api(method,args){
+  // Always get freshest CSRF token
+  const csrfToken=window.frappe?.csrf_token||getCsrfFromCookie()||"";
   const r=await fetch("/api/method/"+method,{
     method:"POST",credentials:"same-origin",
-    headers:{"Content-Type":"application/json","X-Frappe-CSRF-Token":csrf(),"Accept":"application/json"},
+    headers:{"Content-Type":"application/json","X-Frappe-CSRF-Token":csrfToken,"Accept":"application/json"},
     body:JSON.stringify(args||{})
   });
   const json=await r.json();
@@ -87,11 +94,15 @@ async function apiLinkValues(doctype,txt,filters){
 async function resolveCompany(){
   if(window.__booksCompany)return window.__booksCompany;
   try{
-    const c=(await api("zoho_books_clone.api.books_data.get_company",{}))||"";
+    const r=await api("frappe.client.get_value",{
+      doctype:"Books Settings",filters:{name:"Books Settings"},
+      fieldname:["default_company"]
+    });
+    const c=r?.default_company||"";
     window.__booksCompany=c;
     if(window.frappe?.boot?.sysdefaults)window.frappe.boot.sysdefaults.company=c;
     return c;
-  }catch{return"";}
+  }catch{return window.__booksCompany||"";}
 }
 
 /* ─── Toast ──────────────────────────────────────────────────── */
@@ -191,10 +202,10 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       try{
         const r=await api("frappe.client.get_value",{
           doctype:"Customer",filters:{name:form.customer},
-          fieldname:["customer_name","default_currency"]
+          fieldname:["default_currency"]
         });
-        form.customer_name=r.customer_name||form.customer;
-        if(r.default_currency)form.currency=r.default_currency;
+        form.customer_name=form.customer; // name IS the display name for custom Customer
+        if(r?.default_currency)form.currency=r.default_currency;
       }catch{}
     }
 
@@ -203,21 +214,29 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       form.company=c;
       // Load AR accounts
       try{
-        accounts_ar.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Receivable"});
+        accounts_ar.value=await apiList("Account",{
+          fields:["name"],
+          filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],
+          limit:20
+        });
         if(accounts_ar.value.length&&!form.debit_to)form.debit_to=accounts_ar.value[0].name;
       }catch{}
       // Load Income accounts
       try{
-        accounts_income.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Income"});
+        accounts_income.value=await apiList("Account",{
+          fields:["name"],
+          filters:[["account_type","=","Income"],["company","=",c],["is_group","=",0]],
+          limit:20
+        });
         if(accounts_income.value.length&&!form.income_account)form.income_account=accounts_income.value[0].name;
       }catch{}
       // Load customers
       try{
-        customers.value=await api("zoho_books_clone.api.books_data.get_customers",{});
+        customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});
       }catch{}
       // Load tax templates
       try{
-        taxTemplates.value=await api("zoho_books_clone.api.books_data.get_tax_templates",{});
+        taxTemplates.value=await apiList("Tax Template",{fields:["name","template_name"],limit:20});
       }catch{}
     }
 
@@ -226,7 +245,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 
     async function applyTaxTemplate(tplName){
       try{
-        const tpl=await api("zoho_books_clone.api.books_data.get_tax_template",{name:tplName});
+        const tpl=await apiGet("Tax Template",tplName);
         form.taxes=[];
         (tpl.taxes||[]).forEach(t=>{
           form.taxes.push({
@@ -251,7 +270,6 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
         doctype:props.doctype,
         naming_series:form.naming_series,
         customer:form.customer,
-        customer_name:form.customer_name,
         posting_date:form.posting_date,
         due_date:form.due_date||form.posting_date,
         company:form.company,
@@ -294,8 +312,12 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
       }finally{saving.value=false;}
     }
 
+    function onPostingDateChange(){
+      if(!form.due_date||form.due_date<form.posting_date)
+        form.due_date=form.posting_date;
+    }
     return{form,saving,customers,accounts_ar,accounts_income,taxTemplates,isSI,
-           recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast};
+           recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast,onPostingDateChange};
   },
   template:`
 <teleport to="body">
@@ -325,13 +347,13 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
           <label class="mi-label">Customer <span style="color:#C92A2A">*</span></label>
           <select v-model="form.customer" @change="onCustomer" class="mi-input">
             <option value="">— Select Customer —</option>
-            <option v-for="c in customers" :key="c.name" :value="c.name">{{c.customer_name||c.name}}</option>
+            <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
           </select>
         </div>
         <div>
           <label class="mi-label">Invoice Date <span style="color:#C92A2A">*</span></label>
           <input v-model="form.posting_date" type="date" class="mi-input"
-            @change="if(!form.due_date||form.due_date<form.posting_date)form.due_date=form.posting_date"/>
+            @change="onPostingDateChange"/>
         </div>
         <div>
           <label class="mi-label">Due Date</label>
@@ -564,13 +586,13 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{suppliers.value=await api("zoho_books_clone.api.books_data.get_suppliers",{});}catch{}
+      try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       try{
-        accounts_ap.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Payable"});
+        accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});
         if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
       }catch{}
       try{
-        accounts_exp.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Expense"});
+        accounts_exp.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Expense"],["company","=",c],["is_group","=",0]],limit:20});
         if(accounts_exp.value.length&&!form.expense_account)form.expense_account=accounts_exp.value[0].name;
       }catch{}
     }
@@ -581,8 +603,8 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
     async function onSupplier(){
       if(!form.supplier)return;
       try{
-        const r=await api("frappe.client.get_value",{doctype:"Supplier",filters:{name:form.supplier},fieldname:["supplier_name","default_currency"]});
-        form.supplier_name=r.supplier_name||form.supplier;
+        const r=await api("frappe.client.get_value",{doctype:"Supplier",filters:{name:form.supplier},fieldname:["default_currency"]});
+        form.supplier_name=form.supplier;
         if(r.default_currency)form.currency=r.default_currency;
       }catch{}
     }
@@ -596,7 +618,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
       const doc={
         doctype:"Purchase Invoice",
         naming_series:form.naming_series,
-        supplier:form.supplier,supplier_name:form.supplier_name,
+        supplier:form.supplier,
         posting_date:form.posting_date,due_date:form.due_date||form.posting_date,
         bill_no:form.bill_no,
         company:form.company,currency:form.currency||"INR",
@@ -641,7 +663,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
           <label class="mi-label">Supplier <span style="color:#C92A2A">*</span></label>
           <select v-model="form.supplier" @change="onSupplier" class="mi-input">
             <option value="">— Select Supplier —</option>
-            <option v-for="s in suppliers" :key="s.name" :value="s.name">{{s.supplier_name||s.name}}</option>
+            <option v-for="s in suppliers" :key="s.name" :value="s.name">{{s.name}}</option>
           </select>
         </div>
         <div>
@@ -735,11 +757,11 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{accounts_bank.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_types:"Bank,Cash"});}catch{}
-      try{accounts_ar.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Receivable"});}catch{}
-      try{accounts_ap.value=await api("zoho_books_clone.api.books_data.get_accounts",{company:c,account_type:"Payable"});}catch{}
-      try{customers.value=await api("zoho_books_clone.api.books_data.get_customers",{});}catch{}
-      try{suppliers.value=await api("zoho_books_clone.api.books_data.get_suppliers",{});}catch{}
+      try{accounts_bank.value=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      try{accounts_ar.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      try{accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
+      try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       _autoFillAccounts();
     }
 
@@ -768,9 +790,9 @@ const PaymentModal=defineComponent({name:"PaymentModal",
     async function onParty(){
       if(!form.party)return;
       try{
-        const nameField=form.party_type==="Customer"?"customer_name":"supplier_name";
+        const nameField="name"; // custom doctypes use name as display name
         const r=await api("frappe.client.get_value",{doctype:form.party_type,filters:{name:form.party},fieldname:[nameField]});
-        form.party_name=r[nameField]||form.party;
+        form.party_name=form.party; // name is display name
       }catch{}
       // Load outstanding invoices
       try{
@@ -860,7 +882,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
           <label class="mi-label">{{form.party_type}} <span style="color:#C92A2A">*</span></label>
           <select v-model="form.party" @change="onParty" class="mi-input">
             <option value="">— Select —</option>
-            <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.customer_name||p.supplier_name||p.name}}</option>
+            <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.name}}</option>
           </select>
         </div>
         <div>
@@ -943,17 +965,25 @@ const Dashboard=defineComponent({name:"Dashboard",
       loading.value=true;
       const company=await resolveCompany();
       try{
-        const[d,k,a]=await Promise.all([
-          api("zoho_books_clone.api.dashboard.get_home_dashboard",{company}),
-          api("zoho_books_clone.db.aggregates.get_dashboard_kpis",{company}),
-          api("zoho_books_clone.db.aggregates.get_aging_buckets",{company}),
-        ]);
-        dash.value=d||{};kpis.value=k||{};aging.value=a||{};
+        // get_home_dashboard returns everything in one whitelisted call
+        const d=await api("zoho_books_clone.api.dashboard.get_home_dashboard",{company});
+        dash.value=d||{};
+        // KPIs are embedded in the dashboard response
+        kpis.value={
+          month_revenue:     d?.month_revenue     || 0,
+          month_collected:   d?.month_collected   || 0,
+          month_outstanding: d?.month_outstanding || 0,
+          net_profit_mtd:    d?.net_profit_mtd    || 0,
+          total_assets:      d?.total_assets      || 0,
+          overdue_count:     d?.overdue_count      || (d?.overdue_invoices?.length || 0),
+        };
+        // Aging buckets from the dashboard response
+        aging.value=d?.aging_buckets || {};
       }catch(e){console.error("[Dashboard]",e);}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,flt};
+    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon};
   },
   template:`
 <div class="b-page">
@@ -979,8 +1009,8 @@ const Dashboard=defineComponent({name:"Dashboard",
       <div v-if="loading" style="padding:20px"><div v-for="n in 5" :key="n" class="b-shimmer" style="height:14px;margin-bottom:16px"></div></div>
       <table v-else class="b-table"><thead><tr><th>Customer</th><th>Invoice</th><th>Date</th><th>Status</th></tr></thead>
         <tbody>
-          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="$open(docUrl('Sales Invoice',inv.name))">
-            <td class="fw-600">{{inv.customer_name||inv.customer}}</td>
+          <tr v-for="inv in (dash?.overdue_invoices?.slice(0,6)||[])" :key="inv.name" class="clickable" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">
+            <td class="fw-600">{{inv.customer}}</td>
             <td class="mono c-accent" style="font-size:12px">{{inv.name}}</td>
             <td class="c-muted" style="font-size:12px">{{fmtShort(inv.due_date)}}</td>
             <td><span class="b-badge b-badge-red">Overdue</span></td>
@@ -1011,7 +1041,7 @@ const Dashboard=defineComponent({name:"Dashboard",
     <table v-else class="b-table"><thead><tr><th>Customer</th><th class="ta-r">Invoices</th><th class="ta-r">Revenue</th></tr></thead>
       <tbody>
         <tr v-for="c in (dash?.top_customers||[])" :key="c.customer">
-          <td class="fw-600">{{c.customer_name||c.customer}}</td>
+          <td class="fw-600">{{c.customer}}</td>
           <td class="ta-r mono">{{c.invoice_count}}</td>
           <td class="ta-r mono fw-700 c-green">{{fmt(c.total_revenue)}}</td>
         </tr>
@@ -1037,17 +1067,17 @@ const Invoices=defineComponent({name:"Invoices",
       let r=list.value;
       if(active.value==="Overdue")r=r.filter(isOverdue);
       else if(active.value!=="all")r=r.filter(i=>i.status===active.value);
-      if(search.value)r=r.filter(i=>(i.name+i.customer+i.customer_name).toLowerCase().includes(search.value.toLowerCase()));
+      if(search.value)r=r.filter(i=>(i.name+(i.customer||"")).toLowerCase().includes(search.value.toLowerCase()));
       return r;
     });
     function pillBadge(k){return{Draft:"b-badge-muted",Submitted:"b-badge-amber",Overdue:"b-badge-red",Paid:"b-badge-green"}[k]||"b-badge-muted";}
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_sales_invoices",{});}
+      try{list.value=await apiList("Sales Invoice",{fields:["name","customer","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon,flt};
+    return{list,loading,active,filters,counts,filtered,search,showNew,pillBadge,load,fmt,fmtDate,isOverdue,statusBadge,icon};
   },
   template:`
 <div class="b-page">
@@ -1074,14 +1104,14 @@ const Invoices=defineComponent({name:"Invoices",
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
           <tr v-for="inv in filtered" :key="inv.name" class="clickable">
-            <td @click="$open(docUrl('Sales Invoice',inv.name))"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600" @click="$open(docUrl('Sales Invoice',inv.name))">{{inv.customer_name||inv.customer}}</td>
-            <td class="c-muted" style="font-size:12.5px" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.posting_date)}}</td>
-            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="$open(docUrl('Sales Invoice',inv.name))">{{fmt(inv.outstanding_amount)}}</td>
-            <td @click="$open(docUrl('Sales Invoice',inv.name))"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="$open(docUrl('Sales Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
+            <td @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')"><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
+            <td class="fw-600" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{inv.customer}}</td>
+            <td class="c-muted" style="font-size:12.5px" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmtDate(inv.posting_date)}}</td>
+            <td style="font-size:12.5px" :class="isOverdue(inv)?'c-red fw-600':'c-muted'" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmtDate(inv.due_date)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmt(inv.grand_total)}}</td>
+            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'" @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')">{{fmt(inv.outstanding_amount)}}</td>
+            <td @click="window.open(docUrl('Sales Invoice',inv.name),'_blank')"><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
+            <td><button @click.stop="window.open(docUrl('Sales Invoice',inv.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#3B5BDB" v-html="icon('ext',14)" title="Open in Frappe"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No invoices found</td></tr>
         </template>
@@ -1096,7 +1126,7 @@ const Purchases=defineComponent({name:"Purchases",
     const list=ref([]),loading=ref(true),showNew=ref(false);
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_purchase_invoices",{});}
+      try{list.value=await apiList("Purchase Invoice",{fields:["name","supplier","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1118,15 +1148,15 @@ const Purchases=defineComponent({name:"Purchases",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="$open(docUrl('Purchase Invoice',inv.name))">
+          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="window.open(docUrl('Purchase Invoice',inv.name),'_blank')">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600">{{inv.supplier_name||inv.supplier}}</td>
+            <td class="fw-600">{{inv.supplier}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.posting_date)}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.due_date)}}</td>
             <td class="ta-r mono fw-600" style="font-size:13px">{{fmt(inv.grand_total)}}</td>
             <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'">{{fmt(inv.outstanding_amount)}}</td>
             <td><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="$open(docUrl('Purchase Invoice',inv.name))" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="window.open(docUrl('Purchase Invoice',inv.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!list.length"><td colspan="8" class="b-empty">No bills found</td></tr>
         </template>
@@ -1143,7 +1173,7 @@ const Payments=defineComponent({name:"Payments",
     const filtered=computed(()=>active.value==="all"?list.value:list.value.filter(p=>p.payment_type===active.value));
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_payment_entries",{});}
+      try{list.value=await apiList("Payment Entry",{fields:["name","party","party_type","paid_amount","payment_type","payment_date","mode_of_payment"],order:"payment_date desc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -1165,14 +1195,14 @@ const Payments=defineComponent({name:"Payments",
       <tbody>
         <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="$open(docUrl('Payment Entry',p.name))">
+          <tr v-for="p in filtered" :key="p.name" class="clickable" @click="window.open(docUrl('Payment Entry',p.name),'_blank')">
             <td><span class="mono c-accent fw-700" style="font-size:12px">{{p.name}}</span></td>
             <td class="fw-600">{{p.party}}</td>
             <td class="c-muted">{{p.mode_of_payment||'—'}}</td>
             <td class="c-muted" style="font-size:12.5px">{{fmtDate(p.payment_date)}}</td>
             <td><span class="b-badge" :class="statusBadge(p.payment_type)">{{p.payment_type}}</span></td>
             <td class="ta-r mono fw-700" :class="p.payment_type==='Receive'?'c-green':'c-red'">{{fmt(p.paid_amount)}}</td>
-            <td><button @click.stop="$open(docUrl('Payment Entry',p.name))" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
+            <td><button @click.stop="window.open(docUrl('Payment Entry',p.name),'_blank')" style="background:none;border:none;cursor:pointer;color:#7C3AED" v-html="icon('ext',14)"></button></td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="7" class="b-empty">No payments found</td></tr>
         </template>
@@ -1187,11 +1217,11 @@ const Banking=defineComponent({name:"Banking",
     async function loadCash(){cashLoad.value=true;try{cash.value=await api("zoho_books_clone.api.dashboard.get_cash_position");}finally{cashLoad.value=false;}}
     async function pickAcct(a){
       sel.value=a.name;txnLoad.value=true;
-      try{txns.value=await api("zoho_books_clone.api.books_data.get_bank_transactions",{bank_account:a.name});}
+      try{txns.value=await apiList("Bank Transaction",{fields:["name","date","description","debit","credit","balance","reference_number","status"],filters:[["bank_account","=",a.name]],order:"date desc",limit:30});}
       finally{txnLoad.value=false;}
     }
     onMounted(loadCash);
-    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
+    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge};
   },
   template:`
 <div class="b-page">
@@ -1245,11 +1275,11 @@ const Accounts=defineComponent({name:"Accounts",
     const TC={Asset:"b-badge-blue",Liability:"b-badge-red",Equity:"b-badge-amber",Income:"b-badge-green",Expense:"b-badge-red",Bank:"b-badge-blue",Cash:"b-badge-green",Receivable:"b-badge-blue",Payable:"b-badge-red",Tax:"b-badge-amber"};
     async function load(){
       loading.value=true;
-      try{list.value=await api("zoho_books_clone.api.books_data.get_accounts_full",{});}
+      try{list.value=await apiList("Account",{fields:["name","account_name","account_type","parent_account","is_group"],limit:100,order:"account_type asc, account_name asc"});}
       finally{loading.value=false;}
     }
     onMounted(load);
-    return{list,loading,active,types,filtered,TC,load,fmt,icon,flt};
+    return{list,loading,active,types,filtered,TC,load,fmt,icon};
   },
   template:`
 <div class="b-page">
@@ -1257,7 +1287,7 @@ const Accounts=defineComponent({name:"Accounts",
     <div class="b-filter-row"><button v-for="t in types" :key="t" class="b-pill" :class="{active:active===t}" @click="active=t">{{t}}</button></div>
     <div style="display:flex;gap:8px">
       <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="b-btn b-btn-primary" @click="$open(newDocUrl('Account'))"><span v-html="icon('plus',13)"></span> New Account</button>
+      <button class="b-btn b-btn-primary" @click="window.open(newDocUrl('Account'),'_blank')"><span v-html="icon('plus',13)"></span> New Account</button>
     </div>
   </div>
   <div class="b-card" style="padding:0;overflow:hidden">
@@ -1266,11 +1296,11 @@ const Accounts=defineComponent({name:"Accounts",
       <tbody>
         <template v-if="loading"><tr v-for="n in 8" :key="n"><td colspan="4" style="padding:14px"><div class="b-shimmer" style="height:12px"></div></td></tr></template>
         <template v-else>
-          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="$open(docUrl('Account',a.name))">
+          <tr v-for="a in filtered" :key="a.name" class="clickable" @click="window.open(docUrl('Account',a.name),'_blank')">
             <td><div class="fw-700">{{a.account_name}}</div><div class="mono c-muted" style="font-size:11px">{{a.is_group?'Group':'Ledger'}}</div></td>
             <td><span class="b-badge" :class="TC[a.account_type]||'b-badge-muted'">{{a.account_type}}</span></td>
             <td class="c-muted" style="font-size:13px">{{a.parent_account||'—'}}</td>
-            <td class="ta-r mono fw-600" :class="flt(a.balance)>=0?'c-green':'c-red'">{{fmt(a.balance)}}</td>
+            <td class="ta-r mono fw-600 c-muted">—</td>
           </tr>
           <tr v-if="!filtered.length"><td colspan="4" class="b-empty">No accounts found</td></tr>
         </template>
@@ -1370,10 +1400,11 @@ const App=defineComponent({name:"BooksApp",
     const initials=computed(()=>{const n=window.frappe?.session?.user_fullname||"Admin";return n.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();});
     const fullname=computed(()=>window.frappe?.session?.user_fullname||"Administrator");
     const title=computed(()=>TITLES[route.name]||"Books");
-    return{cname,initials,fullname,title,NAV,icon};
+    const collapsed=ref(false);
+    return{cname,initials,fullname,title,NAV,icon,collapsed};
   },
   template:`
-<div id="books-root">
+<div :class="{'books-root':true, collapsed:collapsed}">
   <aside class="b-sidebar">
     <div class="b-brand">
       <div class="b-brand-icon">B</div>
@@ -1391,7 +1422,11 @@ const App=defineComponent({name:"BooksApp",
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <div class="b-user-row">
+      <button class="b-collapse-btn" @click="collapsed=!collapsed">
+        <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
+        <span class="b-nav-label">Collapse</span>
+      </button>
+      <div class="b-user-row" style="margin-top:6px">
         <div class="b-user-avatar">{{initials}}</div>
         <div class="b-user-info"><div class="b-user-name">{{fullname}}</div><div class="b-user-role">Books Admin</div></div>
       </div>
@@ -1442,21 +1477,26 @@ const router=createRouter({
   ]
 });
 
+function getCsrfFromCookie(){
+  // Frappe sets csrf_token as a cookie on every page load
+  const m=document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
+  return m?decodeURIComponent(m.split("=").slice(1).join("=")):"";
+}
 function waitReady(cb,n){
   n=n||0;
-  if(window.frappe?.csrf_token||n>50){cb();return;}
+  // Accept either window.frappe.csrf_token OR cookie OR give up after 5s
+  const token=window.frappe?.csrf_token||getCsrfFromCookie();
+  if(token){
+    if(!window.frappe)window.frappe={};
+    if(!window.frappe.csrf_token)window.frappe.csrf_token=token;
+    cb();return;
+  }
+  if(n>50){cb();return;}
   setTimeout(()=>waitReady(cb,n+1),100);
 }
 waitReady(()=>{
   // Expose helpers to templates
-  window.docUrl=docUrl;
-  window.newDocUrl=newDocUrl;
-  const app=createApp(App);
-  app.config.globalProperties.$open=(url)=>window.open(url,"_blank");
-  app.config.globalProperties.docUrl=docUrl;
-  app.config.globalProperties.newDocUrl=newDocUrl;
-  app.config.globalProperties.window=window;
-  app.use(router).mount("#books-app");
+  createApp(App).use(router).mount("#books-app");
 });
 
 })();
