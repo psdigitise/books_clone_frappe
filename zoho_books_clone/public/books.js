@@ -1013,9 +1013,8 @@ const InvoiceDetail = {
     const inv=ref(null);
     const loading=ref(true);
     const error=ref(null);
-    const saving=ref(false);
     const submitting=ref(false);
-    const printing=ref(false);
+    const companyInfo=ref({name:'',email:'',phone:'',address:''});
 
     const name=computed(()=>route.params.name);
 
@@ -1023,6 +1022,16 @@ const InvoiceDetail = {
       loading.value=true; error.value=null;
       try{
         inv.value=await apiGet("Sales Invoice",name.value);
+        // Try to get company details
+        try{
+          const c=await apiGET("frappe.client.get",{doctype:"Company",name:inv.value.company});
+          if(c){companyInfo.value={
+            name:c.company_name||c.name||'',
+            email:c.email||'',
+            phone:c.phone_no||'',
+            address:c.company_description||''
+          };}
+        }catch{}
       }catch(e){error.value=e.message;}
       finally{loading.value=false;}
     }
@@ -1032,18 +1041,14 @@ const InvoiceDetail = {
       submitting.value=true;
       try{
         await apiSubmit("Sales Invoice",name.value);
-        toast("Invoice submitted successfully!","success");
+        toast("Invoice submitted!","success");
         await load();
       }catch(e){toast("Submit failed: "+e.message,"error");}
       finally{submitting.value=false;}
     }
 
-    async function printInvoice(){
-      printing.value=true;
-      try{
-        window.open("/printview?doctype=Sales+Invoice&name="+encodeURIComponent(name.value)+"&trigger_print=1","_blank");
-      }catch(e){toast("Print failed: "+e.message,"error");}
-      finally{printing.value=false;}
+    function printInvoice(){
+      window.print();
     }
 
     onMounted(load);
@@ -1058,276 +1063,294 @@ const InvoiceDetail = {
       return"b-badge-amber";
     });
 
-    const isPaid=computed(()=>inv.value?.status==="Paid");
-    const isSubmitted=computed(()=>["Submitted","Partly Paid","Overdue","Paid"].includes(inv.value?.status));
-    const isDraft=computed(()=>inv.value?.status==="Draft"||inv.value?.docstatus===0);
+    const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
+    const paidAmt=computed(()=>flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount));
     const paidPct=computed(()=>{
-      if(!inv.value)return 0;
-      const g=flt(inv.value.grand_total);
-      const o=flt(inv.value.outstanding_amount);
-      if(!g)return 0;
-      return Math.round((g-o)/g*100);
+      const g=flt(inv.value?.grand_total);
+      return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;
     });
 
-    return{inv,loading,error,saving,submitting,printing,name,
-           statusColor,isPaid,isSubmitted,isDraft,paidPct,
+    return{inv,loading,error,submitting,companyInfo,name,
+           statusColor,isDraft,paidAmt,paidPct,
            load,submitInvoice,printInvoice,
-           fmt,fmtDate,flt,icon,toast,router};
+           fmt,fmtDate,flt,icon,router};
   },
   template:`
-<div class="b-page" style="max-width:960px;margin:0 auto">
+<div class="inv-shell" v-if="!loading&&!error&&inv">
 
-  <!-- Loading -->
-  <template v-if="loading">
-    <div style="display:flex;align-items:center;gap:12px;padding:8px 0">
-      <div class="b-shimmer" style="width:200px;height:28px;border-radius:6px"></div>
-      <div class="b-shimmer" style="width:80px;height:24px;border-radius:20px"></div>
+  <!-- ── TOP BAR ── -->
+  <div class="inv-topbar no-print">
+    <div style="display:flex;align-items:center;gap:10px">
+      <button class="inv-tb-btn" @click="router.push('/invoices')">
+        <span v-html="icon('arrow-left',14)"></span> Back
+      </button>
+      <div class="inv-tb-divider"></div>
+      <span style="font-size:13px;font-weight:700;color:var(--text)">{{inv.name}}</span>
+      <span class="b-badge" :class="statusColor" style="font-size:11px">{{inv.status||'Draft'}}</span>
     </div>
-    <div class="b-card"><div class="b-shimmer" style="height:180px"></div></div>
-    <div class="b-card"><div class="b-shimmer" style="height:220px"></div></div>
-  </template>
-
-  <!-- Error -->
-  <div v-else-if="error" class="b-card b-card-body" style="text-align:center;padding:60px 20px">
-    <div v-html="icon('file',40)" style="color:var(--text-4);margin-bottom:16px;opacity:.4"></div>
-    <div style="font-size:16px;font-weight:600;color:var(--text-2);margin-bottom:8px">Failed to load invoice</div>
-    <div style="font-size:13px;color:var(--text-3);margin-bottom:20px">{{error}}</div>
-    <button class="b-btn b-btn-primary" @click="load">Retry</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="inv-tb-btn" @click="printInvoice">
+        <span v-html="icon('print',14)"></span> Print / PDF
+      </button>
+      <button v-if="isDraft" class="inv-tb-btn inv-tb-primary" @click="submitInvoice" :disabled="submitting">
+        <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+        <span v-else v-html="icon('check',13)"></span>
+        {{submitting?'Submitting…':'Submit Invoice'}}
+      </button>
+    </div>
   </div>
 
-  <template v-else-if="inv">
+  <!-- ── BODY: PDF LEFT + PANEL RIGHT ── -->
+  <div class="inv-body">
 
-    <!-- Header Bar -->
-    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
-      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-        <button class="b-btn b-btn-ghost" @click="router.push('/invoices')" style="padding:6px 10px;font-size:12px;display:flex;align-items:center;gap:6px">
-          <span v-html="icon('arrow-left',13)"></span> Back
-        </button>
-        <div>
-          <div style="font-size:20px;font-weight:800;color:var(--text);letter-spacing:-.3px">{{inv.name}}</div>
-          <div style="font-size:12px;color:var(--text-3);margin-top:2px">Sales Invoice</div>
-        </div>
-        <span class="b-badge" :class="statusColor" style="font-size:12px;padding:4px 10px">{{inv.status||'Draft'}}</span>
-      </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <button class="b-btn b-btn-ghost" @click="printInvoice" :disabled="printing" style="display:flex;align-items:center;gap:6px;font-size:13px">
-          <span v-html="icon('print',13)"></span> Print
-        </button>
-        <button v-if="isDraft" class="b-btn b-btn-primary" @click="submitInvoice" :disabled="submitting" style="display:flex;align-items:center;gap:6px;font-size:13px">
-          <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
-          <span v-else v-html="icon('check',13)"></span>
-          {{submitting?'Submitting...':'Submit'}}
-        </button>
-      </div>
-    </div>
+    <!-- ────── LEFT: PDF PREVIEW ────── -->
+    <div class="inv-pdf-wrap">
+      <div class="inv-pdf-paper">
 
-    <!-- Summary Cards Row -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px">
-      <div class="b-card b-card-body" style="padding:16px 20px">
-        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Grand Total</div>
-        <div style="font-size:22px;font-weight:800;color:var(--text);font-family:var(--mono)">{{fmt(inv.grand_total)}}</div>
-      </div>
-      <div class="b-card b-card-body" style="padding:16px 20px">
-        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Outstanding</div>
-        <div style="font-size:22px;font-weight:800;font-family:var(--mono)" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</div>
-      </div>
-      <div class="b-card b-card-body" style="padding:16px 20px">
-        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:6px">Due Date</div>
-        <div style="font-size:18px;font-weight:700;color:var(--text)">{{fmtDate(inv.due_date)}}</div>
-        <div v-if="inv.due_date&&flt(inv.outstanding_amount)>0&&new Date(inv.due_date)<new Date()" style="font-size:11px;color:var(--red-text);margin-top:2px;font-weight:600">● Overdue</div>
-      </div>
-      <div class="b-card b-card-body" style="padding:16px 20px">
-        <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:8px">Payment Progress</div>
-        <div style="height:6px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:6px">
-          <div :style="{width:paidPct+'%',height:'100%',background:'var(--green-text)',borderRadius:'4px',transition:'width .6s ease'}"></div>
-        </div>
-        <div style="font-size:12px;color:var(--text-3);font-weight:600">{{paidPct}}% paid</div>
-      </div>
-    </div>
-
-    <!-- Main Info + Customer -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-
-      <!-- Invoice Details -->
-      <div class="b-card">
-        <div class="b-card-head"><span class="b-card-title">Invoice Details</span></div>
-        <div class="b-card-body" style="display:flex;flex-direction:column;gap:14px">
-          <div class="inv-detail-row">
-            <span class="inv-detail-label">Invoice No.</span>
-            <span class="inv-detail-value mono fw-700" style="color:var(--accent)">{{inv.name}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.invoice_number">
-            <span class="inv-detail-label">Invoice Number</span>
-            <span class="inv-detail-value">{{inv.invoice_number}}</span>
-          </div>
-          <div class="inv-detail-row">
-            <span class="inv-detail-label">Invoice Date</span>
-            <span class="inv-detail-value">{{fmtDate(inv.posting_date)}}</span>
-          </div>
-          <div class="inv-detail-row">
-            <span class="inv-detail-label">Due Date</span>
-            <span class="inv-detail-value">{{fmtDate(inv.due_date)}}</span>
-          </div>
-          <div class="inv-detail-row">
-            <span class="inv-detail-label">Status</span>
-            <span class="b-badge" :class="statusColor">{{inv.status||'Draft'}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.currency">
-            <span class="inv-detail-label">Currency</span>
-            <span class="inv-detail-value">{{inv.currency}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.company">
-            <span class="inv-detail-label">Company</span>
-            <span class="inv-detail-value">{{inv.company}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.fiscal_year">
-            <span class="inv-detail-label">Fiscal Year</span>
-            <span class="inv-detail-value">{{inv.fiscal_year}}</span>
-          </div>
-        </div>
-      </div>
-
-      <!-- Customer & Accounts -->
-      <div class="b-card">
-        <div class="b-card-head"><span class="b-card-title">Customer & Accounts</span></div>
-        <div class="b-card-body" style="display:flex;flex-direction:column;gap:14px">
-          <div style="display:flex;align-items:center;gap:12px;padding-bottom:14px;border-bottom:1px solid var(--border)">
-            <div style="width:44px;height:44px;border-radius:12px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:16px;color:var(--accent)">
-              {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
+        <!-- Company Header -->
+        <div class="inv-pdf-header">
+          <div class="inv-pdf-company-block">
+            <div class="inv-pdf-company-logo">
+              {{(companyInfo.name||inv.company||'?')[0].toUpperCase()}}
             </div>
             <div>
-              <div style="font-weight:700;font-size:15px;color:var(--text)">{{inv.customer_name||inv.customer}}</div>
-              <div style="font-size:12px;color:var(--text-3)">{{inv.customer}}</div>
+              <div class="inv-pdf-company-name">{{companyInfo.name||inv.company}}</div>
+              <div class="inv-pdf-company-meta" v-if="companyInfo.email">{{companyInfo.email}}</div>
+              <div class="inv-pdf-company-meta" v-if="companyInfo.phone">{{companyInfo.phone}}</div>
             </div>
           </div>
-          <div class="inv-detail-row" v-if="inv.debit_to">
-            <span class="inv-detail-label">AR Account</span>
-            <span class="inv-detail-value">{{inv.debit_to}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.income_account">
-            <span class="inv-detail-label">Income Account</span>
-            <span class="inv-detail-value">{{inv.income_account}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.payment_terms">
-            <span class="inv-detail-label">Payment Terms</span>
-            <span class="inv-detail-value">{{inv.payment_terms}}</span>
-          </div>
-          <div class="inv-detail-row" v-if="inv.cost_center">
-            <span class="inv-detail-label">Cost Center</span>
-            <span class="inv-detail-value">{{inv.cost_center}}</span>
+          <div class="inv-pdf-title-block">
+            <div class="inv-pdf-title">INVOICE</div>
+            <div class="inv-pdf-inv-num">{{inv.name}}</div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- Items Table -->
-    <div class="b-card">
-      <div class="b-card-head">
-        <span class="b-card-title">Items</span>
-        <span class="b-badge b-badge-muted">{{(inv.items||[]).length}} item{{(inv.items||[]).length===1?'':'s'}}</span>
-      </div>
-      <div style="overflow-x:auto">
-        <table class="b-table" style="min-width:600px">
+        <!-- Meta Row -->
+        <div class="inv-pdf-meta-row">
+          <div class="inv-pdf-bill-to">
+            <div class="inv-pdf-section-lbl">BILL TO</div>
+            <div class="inv-pdf-customer-name">{{inv.customer_name||inv.customer}}</div>
+            <div class="inv-pdf-customer-id" v-if="inv.customer_name&&inv.customer!==inv.customer_name">{{inv.customer}}</div>
+          </div>
+          <div class="inv-pdf-dates">
+            <div class="inv-pdf-date-row">
+              <span class="inv-pdf-section-lbl">INVOICE DATE</span>
+              <span class="inv-pdf-date-val">{{fmtDate(inv.posting_date)}}</span>
+            </div>
+            <div class="inv-pdf-date-row">
+              <span class="inv-pdf-section-lbl">DUE DATE</span>
+              <span class="inv-pdf-date-val" :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</span>
+            </div>
+            <div class="inv-pdf-date-row" v-if="inv.currency">
+              <span class="inv-pdf-section-lbl">CURRENCY</span>
+              <span class="inv-pdf-date-val">{{inv.currency}}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Items Table -->
+        <table class="inv-pdf-table">
           <thead>
             <tr>
-              <th style="width:4%;text-align:center;color:var(--text-3)">#</th>
-              <th style="width:24%">Item</th>
-              <th style="width:26%">Description</th>
-              <th style="width:8%;text-align:center">Qty</th>
-              <th style="width:8%;text-align:center">UOM</th>
-              <th style="width:15%;text-align:right">Rate</th>
-              <th style="width:15%;text-align:right">Amount</th>
+              <th class="inv-pdf-th" style="width:4%">#</th>
+              <th class="inv-pdf-th" style="width:32%">Item & Description</th>
+              <th class="inv-pdf-th" style="width:10%;text-align:center">Qty</th>
+              <th class="inv-pdf-th" style="width:8%;text-align:center">UOM</th>
+              <th class="inv-pdf-th" style="width:12%;text-align:right">Rate</th>
+              <th class="inv-pdf-th" style="width:10%;text-align:right">Tax</th>
+              <th class="inv-pdf-th" style="width:14%;text-align:right">Amount</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(item,i) in (inv.items||[])" :key="i">
-              <td style="text-align:center;color:var(--text-4);font-size:12px">{{i+1}}</td>
-              <td>
-                <div style="font-weight:600;color:var(--text)">{{item.item_name||item.item_code||'—'}}</div>
-                <div v-if="item.hsn_code" style="font-size:11px;color:var(--text-3)">HSN: {{item.hsn_code}}</div>
+            <tr v-for="(item,i) in (inv.items||[])" :key="i" class="inv-pdf-tr">
+              <td class="inv-pdf-td" style="color:#aaa;font-size:11px">{{i+1}}</td>
+              <td class="inv-pdf-td">
+                <div style="font-weight:600;color:#1a1d23;font-size:13px">{{item.item_name||item.item_code}}</div>
+                <div v-if="item.description" style="font-size:11px;color:#888;margin-top:2px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{item.description}}</div>
+                <div v-if="item.hsn_code" style="font-size:10px;color:#bbb;margin-top:1px">HSN: {{item.hsn_code}}</div>
               </td>
-              <td style="color:var(--text-2);font-size:13px;max-width:200px">
-                <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{item.description||'—'}}</div>
+              <td class="inv-pdf-td" style="text-align:center;font-family:var(--mono);font-size:13px">{{flt(item.qty)}}</td>
+              <td class="inv-pdf-td" style="text-align:center;color:#888;font-size:11px">{{item.uom||'—'}}</td>
+              <td class="inv-pdf-td" style="text-align:right;font-family:var(--mono);font-size:13px">{{fmt(item.rate)}}</td>
+              <td class="inv-pdf-td" style="text-align:right;font-size:11px;color:#888">
+                <span v-if="item.tax_code">{{item.tax_code}}</span>
+                <span v-else>—</span>
               </td>
-              <td style="text-align:center;font-family:var(--mono);font-weight:600">{{flt(item.qty)}}</td>
-              <td style="text-align:center;color:var(--text-3);font-size:12px">{{item.uom||'—'}}</td>
-              <td style="text-align:right;font-family:var(--mono)">{{fmt(item.rate)}}</td>
-              <td style="text-align:right;font-family:var(--mono);font-weight:700;color:var(--text)">{{fmt(item.amount)}}</td>
+              <td class="inv-pdf-td" style="text-align:right;font-family:var(--mono);font-weight:700;font-size:13px;color:#1a1d23">{{fmt(item.amount)}}</td>
             </tr>
             <tr v-if="!(inv.items||[]).length">
-              <td colspan="7" style="text-align:center;padding:32px;color:var(--text-3)">No items</td>
+              <td colspan="7" style="text-align:center;padding:28px;color:#bbb;font-size:13px">No items</td>
             </tr>
           </tbody>
         </table>
-      </div>
-    </div>
 
-    <!-- Taxes + Totals Row -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start">
-
-      <!-- Taxes -->
-      <div class="b-card" v-if="(inv.taxes||[]).length">
-        <div class="b-card-head"><span class="b-card-title">Taxes & Charges</span></div>
-        <div style="overflow-x:auto">
-          <table class="b-table">
-            <thead><tr><th>Tax Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Tax Amount</th></tr></thead>
-            <tbody>
-              <tr v-for="(tax,i) in (inv.taxes||[])" :key="i">
-                <td style="font-weight:600">{{tax.tax_type||'—'}}</td>
-                <td style="color:var(--text-2);font-size:13px">{{tax.description||tax.tax_type||'—'}}</td>
-                <td style="text-align:right;font-family:var(--mono)">{{flt(tax.rate)}}%</td>
-                <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(tax.tax_amount)}}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-      <div v-else></div>
-
-      <!-- Totals -->
-      <div class="b-card b-card-body">
-        <div style="display:flex;flex-direction:column;gap:10px">
-          <div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid var(--border)">
-            <span style="color:var(--text-2);font-size:14px">Net Total</span>
-            <span style="font-family:var(--mono);font-weight:600">{{fmt(inv.net_total)}}</span>
-          </div>
-          <div v-for="tax in (inv.taxes||[])" :key="tax.tax_type" style="display:flex;justify-content:space-between;align-items:center">
-            <span style="color:var(--text-2);font-size:13px">{{tax.tax_type}} ({{flt(tax.rate)}}%)</span>
-            <span style="font-family:var(--mono);font-size:13px">{{fmt(tax.tax_amount)}}</span>
-          </div>
-          <div v-if="flt(inv.total_tax)" style="display:flex;justify-content:space-between;align-items:center">
-            <span style="color:var(--text-2);font-size:14px">Total Tax</span>
-            <span style="font-family:var(--mono);font-weight:600">{{fmt(inv.total_tax)}}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--accent-soft);border-radius:var(--radius-sm);margin-top:4px">
-            <span style="font-weight:800;font-size:15px;color:var(--accent-text)">Grand Total</span>
-            <span style="font-family:var(--mono);font-weight:800;font-size:18px;color:var(--accent)">{{fmt(inv.grand_total)}}</span>
-          </div>
-          <div v-if="flt(inv.outstanding_amount)" style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border);margin-top:4px">
-            <span style="color:var(--amber-text);font-weight:600;font-size:13px">Outstanding</span>
-            <span style="font-family:var(--mono);font-weight:700;color:var(--amber-text)">{{fmt(inv.outstanding_amount)}}</span>
-          </div>
-          <div v-else style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border);margin-top:4px">
-            <span style="color:var(--green-text);font-weight:600;font-size:13px">✓ Fully Paid</span>
-            <span style="font-family:var(--mono);font-weight:700;color:var(--green-text)">{{fmt(0)}}</span>
+        <!-- Totals Block -->
+        <div class="inv-pdf-totals-wrap">
+          <div style="flex:1"></div>
+          <div class="inv-pdf-totals">
+            <div class="inv-pdf-total-row">
+              <span class="inv-pdf-total-lbl">Subtotal</span>
+              <span class="inv-pdf-total-val">{{fmt(inv.net_total)}}</span>
+            </div>
+            <div class="inv-pdf-total-row" v-for="tax in (inv.taxes||[])" :key="tax.tax_type">
+              <span class="inv-pdf-total-lbl">{{tax.tax_type}} <span style="color:#aaa;font-size:11px">({{flt(tax.rate)}}%)</span></span>
+              <span class="inv-pdf-total-val">{{fmt(tax.tax_amount)}}</span>
+            </div>
+            <div class="inv-pdf-total-divider"></div>
+            <div class="inv-pdf-total-row inv-pdf-grand">
+              <span>Total</span>
+              <span style="font-family:var(--mono)">{{fmt(inv.grand_total)}}</span>
+            </div>
+            <div v-if="flt(inv.outstanding_amount)>0" class="inv-pdf-total-row" style="color:#e03131;font-weight:600;font-size:12px">
+              <span>Outstanding</span>
+              <span style="font-family:var(--mono)">{{fmt(inv.outstanding_amount)}}</span>
+            </div>
+            <div v-else class="inv-pdf-total-row" style="color:#2f9e44;font-weight:600;font-size:12px">
+              <span>✓ Paid in Full</span>
+              <span style="font-family:var(--mono)">{{fmt(inv.grand_total)}}</span>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- Notes & Terms -->
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px" v-if="inv.notes||inv.terms">
-      <div class="b-card b-card-body" v-if="inv.notes">
-        <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px">Notes</div>
-        <div style="font-size:13px;color:var(--text-2);line-height:1.6;white-space:pre-wrap">{{inv.notes}}</div>
-      </div>
-      <div class="b-card b-card-body" v-if="inv.terms">
-        <div style="font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px">Terms & Conditions</div>
-        <div style="font-size:13px;color:var(--text-2);line-height:1.6;white-space:pre-wrap">{{inv.terms}}</div>
-      </div>
-    </div>
+        <!-- Notes -->
+        <div class="inv-pdf-notes" v-if="inv.notes||inv.terms">
+          <div v-if="inv.notes">
+            <div class="inv-pdf-section-lbl" style="margin-bottom:4px">NOTES</div>
+            <div style="font-size:12px;color:#555;line-height:1.6;white-space:pre-wrap">{{inv.notes}}</div>
+          </div>
+          <div v-if="inv.terms" style="margin-top:12px">
+            <div class="inv-pdf-section-lbl" style="margin-bottom:4px">TERMS & CONDITIONS</div>
+            <div style="font-size:12px;color:#555;line-height:1.6;white-space:pre-wrap">{{inv.terms}}</div>
+          </div>
+        </div>
 
-  </template>
+        <!-- Footer -->
+        <div class="inv-pdf-footer">
+          <div>Thank you for your business!</div>
+          <div style="color:#bbb;font-size:10px;margin-top:2px">{{inv.company}}</div>
+        </div>
+
+      </div><!-- /inv-pdf-paper -->
+    </div><!-- /inv-pdf-wrap -->
+
+    <!-- ────── RIGHT: DETAILS PANEL ────── -->
+    <div class="inv-panel no-print">
+
+      <!-- Payment Status Card -->
+      <div class="inv-panel-card">
+        <div class="inv-panel-card-title">Payment Status</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <span class="b-badge" :class="statusColor" style="font-size:12px;padding:4px 12px">{{inv.status||'Draft'}}</span>
+          <span style="font-size:12px;color:var(--text-3);font-weight:600">{{paidPct}}% paid</span>
+        </div>
+        <div style="height:8px;background:var(--surface-2);border-radius:6px;overflow:hidden;margin-bottom:14px">
+          <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'var(--green-text)':'var(--accent)',borderRadius:'6px',transition:'width .6s ease'}"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span style="font-size:12px;color:var(--text-3)">Grand Total</span>
+          <span style="font-size:13px;font-weight:700;font-family:var(--mono)">{{fmt(inv.grand_total)}}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+          <span style="font-size:12px;color:var(--text-3)">Paid</span>
+          <span style="font-size:13px;font-weight:600;font-family:var(--mono);color:var(--green-text)">{{fmt(paidAmt)}}</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border)">
+          <span style="font-size:12px;font-weight:700;color:var(--text-2)">Outstanding</span>
+          <span style="font-size:14px;font-weight:800;font-family:var(--mono)" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</span>
+        </div>
+      </div>
+
+      <!-- Invoice Info -->
+      <div class="inv-panel-card">
+        <div class="inv-panel-card-title">Invoice Details</div>
+        <div class="inv-panel-row">
+          <span class="inv-panel-lbl">Invoice #</span>
+          <span class="inv-panel-val" style="color:var(--accent);font-weight:700;font-family:var(--mono)">{{inv.name}}</span>
+        </div>
+        <div class="inv-panel-row">
+          <span class="inv-panel-lbl">Invoice Date</span>
+          <span class="inv-panel-val">{{fmtDate(inv.posting_date)}}</span>
+        </div>
+        <div class="inv-panel-row">
+          <span class="inv-panel-lbl">Due Date</span>
+          <span class="inv-panel-val" :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'var(--red-text)':'inherit'}">{{fmtDate(inv.due_date)}}</span>
+        </div>
+        <div class="inv-panel-row" v-if="inv.fiscal_year">
+          <span class="inv-panel-lbl">Fiscal Year</span>
+          <span class="inv-panel-val">{{inv.fiscal_year}}</span>
+        </div>
+        <div class="inv-panel-row" v-if="inv.currency">
+          <span class="inv-panel-lbl">Currency</span>
+          <span class="inv-panel-val">{{inv.currency}}</span>
+        </div>
+        <div class="inv-panel-row" v-if="inv.payment_terms">
+          <span class="inv-panel-lbl">Payment Terms</span>
+          <span class="inv-panel-val">{{inv.payment_terms}}</span>
+        </div>
+      </div>
+
+      <!-- Customer -->
+      <div class="inv-panel-card">
+        <div class="inv-panel-card-title">Customer</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
+          <div style="width:38px;height:38px;border-radius:10px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--accent);flex-shrink:0">
+            {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text)">{{inv.customer_name||inv.customer}}</div>
+            <div style="font-size:11px;color:var(--text-3)">{{inv.customer}}</div>
+          </div>
+        </div>
+        <div class="inv-panel-row" v-if="inv.debit_to">
+          <span class="inv-panel-lbl">AR Account</span>
+          <span class="inv-panel-val" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="inv.debit_to">{{inv.debit_to}}</span>
+        </div>
+        <div class="inv-panel-row" v-if="inv.income_account">
+          <span class="inv-panel-lbl">Income Account</span>
+          <span class="inv-panel-val" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="inv.income_account">{{inv.income_account}}</span>
+        </div>
+        <div class="inv-panel-row" v-if="inv.cost_center">
+          <span class="inv-panel-lbl">Cost Center</span>
+          <span class="inv-panel-val">{{inv.cost_center}}</span>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="inv-panel-card" v-if="isDraft">
+        <div class="inv-panel-card-title">Actions</div>
+        <button class="b-btn b-btn-primary" style="width:100%;justify-content:center;margin-bottom:8px" @click="submitInvoice" :disabled="submitting">
+          <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite;margin-right:6px"></span>
+          <span v-else v-html="icon('check',13)" style="margin-right:6px"></span>
+          {{submitting?'Submitting…':'Submit Invoice'}}
+        </button>
+        <button class="b-btn b-btn-ghost" style="width:100%;justify-content:center" @click="printInvoice">
+          <span v-html="icon('print',13)" style="margin-right:6px"></span> Print / Download PDF
+        </button>
+      </div>
+      <div class="inv-panel-card" v-else>
+        <div class="inv-panel-card-title">Actions</div>
+        <button class="b-btn b-btn-ghost" style="width:100%;justify-content:center" @click="printInvoice">
+          <span v-html="icon('print',13)" style="margin-right:6px"></span> Print / Download PDF
+        </button>
+      </div>
+
+    </div><!-- /inv-panel -->
+  </div><!-- /inv-body -->
+</div>
+
+<!-- Loading -->
+<div v-else-if="loading" class="inv-shell" style="align-items:center;justify-content:center;min-height:400px">
+  <div style="text-align:center">
+    <div class="b-shimmer" style="width:240px;height:16px;border-radius:4px;margin:0 auto 12px"></div>
+    <div class="b-shimmer" style="width:160px;height:12px;border-radius:4px;margin:0 auto"></div>
+  </div>
+</div>
+
+<!-- Error -->
+<div v-else-if="error" class="b-card b-card-body" style="text-align:center;padding:60px 20px;margin:20px">
+  <div style="font-size:15px;font-weight:600;color:var(--text-2);margin-bottom:8px">Failed to load invoice</div>
+  <div style="font-size:13px;color:var(--text-3);margin-bottom:20px">{{error}}</div>
+  <button class="b-btn b-btn-primary" @click="load">Retry</button>
 </div>
 `
 };
@@ -1845,11 +1868,65 @@ const modalCSS=`
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
-.inv-detail-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border)}
-.inv-detail-row:last-child{border-bottom:none}
-.inv-detail-label{font-size:12px;font-weight:600;color:var(--text-3);text-transform:uppercase;letter-spacing:.04em}
-.inv-detail-value{font-size:13px;color:var(--text);font-weight:500;text-align:right}
-@keyframes spin{to{transform:rotate(360deg)}}
+/* ── Invoice Detail Layout ── */
+.inv-shell{display:flex;flex-direction:column;height:calc(100vh - var(--topbar-h));overflow:hidden}
+.inv-topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;gap:12px}
+.inv-tb-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text-2);transition:.15s}
+.inv-tb-btn:hover{background:var(--surface-2);border-color:var(--border-2)}
+.inv-tb-primary{background:var(--accent)!important;color:#fff!important;border-color:var(--accent)!important}
+.inv-tb-primary:hover{opacity:.9}
+.inv-tb-divider{width:1px;height:20px;background:var(--border)}
+.inv-body{display:flex;flex:1;overflow:hidden}
+/* PDF wrap - scrollable left column */
+.inv-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:28px;display:flex;justify-content:center;align-items:flex-start}
+/* The actual paper */
+.inv-pdf-paper{width:100%;max-width:700px;background:#fff;border-radius:4px;box-shadow:0 2px 20px rgba(0,0,0,.12);padding:48px 52px;font-family:'DM Sans',var(--font),sans-serif}
+.inv-pdf-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:36px;padding-bottom:28px;border-bottom:2px solid #f0f0f0}
+.inv-pdf-company-block{display:flex;align-items:flex-start;gap:14px}
+.inv-pdf-company-logo{width:48px;height:48px;border-radius:10px;background:var(--accent);color:#fff;font-weight:800;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.inv-pdf-company-name{font-size:16px;font-weight:800;color:#1a1d23;line-height:1.2;margin-bottom:4px}
+.inv-pdf-company-meta{font-size:11px;color:#888;line-height:1.6}
+.inv-pdf-title-block{text-align:right}
+.inv-pdf-title{font-size:28px;font-weight:900;color:var(--accent);letter-spacing:2px;line-height:1}
+.inv-pdf-inv-num{font-size:12px;color:#888;margin-top:6px;font-family:monospace}
+.inv-pdf-meta-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px}
+.inv-pdf-bill-to{}
+.inv-pdf-section-lbl{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#aaa;margin-bottom:6px;display:block}
+.inv-pdf-customer-name{font-size:15px;font-weight:700;color:#1a1d23}
+.inv-pdf-customer-id{font-size:11px;color:#888;margin-top:2px}
+.inv-pdf-dates{display:flex;flex-direction:column;gap:10px;text-align:right}
+.inv-pdf-date-row{display:flex;gap:20px;justify-content:flex-end;align-items:center}
+.inv-pdf-date-val{font-size:13px;font-weight:600;color:#1a1d23}
+/* Table */
+.inv-pdf-table{width:100%;border-collapse:collapse;margin-bottom:24px}
+.inv-pdf-th{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#aaa;padding:8px 6px;border-bottom:2px solid #f0f0f0;text-align:left}
+.inv-pdf-td{padding:11px 6px;border-bottom:1px solid #f7f7f7;vertical-align:top}
+.inv-pdf-tr:last-child .inv-pdf-td{border-bottom:none}
+/* Totals */
+.inv-pdf-totals-wrap{display:flex;margin-bottom:28px}
+.inv-pdf-totals{width:280px;border-top:2px solid #f0f0f0;padding-top:16px}
+.inv-pdf-total-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px;color:#555}
+.inv-pdf-total-divider{height:1px;background:#e8e8e8;margin:10px 0}
+.inv-pdf-grand{font-size:16px;font-weight:800;color:#1a1d23;margin-bottom:8px}
+.inv-pdf-notes{border-top:1px solid #f0f0f0;padding-top:20px;margin-bottom:20px}
+.inv-pdf-footer{border-top:1px solid #f0f0f0;padding-top:16px;text-align:center;font-size:12px;color:#aaa}
+/* Right panel */
+.inv-panel{width:280px;flex-shrink:0;border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+.inv-panel-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
+.inv-panel-card-title{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:12px}
+.inv-panel-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)}
+.inv-panel-row:last-child{border-bottom:none}
+.inv-panel-lbl{font-size:11px;color:var(--text-3);font-weight:600}
+.inv-panel-val{font-size:12px;color:var(--text);font-weight:500;text-align:right}
+/* Print styles */
+@media print{
+  .no-print{display:none!important}
+  .inv-shell{height:auto!important;overflow:visible!important}
+  .inv-body{display:block!important;overflow:visible!important}
+  .inv-pdf-wrap{background:white!important;padding:0!important;overflow:visible!important}
+  .inv-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}
+  .inv-panel{display:none!important}
+}}
 `;
 
 if(!document.getElementById("books-modal-css")){
