@@ -252,31 +252,28 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     async function loadDefaults(){
       const c=await resolveCompany();
       form.company=c;
+      // Build account filters — include company only if we have one
+      const arFilters=c?[["account_type","=","Receivable"],["company","=",c],["is_group","=","0"]]:[["account_type","=","Receivable"],["is_group","=","0"]];
+      const incFilters=c?[["account_type","=","Income"],["company","=",c],["is_group","=","0"]]:[["account_type","=","Income"],["is_group","=","0"]];
       // Load AR accounts
       try{
-        accounts_ar.value=await apiList("Account",{
-          fields:["name"],
-          filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],
-          limit:20
-        });
+        accounts_ar.value=await apiList("Account",{fields:["name"],filters:arFilters,limit:20});
         if(accounts_ar.value.length&&!form.debit_to)form.debit_to=accounts_ar.value[0].name;
-      }catch{}
+      }catch(e){console.warn("AR accounts load failed:",e.message);}
       // Load Income accounts
       try{
-        accounts_income.value=await apiList("Account",{
-          fields:["name"],
-          filters:[["account_type","=","Income"],["company","=",c],["is_group","=",0]],
-          limit:20
-        });
+        accounts_income.value=await apiList("Account",{fields:["name"],filters:incFilters,limit:20});
         if(accounts_income.value.length&&!form.income_account)form.income_account=accounts_income.value[0].name;
-      }catch{}
+      }catch(e){console.warn("Income accounts load failed:",e.message);}
       // Load customers
       try{
         customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});
       }catch{}
       // Load tax templates
       try{
-        taxTemplates.value=await apiList("Sales Taxes and Charges Template",{fields:["name","title"],limit:20});
+        // Tax template doctype varies by ERPNext version — skip silently if not found
+        try{taxTemplates.value=await apiList("Sales Taxes and Charges Template",{fields:["name","title"],limit:20});}catch{}
+        if(!taxTemplates.value.length){try{taxTemplates.value=await apiList("Purchase Taxes and Charges Template",{fields:["name","title"],limit:20});}catch{}}
       }catch{}
     }
 
@@ -626,15 +623,17 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
+      const apF=c?[["account_type","=","Payable"],["company","=",c],["is_group","=","0"]]:[["account_type","=","Payable"],["is_group","=","0"]];
+      const expF=c?[["account_type","=","Expense"],["company","=",c],["is_group","=","0"]]:[["account_type","=","Expense"],["is_group","=","0"]];
       try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       try{
-        accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});
+        accounts_ap.value=await apiList("Account",{fields:["name"],filters:apF,limit:20});
         if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
-      }catch{}
+      }catch(e){console.warn("AP accounts:",e.message);}
       try{
-        accounts_exp.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Expense"],["company","=",c],["is_group","=",0]],limit:20});
+        accounts_exp.value=await apiList("Account",{fields:["name"],filters:expF,limit:20});
         if(accounts_exp.value.length&&!form.expense_account)form.expense_account=accounts_exp.value[0].name;
-      }catch{}
+      }catch(e){console.warn("Expense accounts:",e.message);}
     }
 
     onMounted(loadDefaults);
@@ -797,9 +796,12 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      try{accounts_bank.value=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["company","=",c],["is_group","=",0]],limit:20});}catch{}
-      try{accounts_ar.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
-      try{accounts_ap.value=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["company","=",c],["is_group","=",0]],limit:20});}catch{}
+      const bankF=c?[["account_type","in",["Bank","Cash"]],["company","=",c],["is_group","=","0"]]:[["account_type","in",["Bank","Cash"]],["is_group","=","0"]];
+      const arF=c?[["account_type","=","Receivable"],["company","=",c],["is_group","=","0"]]:[["account_type","=","Receivable"],["is_group","=","0"]];
+      const apF=c?[["account_type","=","Payable"],["company","=",c],["is_group","=","0"]]:[["account_type","=","Payable"],["is_group","=","0"]];
+      try{accounts_bank.value=await apiList("Account",{fields:["name"],filters:bankF,limit:20});}catch(e){console.warn("Bank accounts:",e.message);}
+      try{accounts_ar.value=await apiList("Account",{fields:["name"],filters:arF,limit:20});}catch(e){console.warn("AR accounts:",e.message);}
+      try{accounts_ap.value=await apiList("Account",{fields:["name"],filters:apF,limit:20});}catch(e){console.warn("AP accounts:",e.message);}
       try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
       try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
       _autoFillAccounts();
