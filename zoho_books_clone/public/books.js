@@ -224,7 +224,7 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     function recalc(){
       form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
       const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
-      form.taxes.forEach(t=>{if(flt(t.rate)>0)t.tax_amount=Math.round(net*flt(t.rate)/100*100)/100;});
+      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
       const tax=form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0);
       form.net_total=Math.round(net*100)/100;
       form.total_tax=Math.round(tax*100)/100;
@@ -252,13 +252,15 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
     async function loadDefaults(){
       const c=await resolveCompany();
       form.company=c;
-      // Load all non-group accounts (no account_type filter — varies by ERPNext version)
-      const baseFilters=c?[["company","=",c],["is_group","=","0"]]:[["is_group","=","0"]];
+      // Load accounts — filter client-side (avoids is_group/account_type server-side issues)
       let allAccounts=[];
       try{
-        allAccounts=await apiList("Account",{fields:["name","account_type"],filters:baseFilters,limit:200});
+        const filters=c?[["company","=",c]]:[];
+        allAccounts=await apiList("Account",{fields:["name","account_type","is_group"],filters,limit:500});
+        // Filter out group accounts client-side
+        allAccounts=allAccounts.filter(a=>!a.is_group&&a.is_group!==1&&a.is_group!=="1");
       }catch(e){console.warn("Accounts load failed:",e.message);}
-      // Prefer Receivable type for AR, fallback to any account
+      // Prefer Receivable type for AR, fallback to all leaf accounts
       const arAccounts=allAccounts.filter(a=>a.account_type==="Receivable");
       accounts_ar.value=arAccounts.length?arAccounts:allAccounts;
       if(accounts_ar.value.length&&!form.debit_to)form.debit_to=accounts_ar.value[0].name;
@@ -594,7 +596,7 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
     function recalc(){
       form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
       const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
-      form.taxes.forEach(t=>{if(flt(t.rate)>0)t.tax_amount=Math.round(net*flt(t.rate)/100*100)/100;});
+      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
       const tax=form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0);
       form.net_total=Math.round(net*100)/100;
       form.total_tax=Math.round(tax*100)/100;
@@ -606,9 +608,12 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 
     async function loadDefaults(){
       const c=await resolveCompany();form.company=c;
-      const baseF=c?[["company","=",c],["is_group","=","0"]]:[["is_group","=","0"]];
       let allAccounts=[];
-      try{allAccounts=await apiList("Account",{fields:["name","account_type"],filters:baseF,limit:200});}catch(e){console.warn("Accounts load failed:",e.message);}
+      try{
+        const baseF=c?[["company","=",c]]:[];
+        allAccounts=await apiList("Account",{fields:["name","account_type","is_group"],filters:baseF,limit:500});
+        allAccounts=allAccounts.filter(a=>!a.is_group&&a.is_group!==1&&a.is_group!=="1");
+      }catch(e){console.warn("Accounts load failed:",e.message);}
       const apAccounts=allAccounts.filter(a=>a.account_type==="Payable");
       accounts_ap.value=apAccounts.length?apAccounts:allAccounts;
       if(accounts_ap.value.length&&!form.credit_to)form.credit_to=accounts_ap.value[0].name;
@@ -784,9 +789,12 @@ const PaymentModal=defineComponent({name:"PaymentModal",
         const modes=await apiList("Mode of Payment",{fields:["name"],limit:50,order:"name asc"});
         if(modes.length)paymentModes.value=modes;
       }catch{/* fallback to hardcoded defaults above */}
-      const baseF=c?[["company","=",c],["is_group","=","0"]]:[["is_group","=","0"]];
       let allAccounts=[];
-      try{allAccounts=await apiList("Account",{fields:["name","account_type"],filters:baseF,limit:200});}catch(e){console.warn("Accounts load failed:",e.message);}
+      try{
+        const baseF=c?[["company","=",c]]:[];
+        allAccounts=await apiList("Account",{fields:["name","account_type","is_group"],filters:baseF,limit:500});
+        allAccounts=allAccounts.filter(a=>!a.is_group&&a.is_group!==1&&a.is_group!=="1");
+      }catch(e){console.warn("Accounts load failed:",e.message);}
       const bankAccs=allAccounts.filter(a=>["Bank","Cash"].includes(a.account_type));
       accounts_bank.value=bankAccs.length?bankAccs:allAccounts;
       const arAccs=allAccounts.filter(a=>a.account_type==="Receivable");
