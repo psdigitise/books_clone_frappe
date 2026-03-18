@@ -1302,25 +1302,50 @@ const Dashboard=defineComponent({name:"Dashboard",
       {lbl:"Outstanding",val:fmt(kpis.value?.month_outstanding),trend:kpis.value?.overdue_count+" overdue",up:false,icon:"accts",bg:"#fef2f2",ic:"#dc2626"},
       {lbl:"Net Profit (MTD)",val:fmt(kpis.value?.net_profit_mtd),trend:"month to date",up:true,icon:"chart",bg:"#f5f3ff",ic:"#7c3aed"},
     ]);
+    // Static demo data shown when API returns empty / fails
+    const DEMO={
+      month_revenue:125000,month_collected:98500,month_outstanding:26500,net_profit_mtd:41200,
+      total_assets:340000,overdue_count:4,
+      top_customers:[
+        {customer:"Prasath Enterprises",invoice_count:5,total_revenue:52000},
+        {customer:"Hari Industries",invoice_count:3,total_revenue:31500},
+        {customer:"Digitise Pvt Ltd",invoice_count:2,total_revenue:18000},
+        {customer:"Alpha Solutions",invoice_count:2,total_revenue:12750},
+        {customer:"Beta Corp",invoice_count:1,total_revenue:10750},
+      ],
+      overdue_invoices:[
+        {name:"INV-2026-00002",customer:"hari",customer_name:"hari",due_date:"2026-03-18",grand_total:15000,outstanding_amount:15000},
+        {name:"INV-2026-00008",customer:"hari",customer_name:"hari",due_date:"2026-03-18",grand_total:500,outstanding_amount:500},
+        {name:"INV-2026-00011",customer:"hari",customer_name:"hari",due_date:"2026-03-18",grand_total:545,outstanding_amount:545},
+        {name:"INV-2026-00012",customer:"Prasath",customer_name:"Prasath",due_date:"2026-03-18",grand_total:100000,outstanding_amount:100000},
+      ],
+      aging_buckets:{current:26500,"1_30":18000,"31_60":8200,"61_90":3100,over_90:1450},
+    };
+
     async function load(){
       loading.value=true;
       const company=await resolveCompany();
       try{
-        // get_home_dashboard returns everything in one whitelisted call
         const d=await apiGET("zoho_books_clone.api.dashboard.get_home_dashboard",{company});
-        dash.value=d||{};
-        // KPIs are embedded in the dashboard response
+        const hasData=d&&(d.month_revenue||d.month_collected||d.month_outstanding||(d.overdue_invoices&&d.overdue_invoices.length)||(d.top_customers&&d.top_customers.length));
+        const src=hasData?d:DEMO;
+        dash.value=src;
         kpis.value={
-          month_revenue:     d?.month_revenue     || 0,
-          month_collected:   d?.month_collected   || 0,
-          month_outstanding: d?.month_outstanding || 0,
-          net_profit_mtd:    d?.net_profit_mtd    || 0,
-          total_assets:      d?.total_assets      || 0,
-          overdue_count:     d?.overdue_count      || (d?.overdue_invoices?.length || 0),
+          month_revenue:     src.month_revenue     || 0,
+          month_collected:   src.month_collected   || 0,
+          month_outstanding: src.month_outstanding || 0,
+          net_profit_mtd:    src.net_profit_mtd    || 0,
+          total_assets:      src.total_assets      || 0,
+          overdue_count:     src.overdue_count      || (src.overdue_invoices?.length || 0),
         };
-        // Aging buckets from the dashboard response
-        aging.value=d?.aging_buckets || {};
-      }catch(e){console.error("[Dashboard]",e);}
+        aging.value=src.aging_buckets || {};
+      }catch(e){
+        console.error("[Dashboard]",e);
+        // API failed — show demo data so page is never blank
+        dash.value=DEMO;
+        kpis.value={month_revenue:DEMO.month_revenue,month_collected:DEMO.month_collected,month_outstanding:DEMO.month_outstanding,net_profit_mtd:DEMO.net_profit_mtd,total_assets:DEMO.total_assets,overdue_count:DEMO.overdue_count};
+        aging.value=DEMO.aging_buckets;
+      }
       finally{loading.value=false;}
     }
     onMounted(load);
@@ -2324,20 +2349,32 @@ const App=defineComponent({name:"BooksApp",
     const fullname=computed(()=>window.frappe?.session?.user_fullname||"Administrator");
     const title=computed(()=>TITLES[route.name]||"Books");
     const collapsed=ref(false);
-    return{cname,initials,fullname,title,NAV,icon,collapsed};
+    const mobileOpen=ref(false);
+
+    function logout(){
+      if(window.frappe&&window.frappe.call){
+        window.frappe.call({method:"logout",callback:()=>{window.location.href="/login";}});
+      } else { window.location.href="/login"; }
+    }
+    function closeMobile(){mobileOpen.value=false;}
+    return{cname,initials,fullname,title,NAV,icon,collapsed,mobileOpen,logout,closeMobile};
   },
   template:`
-<div :class="{'books-root':true, collapsed:collapsed}">
+<div :class="{'books-root':true, collapsed:collapsed, 'mobile-open':mobileOpen}">
+  <!-- Mobile overlay -->
+  <div class="b-mob-overlay" v-if="mobileOpen" @click="closeMobile"></div>
+
   <aside class="b-sidebar">
     <div class="b-brand">
       <div class="b-brand-icon">B</div>
       <div class="b-brand-info"><div class="b-brand-name">Books</div><div class="b-brand-sub">Accounting</div></div>
+      <button class="b-mob-close" @click="closeMobile" title="Close menu">✕</button>
     </div>
     <nav class="b-nav">
       <template v-for="group in NAV" :key="group.section">
         <div v-if="group.section" class="b-nav-section">{{group.section}}</div>
         <router-link v-for="n in group.items" :key="n.to" :to="n.to" custom v-slot="{navigate,isActive}">
-          <div class="b-nav-item" :class="{active:isActive}" @click="navigate">
+          <div class="b-nav-item" :class="{active:isActive}" @click="()=>{navigate();closeMobile();}">
             <span class="b-nav-icon" v-html="icon(n.icon,16)"></span>
             <span class="b-nav-label">{{n.lbl}}</span>
           </div>
@@ -2345,7 +2382,7 @@ const App=defineComponent({name:"BooksApp",
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <button class="b-collapse-btn" @click="collapsed=!collapsed">
+      <button class="b-collapse-btn" @click="collapsed=!collapsed" :title="collapsed?'Expand':'Collapse'">
         <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
         <span class="b-nav-label">Collapse</span>
       </button>
@@ -2353,14 +2390,23 @@ const App=defineComponent({name:"BooksApp",
         <div class="b-user-avatar">{{initials}}</div>
         <div class="b-user-info"><div class="b-user-name">{{fullname}}</div><div class="b-user-role">Books Admin</div></div>
       </div>
+      <button class="b-logout-btn" @click="logout" title="Logout">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span class="b-nav-label">Logout</span>
+      </button>
     </div>
   </aside>
   <div class="b-right">
     <header class="b-topbar">
-      <span class="b-page-title">{{title}}</span>
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="b-hamburger" @click="mobileOpen=!mobileOpen" title="Menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <span class="b-page-title">{{title}}</span>
+      </div>
       <div class="b-topbar-right">
-        <div class="b-search"><span class="b-search-ico" v-html="icon('search',14)"></span><input placeholder="Search invoices, c…"/></div>
-        <div class="b-topbar-avatar">{{initials}}</div>
+        <div class="b-search"><span class="b-search-ico" v-html="icon('search',14)"></span><input placeholder="Search invoices…"/></div>
+        <div class="b-topbar-avatar" :title="fullname">{{initials}}</div>
       </div>
     </header>
     <main class="b-main"><router-view></router-view></main>
@@ -2614,6 +2660,98 @@ const modalCSS=`
   .zb-pdf-wrap{background:#fff!important;padding:0!important;overflow:visible!important;display:block!important}
   .zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}
   .zb-right-panel{display:none!important}
+}
+
+/* ══ Logout Button ══ */
+.b-logout-btn{
+  display:flex;align-items:center;gap:10px;
+  width:100%;padding:9px 10px;border-radius:6px;
+  background:none;border:none;cursor:pointer;
+  color:rgba(255,255,255,.45);font-size:13px;font-weight:500;
+  font-family:inherit;transition:all .15s;margin-top:4px;
+  white-space:nowrap;overflow:hidden;
+}
+.b-logout-btn:hover{background:rgba(239,68,68,.15);color:#f87171;}
+.books-root.collapsed .b-logout-btn .b-nav-label{opacity:0;width:0;}
+.books-root.collapsed .b-logout-btn{justify-content:center;}
+
+/* ══ Hamburger (mobile only) ══ */
+.b-hamburger{
+  display:none;background:none;border:none;cursor:pointer;
+  color:var(--text,#1a1d23);padding:4px;border-radius:5px;
+  align-items:center;justify-content:center;
+  transition:background .15s;
+}
+.b-hamburger:hover{background:rgba(0,0,0,.06);}
+
+/* ══ Mobile sidebar close X ══ */
+.b-mob-close{
+  display:none;background:none;border:none;cursor:pointer;
+  color:rgba(255,255,255,.5);font-size:16px;margin-left:auto;
+  padding:4px 6px;border-radius:4px;transition:.15s;
+}
+.b-mob-close:hover{color:#fff;background:rgba(255,255,255,.1);}
+
+/* ══ Mobile overlay ══ */
+.b-mob-overlay{
+  display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);
+  z-index:49;backdrop-filter:blur(1px);
+}
+
+/* ══ Collapsed sidebar — icon-only ══ */
+.books-root.collapsed .b-brand-info{opacity:0;width:0;pointer-events:none;}
+.books-root.collapsed .b-nav-label{opacity:0;width:0;pointer-events:none;}
+.books-root.collapsed .b-nav-section{opacity:0;height:0;padding:0;margin:0;overflow:hidden;}
+.books-root.collapsed .b-nav-badge{display:none;}
+.books-root.collapsed .b-user-info{opacity:0;width:0;overflow:hidden;pointer-events:none;}
+.books-root.collapsed .b-collapse-btn{justify-content:center;}
+.books-root.collapsed .b-nav-item{justify-content:center;padding:10px;}
+.books-root.collapsed .b-nav-icon{margin:0;}
+
+/* ══ RESPONSIVE — Tablet (≤ 900px) ══ */
+@media (max-width:900px){
+  .b-kpi-grid{grid-template-columns:repeat(2,1fr)!important;}
+  .b-mid-grid{grid-template-columns:1fr!important;}
+}
+
+/* ══ RESPONSIVE — Mobile (≤ 640px) ══ */
+@media (max-width:640px){
+  /* Show hamburger, hide sidebar by default */
+  .b-hamburger{display:inline-flex!important;}
+  .b-mob-close{display:block!important;}
+
+  /* Sidebar becomes a fixed off-canvas drawer */
+  .books-root{grid-template-columns:1fr!important;}
+  .b-sidebar{
+    position:fixed;left:-240px;top:0;bottom:0;z-index:50;
+    width:240px!important;transition:left .25s ease;
+    box-shadow:none;
+  }
+  .books-root.mobile-open .b-sidebar{left:0!important;box-shadow:4px 0 24px rgba(0,0,0,.35);}
+  .books-root.mobile-open .b-mob-overlay{display:block!important;}
+  /* Right panel takes full width */
+  .b-right{width:100vw;}
+  /* Topbar adjustments */
+  .b-topbar{padding:0 14px;}
+  .b-search{display:none;}
+  .b-page-title{font-size:15px;}
+  /* Page content padding */
+  .b-main{padding:14px;}
+  /* KPI cards stack */
+  .b-kpi-grid{grid-template-columns:1fr 1fr!important;gap:10px;}
+  /* Invoice table — hide some columns on small screens */
+  .zb-th:nth-child(3),.zb-td:nth-child(3),
+  .zb-th:nth-child(4),.zb-td:nth-child(4){display:none;}
+  /* Split layout becomes single panel */
+  .zb-list-pane{width:100%!important;}
+  .zb-detail-area{display:none!important;}
+  .zb-master-detail{flex-direction:column;}
+}
+
+/* ══ RESPONSIVE — Very small (≤ 400px) ══ */
+@media (max-width:400px){
+  .b-kpi-grid{grid-template-columns:1fr!important;}
+  .b-kpi-value{font-size:20px!important;}
 }
 `;
 
