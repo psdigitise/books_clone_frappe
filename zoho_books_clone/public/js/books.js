@@ -1006,6 +1006,7 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 
 
 /* ─── Invoice Detail Component ───────────────────────────────── */
+
 const InvoiceDetail = {
   setup(){
     const route=useRoute();
@@ -1013,27 +1014,137 @@ const InvoiceDetail = {
     const inv=ref(null);
     const loading=ref(true);
     const error=ref(null);
+    const editing=ref(false);
+    const saving=ref(false);
     const submitting=ref(false);
-    const companyInfo=ref({name:'',email:'',phone:'',address:''});
+
+    // Edit form state
+    const customers=ref([]);
+    const accounts_ar=ref([]);
+    const accounts_income=ref([]);
+    const form=reactive({
+      customer:"",posting_date:"",due_date:"",debit_to:"",income_account:"",
+      currency:"INR",notes:"",company:"",
+      items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
+      taxes:[]
+    });
 
     const name=computed(()=>route.params.name);
+
+    function toAmountWords(n){
+      // Simple Indian number-to-words
+      const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine",
+               "Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen",
+               "Seventeen","Eighteen","Nineteen"];
+      const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+      function words(n){
+        if(n===0)return"";
+        if(n<20)return a[n]+" ";
+        if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");
+        if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?words(n%100):"");
+        if(n<100000)return words(Math.floor(n/1000))+"Thousand "+(n%1000?words(n%1000):"");
+        if(n<10000000)return words(Math.floor(n/100000))+"Lakh "+(n%100000?words(n%100000):"");
+        return words(Math.floor(n/10000000))+"Crore "+(n%10000000?words(n%10000000):"");
+      }
+      const rupees=Math.floor(n);
+      const paise=Math.round((n-rupees)*100);
+      let w="Indian Rupee "+words(rupees).trim();
+      if(paise)w+=" and "+words(paise).trim()+" Paise";
+      return w+" Only";
+    }
 
     async function load(){
       loading.value=true; error.value=null;
       try{
         inv.value=await apiGet("Sales Invoice",name.value);
-        // Try to get company details
-        try{
-          const c=await apiGET("frappe.client.get",{doctype:"Company",name:inv.value.company});
-          if(c){companyInfo.value={
-            name:c.company_name||c.name||'',
-            email:c.email||'',
-            phone:c.phone_no||'',
-            address:c.company_description||''
-          };}
-        }catch{}
       }catch(e){error.value=e.message;}
       finally{loading.value=false;}
+    }
+
+    async function loadFormDefaults(){
+      try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
+      try{
+        const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});
+        accounts_ar.value=ar;
+      }catch{}
+      try{
+        const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});
+        accounts_income.value=inc;
+      }catch{}
+    }
+
+    function startEdit(){
+      if(!inv.value)return;
+      Object.assign(form,{
+        customer:inv.value.customer||"",
+        posting_date:inv.value.posting_date||"",
+        due_date:inv.value.due_date||"",
+        debit_to:inv.value.debit_to||"",
+        income_account:inv.value.income_account||"",
+        currency:inv.value.currency||"INR",
+        notes:inv.value.notes||"",
+        company:inv.value.company||"",
+        items:(inv.value.items||[]).map(i=>({...i})),
+        taxes:(inv.value.taxes||[]).map(t=>({...t})),
+      });
+      if(!form.items.length)form.items=[{item_name:"",description:"",qty:1,rate:0,amount:0}];
+      loadFormDefaults();
+      editing.value=true;
+    }
+
+    function recalc(){
+      form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
+      const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
+      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
+    }
+
+    function addItem(){form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0});}
+    function removeItem(i){if(form.items.length>1)form.items.splice(i,1);recalc();}
+    function addTax(){form.taxes.push({tax_type:"GST",description:"GST",rate:18,tax_amount:0});}
+    function removeTax(i){form.taxes.splice(i,1);recalc();}
+
+    const netTotal=computed(()=>form.items.reduce((s,i)=>s+flt(i.amount),0));
+    const totalTax=computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
+    const grandTotal=computed(()=>netTotal.value+totalTax.value);
+
+    async function saveEdit(){
+      saving.value=true;
+      try{
+        recalc();
+        const doc={
+          doctype:"Sales Invoice",
+          name:inv.value.name,
+          customer:form.customer,
+          posting_date:form.posting_date,
+          due_date:form.due_date,
+          debit_to:form.debit_to,
+          income_account:form.income_account,
+          currency:form.currency,
+          notes:form.notes,
+          company:form.company,
+          items:form.items.filter(i=>i.item_name||flt(i.rate)).map((i,idx)=>({
+            doctype:"Sales Invoice Item",
+            idx:idx+1,
+            item_name:i.item_name,
+            description:i.description,
+            qty:flt(i.qty)||1,
+            rate:flt(i.rate),
+            amount:flt(i.amount),
+          })),
+          taxes:form.taxes.map(t=>({
+            doctype:"Tax Line",
+            tax_type:t.tax_type,
+            description:t.description||t.tax_type,
+            rate:flt(t.rate),
+            tax_amount:flt(t.tax_amount),
+          })),
+        };
+        const saved=await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
+        inv.value=saved;
+        editing.value=false;
+        toast("Invoice saved!","success");
+      }catch(e){toast("Save failed: "+e.message,"error");}
+      finally{saving.value=false;}
     }
 
     async function submitInvoice(){
@@ -1047,14 +1158,12 @@ const InvoiceDetail = {
       finally{submitting.value=false;}
     }
 
-    function printInvoice(){
-      window.print();
-    }
+    function printPdf(){window.print();}
 
     onMounted(load);
-    watch(()=>route.params.name,load);
+    watch(()=>route.params.name,()=>{editing.value=false;load();});
 
-    const statusColor=computed(()=>{
+    const statusBadgeCls=computed(()=>{
       const s=inv.value?.status;
       if(s==="Paid")return"b-badge-green";
       if(s==="Submitted"||s==="Partly Paid")return"b-badge-blue";
@@ -1062,287 +1171,318 @@ const InvoiceDetail = {
       if(s==="Cancelled")return"b-badge-muted";
       return"b-badge-amber";
     });
-
     const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
-    const paidAmt=computed(()=>flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount));
-    const paidPct=computed(()=>{
-      const g=flt(inv.value?.grand_total);
-      return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;
-    });
+    const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
+    const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
 
-    return{inv,loading,error,submitting,companyInfo,name,
-           statusColor,isDraft,paidAmt,paidPct,
-           load,submitInvoice,printInvoice,
+    return{inv,loading,error,editing,saving,submitting,form,customers,accounts_ar,accounts_income,
+           name,statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
+           startEdit,saveEdit,submitInvoice,printPdf,addItem,removeItem,addTax,removeTax,recalc,toAmountWords,
            fmt,fmtDate,flt,icon,router};
   },
   template:`
-<div class="inv-shell" v-if="!loading&&!error&&inv">
+<div class="zb-detail-shell" v-if="!loading&&!error&&inv">
 
-  <!-- ── TOP BAR ── -->
-  <div class="inv-topbar no-print">
-    <div style="display:flex;align-items:center;gap:10px">
-      <button class="inv-tb-btn" @click="router.push('/invoices')">
-        <span v-html="icon('arrow-left',14)"></span> Back
+  <!-- ══ TOP ACTION BAR ══ -->
+  <div class="zb-actionbar no-print">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="zb-ab-btn" @click="router.push('/invoices')">
+        <span v-html="icon('arrow-left',13)"></span>
       </button>
-      <div class="inv-tb-divider"></div>
-      <span style="font-size:13px;font-weight:700;color:var(--text)">{{inv.name}}</span>
-      <span class="b-badge" :class="statusColor" style="font-size:11px">{{inv.status||'Draft'}}</span>
+      <span class="zb-ab-title">{{inv.name}}</span>
+      <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
     </div>
-    <div style="display:flex;gap:8px;align-items:center">
-      <button class="inv-tb-btn" @click="printInvoice">
-        <span v-html="icon('print',14)"></span> Print / PDF
+    <div style="display:flex;gap:6px;align-items:center">
+      <button class="zb-ab-btn zb-ab-outline" @click="startEdit" v-if="!editing">
+        <span v-html="icon('edit',13)"></span> Edit
       </button>
-      <button v-if="isDraft" class="inv-tb-btn inv-tb-primary" @click="submitInvoice" :disabled="submitting">
-        <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
-        <span v-else v-html="icon('check',13)"></span>
-        {{submitting?'Submitting…':'Submit Invoice'}}
-      </button>
+      <template v-if="editing">
+        <button class="zb-ab-btn zb-ab-outline" @click="editing=false">Cancel</button>
+        <button class="zb-ab-btn zb-ab-primary" @click="saveEdit" :disabled="saving">
+          <span v-if="saving" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+          {{saving?'Saving…':'Save'}}
+        </button>
+      </template>
+      <template v-else>
+        <button class="zb-ab-btn zb-ab-outline" @click="printPdf">
+          <span v-html="icon('print',13)"></span> PDF/Print
+        </button>
+        <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
+          <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+          {{submitting?'Submitting…':'Submit'}}
+        </button>
+        <button class="zb-ab-btn zb-ab-outline" @click="openDoc('Sales Invoice',inv.name)" title="Open in Frappe Desk">
+          <span v-html="icon('ext',13)"></span>
+        </button>
+      </template>
     </div>
   </div>
 
-  <!-- ── BODY: PDF LEFT + PANEL RIGHT ── -->
-  <div class="inv-body">
+  <!-- ══ WHAT'S NEXT BANNER (Draft only) ══ -->
+  <div class="zb-banner no-print" v-if="isDraft&&!editing">
+    <span class="zb-banner-icon">✦</span>
+    <span class="zb-banner-txt"><b>WHAT'S NEXT?</b> Submit this invoice to lock it, then record a payment when collected.</span>
+    <button class="zb-ab-btn zb-ab-primary" style="padding:5px 14px;font-size:12px" @click="submitInvoice">Submit Invoice</button>
+  </div>
 
-    <!-- ────── LEFT: PDF PREVIEW ────── -->
-    <div class="inv-pdf-wrap">
-      <div class="inv-pdf-paper">
+  <!-- ══ MAIN BODY ══ -->
+  <div class="zb-body">
 
-        <!-- Company Header -->
-        <div class="inv-pdf-header">
-          <div class="inv-pdf-company-block">
-            <div class="inv-pdf-company-logo">
-              {{(companyInfo.name||inv.company||'?')[0].toUpperCase()}}
-            </div>
-            <div>
-              <div class="inv-pdf-company-name">{{companyInfo.name||inv.company}}</div>
-              <div class="inv-pdf-company-meta" v-if="companyInfo.email">{{companyInfo.email}}</div>
-              <div class="inv-pdf-company-meta" v-if="companyInfo.phone">{{companyInfo.phone}}</div>
-            </div>
+    <!-- ── EDIT FORM (replaces PDF when editing) ── -->
+    <div v-if="editing" class="zb-edit-wrap no-print">
+      <div class="zb-edit-form">
+        <div class="zb-form-section-title">Invoice Details</div>
+        <div class="zb-form-grid3">
+          <div class="zb-form-field">
+            <label class="zb-form-label">Customer *</label>
+            <select v-model="form.customer" class="zb-form-input">
+              <option value="">— Select —</option>
+              <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
+            </select>
           </div>
-          <div class="inv-pdf-title-block">
-            <div class="inv-pdf-title">INVOICE</div>
-            <div class="inv-pdf-inv-num">{{inv.name}}</div>
+          <div class="zb-form-field">
+            <label class="zb-form-label">Invoice Date *</label>
+            <input type="date" v-model="form.posting_date" class="zb-form-input"/>
+          </div>
+          <div class="zb-form-field">
+            <label class="zb-form-label">Due Date</label>
+            <input type="date" v-model="form.due_date" class="zb-form-input"/>
+          </div>
+          <div class="zb-form-field">
+            <label class="zb-form-label">Debit To (AR Account)</label>
+            <select v-model="form.debit_to" class="zb-form-input">
+              <option value="">— Select —</option>
+              <option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option>
+            </select>
+          </div>
+          <div class="zb-form-field">
+            <label class="zb-form-label">Income Account</label>
+            <select v-model="form.income_account" class="zb-form-input">
+              <option value="">— Select —</option>
+              <option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option>
+            </select>
+          </div>
+          <div class="zb-form-field">
+            <label class="zb-form-label">Currency</label>
+            <input v-model="form.currency" class="zb-form-input"/>
           </div>
         </div>
 
-        <!-- Meta Row -->
-        <div class="inv-pdf-meta-row">
-          <div class="inv-pdf-bill-to">
-            <div class="inv-pdf-section-lbl">BILL TO</div>
-            <div class="inv-pdf-customer-name">{{inv.customer_name||inv.customer}}</div>
-            <div class="inv-pdf-customer-id" v-if="inv.customer_name&&inv.customer!==inv.customer_name">{{inv.customer}}</div>
-          </div>
-          <div class="inv-pdf-dates">
-            <div class="inv-pdf-date-row">
-              <span class="inv-pdf-section-lbl">INVOICE DATE</span>
-              <span class="inv-pdf-date-val">{{fmtDate(inv.posting_date)}}</span>
-            </div>
-            <div class="inv-pdf-date-row">
-              <span class="inv-pdf-section-lbl">DUE DATE</span>
-              <span class="inv-pdf-date-val" :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</span>
-            </div>
-            <div class="inv-pdf-date-row" v-if="inv.currency">
-              <span class="inv-pdf-section-lbl">CURRENCY</span>
-              <span class="inv-pdf-date-val">{{inv.currency}}</span>
-            </div>
-          </div>
+        <div class="zb-form-section-title" style="margin-top:20px">Items</div>
+        <table class="zb-items-table">
+          <thead><tr>
+            <th>#</th><th>Item Name</th><th>Description</th>
+            <th style="text-align:right">Qty</th><th style="text-align:right">Rate</th>
+            <th style="text-align:right">Amount</th><th></th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="(item,i) in form.items" :key="i">
+              <td style="color:#aaa;font-size:12px;text-align:center">{{i+1}}</td>
+              <td><input v-model="item.item_name" class="zb-cell-input" placeholder="Item name" @input="recalc"/></td>
+              <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
+              <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+              <td><input v-model.number="item.rate" type="number" min="0" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+              <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:8px">{{fmt(item.amount)}}</td>
+              <td><button @click="removeItem(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:4px" v-html="icon('trash',13)"></button></td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="zb-add-row" @click="addItem">+ Add Row</button>
+
+        <div class="zb-form-section-title" style="margin-top:20px">Taxes & Charges</div>
+        <table class="zb-items-table" v-if="form.taxes.length">
+          <thead><tr><th>Tax Type</th><th>Description</th><th style="text-align:right">Rate %</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+          <tbody>
+            <tr v-for="(tax,i) in form.taxes" :key="i">
+              <td><input v-model="tax.tax_type" class="zb-cell-input" placeholder="SGST"/></td>
+              <td><input v-model="tax.description" class="zb-cell-input" placeholder="SGST 9%"/></td>
+              <td><input v-model.number="tax.rate" type="number" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
+              <td style="text-align:right;font-family:monospace;font-weight:600;padding-right:8px">{{fmt(tax.tax_amount)}}</td>
+              <td><button @click="removeTax(i)" style="background:none;border:none;cursor:pointer;color:#e03131;padding:4px" v-html="icon('trash',13)"></button></td>
+            </tr>
+          </tbody>
+        </table>
+        <button class="zb-add-row" @click="addTax">+ Add Tax</button>
+
+        <!-- Edit Totals -->
+        <div class="zb-edit-totals">
+          <div class="zb-edit-total-row"><span>Net Total</span><span class="mono">{{fmt(netTotal)}}</span></div>
+          <div class="zb-edit-total-row"><span>Tax</span><span class="mono">{{fmt(totalTax)}}</span></div>
+          <div class="zb-edit-total-row zb-edit-grand"><span>Grand Total</span><span class="mono">{{fmt(grandTotal)}}</span></div>
         </div>
 
-        <!-- Items Table -->
-        <table class="inv-pdf-table">
+        <div class="zb-form-field" style="margin-top:16px">
+          <label class="zb-form-label">Notes</label>
+          <textarea v-model="form.notes" class="zb-form-input" rows="3" placeholder="Payment terms, remarks…" style="resize:vertical"></textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── PDF PAPER (shown when not editing) ── -->
+    <div v-else class="zb-pdf-wrap">
+      <div class="zb-pdf-paper">
+
+        <!-- Draft watermark ribbon -->
+        <div class="zb-draft-ribbon" v-if="isDraft">Draft</div>
+
+        <!-- Header: Company left, TAX INVOICE right -->
+        <div class="zb-pdf-head">
+          <div>
+            <div class="zb-pdf-co-name">{{inv.company||'Your Company'}}</div>
+            <div class="zb-pdf-co-meta" v-if="inv.company_address">{{inv.company_address}}</div>
+          </div>
+          <div class="zb-pdf-inv-title">TAX INVOICE</div>
+        </div>
+
+        <!-- Info Grid: # | Invoice Date | Terms | Due | PO# -->
+        <table class="zb-pdf-info-table">
+          <thead><tr>
+            <th>#</th><th>Invoice Date</th><th>Terms</th><th>Due Date</th><th>P.O.#</th>
+          </tr></thead>
+          <tbody><tr>
+            <td>{{inv.name}}</td>
+            <td>{{fmtDate(inv.posting_date)}}</td>
+            <td>{{inv.payment_terms||'Due on Receipt'}}</td>
+            <td :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'#e03131':'inherit'}">{{fmtDate(inv.due_date)}}</td>
+            <td>{{inv.invoice_number||'—'}}</td>
+          </tr></tbody>
+        </table>
+
+        <!-- Bill To -->
+        <div class="zb-pdf-bill-section">
+          <div class="zb-pdf-bill-label">Bill To</div>
+          <div class="zb-pdf-bill-name">{{inv.customer_name||inv.customer}}</div>
+        </div>
+
+        <!-- Items -->
+        <table class="zb-pdf-items">
           <thead>
             <tr>
-              <th class="inv-pdf-th" style="width:4%">#</th>
-              <th class="inv-pdf-th" style="width:32%">Item & Description</th>
-              <th class="inv-pdf-th" style="width:10%;text-align:center">Qty</th>
-              <th class="inv-pdf-th" style="width:8%;text-align:center">UOM</th>
-              <th class="inv-pdf-th" style="width:12%;text-align:right">Rate</th>
-              <th class="inv-pdf-th" style="width:10%;text-align:right">Tax</th>
-              <th class="inv-pdf-th" style="width:14%;text-align:right">Amount</th>
+              <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
+              <th class="zb-pdf-th">Item &amp; Description</th>
+              <th class="zb-pdf-th" style="text-align:right">Qty</th>
+              <th class="zb-pdf-th" style="text-align:right">Rate</th>
+              <th class="zb-pdf-th" style="text-align:right">Amount</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(item,i) in (inv.items||[])" :key="i" class="inv-pdf-tr">
-              <td class="inv-pdf-td" style="color:#aaa;font-size:11px">{{i+1}}</td>
-              <td class="inv-pdf-td">
-                <div style="font-weight:600;color:#1a1d23;font-size:13px">{{item.item_name||item.item_code}}</div>
-                <div v-if="item.description" style="font-size:11px;color:#888;margin-top:2px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{item.description}}</div>
-                <div v-if="item.hsn_code" style="font-size:10px;color:#bbb;margin-top:1px">HSN: {{item.hsn_code}}</div>
+            <tr v-for="(item,i) in (inv.items||[])" :key="i" class="zb-pdf-item-row">
+              <td class="zb-pdf-td" style="text-align:center;color:#aaa;font-size:12px">{{i+1}}</td>
+              <td class="zb-pdf-td">
+                <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
+                <div v-if="item.description" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
               </td>
-              <td class="inv-pdf-td" style="text-align:center;font-family:var(--mono);font-size:13px">{{flt(item.qty)}}</td>
-              <td class="inv-pdf-td" style="text-align:center;color:#888;font-size:11px">{{item.uom||'—'}}</td>
-              <td class="inv-pdf-td" style="text-align:right;font-family:var(--mono);font-size:13px">{{fmt(item.rate)}}</td>
-              <td class="inv-pdf-td" style="text-align:right;font-size:11px;color:#888">
-                <span v-if="item.tax_code">{{item.tax_code}}</span>
-                <span v-else>—</span>
+              <td class="zb-pdf-td" style="text-align:right;font-family:monospace">
+                {{flt(item.qty).toFixed(2)}}
+                <div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div>
               </td>
-              <td class="inv-pdf-td" style="text-align:right;font-family:var(--mono);font-weight:700;font-size:13px;color:#1a1d23">{{fmt(item.amount)}}</td>
-            </tr>
-            <tr v-if="!(inv.items||[]).length">
-              <td colspan="7" style="text-align:center;padding:28px;color:#bbb;font-size:13px">No items</td>
+              <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+              <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
             </tr>
           </tbody>
         </table>
 
-        <!-- Totals Block -->
-        <div class="inv-pdf-totals-wrap">
-          <div style="flex:1"></div>
-          <div class="inv-pdf-totals">
-            <div class="inv-pdf-total-row">
-              <span class="inv-pdf-total-lbl">Subtotal</span>
-              <span class="inv-pdf-total-val">{{fmt(inv.net_total)}}</span>
+        <!-- Bottom: words left, totals right -->
+        <div class="zb-pdf-bottom">
+          <div class="zb-pdf-words-block">
+            <div class="zb-pdf-words-lbl">Total In Words</div>
+            <div class="zb-pdf-words-val"><i>{{toAmountWords(flt(inv.grand_total))}}</i></div>
+            <div v-if="inv.notes" style="margin-top:12px">
+              <div class="zb-pdf-words-lbl">Notes</div>
+              <div style="font-size:12px;color:#555;margin-top:4px;white-space:pre-wrap">{{inv.notes}}</div>
             </div>
-            <div class="inv-pdf-total-row" v-for="tax in (inv.taxes||[])" :key="tax.tax_type">
-              <span class="inv-pdf-total-lbl">{{tax.tax_type}} <span style="color:#aaa;font-size:11px">({{flt(tax.rate)}}%)</span></span>
-              <span class="inv-pdf-total-val">{{fmt(tax.tax_amount)}}</span>
+          </div>
+          <div class="zb-pdf-totals-block">
+            <div class="zb-pdf-total-row">
+              <span>Sub Total</span>
+              <span>{{fmt(inv.net_total)}}</span>
             </div>
-            <div class="inv-pdf-total-divider"></div>
-            <div class="inv-pdf-total-row inv-pdf-grand">
+            <div class="zb-pdf-total-row" v-for="tax in (inv.taxes||[])" :key="tax.tax_type">
+              <span>{{tax.tax_type}} <span style="color:#aaa;font-size:11px">({{flt(tax.rate)}}%)</span></span>
+              <span>{{fmt(tax.tax_amount)}}</span>
+            </div>
+            <div class="zb-pdf-total-row zb-pdf-total-bold">
               <span>Total</span>
-              <span style="font-family:var(--mono)">{{fmt(inv.grand_total)}}</span>
+              <span>{{fmt(inv.grand_total)}}</span>
             </div>
-            <div v-if="flt(inv.outstanding_amount)>0" class="inv-pdf-total-row" style="color:#e03131;font-weight:600;font-size:12px">
-              <span>Outstanding</span>
-              <span style="font-family:var(--mono)">{{fmt(inv.outstanding_amount)}}</span>
+            <div class="zb-pdf-total-row zb-pdf-balance" v-if="flt(inv.outstanding_amount)>0">
+              <span>Balance Due</span>
+              <span>{{fmt(inv.outstanding_amount)}}</span>
             </div>
-            <div v-else class="inv-pdf-total-row" style="color:#2f9e44;font-weight:600;font-size:12px">
+            <div class="zb-pdf-total-row" style="color:#2f9e44;font-weight:700;font-size:13px" v-else>
               <span>✓ Paid in Full</span>
-              <span style="font-family:var(--mono)">{{fmt(inv.grand_total)}}</span>
+              <span>{{fmt(inv.grand_total)}}</span>
             </div>
           </div>
         </div>
 
-        <!-- Notes -->
-        <div class="inv-pdf-notes" v-if="inv.notes||inv.terms">
-          <div v-if="inv.notes">
-            <div class="inv-pdf-section-lbl" style="margin-bottom:4px">NOTES</div>
-            <div style="font-size:12px;color:#555;line-height:1.6;white-space:pre-wrap">{{inv.notes}}</div>
-          </div>
-          <div v-if="inv.terms" style="margin-top:12px">
-            <div class="inv-pdf-section-lbl" style="margin-bottom:4px">TERMS & CONDITIONS</div>
-            <div style="font-size:12px;color:#555;line-height:1.6;white-space:pre-wrap">{{inv.terms}}</div>
-          </div>
+        <!-- Signature -->
+        <div class="zb-pdf-sig-row">
+          <div></div>
+          <div class="zb-pdf-sig-box">Authorized Signature</div>
         </div>
 
-        <!-- Footer -->
-        <div class="inv-pdf-footer">
-          <div>Thank you for your business!</div>
-          <div style="color:#bbb;font-size:10px;margin-top:2px">{{inv.company}}</div>
+        <!-- PDF footer -->
+        <div class="zb-pdf-footer">
+          PDF Template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span>
         </div>
 
-      </div><!-- /inv-pdf-paper -->
-    </div><!-- /inv-pdf-wrap -->
+      </div><!-- /paper -->
+    </div><!-- /pdf-wrap -->
 
-    <!-- ────── RIGHT: DETAILS PANEL ────── -->
-    <div class="inv-panel no-print">
-
-      <!-- Payment Status Card -->
-      <div class="inv-panel-card">
-        <div class="inv-panel-card-title">Payment Status</div>
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-          <span class="b-badge" :class="statusColor" style="font-size:12px;padding:4px 12px">{{inv.status||'Draft'}}</span>
-          <span style="font-size:12px;color:var(--text-3);font-weight:600">{{paidPct}}% paid</span>
+    <!-- ── RIGHT PANEL ── -->
+    <div class="zb-right-panel no-print">
+      <!-- Payment status -->
+      <div class="zb-panel-card">
+        <div class="zb-panel-title">Payment Status</div>
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{inv.status||'Draft'}}</span>
+          <span style="font-size:11px;color:var(--text-3);font-weight:600">{{paidPct}}% paid</span>
         </div>
-        <div style="height:8px;background:var(--surface-2);border-radius:6px;overflow:hidden;margin-bottom:14px">
-          <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'var(--green-text)':'var(--accent)',borderRadius:'6px',transition:'width .6s ease'}"></div>
+        <div style="height:7px;background:var(--surface-2);border-radius:4px;overflow:hidden;margin-bottom:14px">
+          <div :style="{width:paidPct+'%',height:'100%',background:paidPct>=100?'var(--green-text)':'var(--accent)',borderRadius:'4px',transition:'width .6s'}"></div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-          <span style="font-size:12px;color:var(--text-3)">Grand Total</span>
-          <span style="font-size:13px;font-weight:700;font-family:var(--mono)">{{fmt(inv.grand_total)}}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-          <span style="font-size:12px;color:var(--text-3)">Paid</span>
-          <span style="font-size:13px;font-weight:600;font-family:var(--mono);color:var(--green-text)">{{fmt(paidAmt)}}</span>
-        </div>
-        <div style="display:flex;justify-content:space-between;padding-top:8px;border-top:1px solid var(--border)">
-          <span style="font-size:12px;font-weight:700;color:var(--text-2)">Outstanding</span>
-          <span style="font-size:14px;font-weight:800;font-family:var(--mono)" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</span>
+        <div class="zb-panel-row"><span>Grand Total</span><span class="mono fw-700">{{fmt(inv.grand_total)}}</span></div>
+        <div class="zb-panel-row"><span>Paid</span><span class="mono fw-600" style="color:var(--green-text)">{{fmt(paidAmt)}}</span></div>
+        <div class="zb-panel-row" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">
+          <span style="font-weight:700">Outstanding</span>
+          <span class="mono fw-700" :style="{color:flt(inv.outstanding_amount)>0?'var(--amber-text)':'var(--green-text)'}">{{fmt(inv.outstanding_amount)}}</span>
         </div>
       </div>
-
-      <!-- Invoice Info -->
-      <div class="inv-panel-card">
-        <div class="inv-panel-card-title">Invoice Details</div>
-        <div class="inv-panel-row">
-          <span class="inv-panel-lbl">Invoice #</span>
-          <span class="inv-panel-val" style="color:var(--accent);font-weight:700;font-family:var(--mono)">{{inv.name}}</span>
-        </div>
-        <div class="inv-panel-row">
-          <span class="inv-panel-lbl">Invoice Date</span>
-          <span class="inv-panel-val">{{fmtDate(inv.posting_date)}}</span>
-        </div>
-        <div class="inv-panel-row">
-          <span class="inv-panel-lbl">Due Date</span>
-          <span class="inv-panel-val" :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'var(--red-text)':'inherit'}">{{fmtDate(inv.due_date)}}</span>
-        </div>
-        <div class="inv-panel-row" v-if="inv.fiscal_year">
-          <span class="inv-panel-lbl">Fiscal Year</span>
-          <span class="inv-panel-val">{{inv.fiscal_year}}</span>
-        </div>
-        <div class="inv-panel-row" v-if="inv.currency">
-          <span class="inv-panel-lbl">Currency</span>
-          <span class="inv-panel-val">{{inv.currency}}</span>
-        </div>
-        <div class="inv-panel-row" v-if="inv.payment_terms">
-          <span class="inv-panel-lbl">Payment Terms</span>
-          <span class="inv-panel-val">{{inv.payment_terms}}</span>
-        </div>
+      <!-- Invoice meta -->
+      <div class="zb-panel-card">
+        <div class="zb-panel-title">Invoice Info</div>
+        <div class="zb-panel-row"><span>Invoice #</span><span class="mono" style="color:var(--accent);font-weight:700">{{inv.name}}</span></div>
+        <div class="zb-panel-row"><span>Date</span><span>{{fmtDate(inv.posting_date)}}</span></div>
+        <div class="zb-panel-row"><span>Due</span><span :style="{color:flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date()?'var(--red-text)':'inherit'}">{{fmtDate(inv.due_date)}}</span></div>
+        <div class="zb-panel-row" v-if="inv.currency"><span>Currency</span><span>{{inv.currency}}</span></div>
+        <div class="zb-panel-row" v-if="inv.payment_terms"><span>Terms</span><span>{{inv.payment_terms}}</span></div>
       </div>
-
       <!-- Customer -->
-      <div class="inv-panel-card">
-        <div class="inv-panel-card-title">Customer</div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid var(--border)">
-          <div style="width:38px;height:38px;border-radius:10px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:var(--accent);flex-shrink:0">
+      <div class="zb-panel-card">
+        <div class="zb-panel-title">Customer</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border)">
+          <div style="width:36px;height:36px;border-radius:8px;background:var(--accent-soft);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;color:var(--accent);flex-shrink:0">
             {{(inv.customer_name||inv.customer||'?')[0].toUpperCase()}}
           </div>
           <div>
-            <div style="font-weight:700;font-size:14px;color:var(--text)">{{inv.customer_name||inv.customer}}</div>
+            <div style="font-weight:700;font-size:13px">{{inv.customer_name||inv.customer}}</div>
             <div style="font-size:11px;color:var(--text-3)">{{inv.customer}}</div>
           </div>
         </div>
-        <div class="inv-panel-row" v-if="inv.debit_to">
-          <span class="inv-panel-lbl">AR Account</span>
-          <span class="inv-panel-val" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="inv.debit_to">{{inv.debit_to}}</span>
-        </div>
-        <div class="inv-panel-row" v-if="inv.income_account">
-          <span class="inv-panel-lbl">Income Account</span>
-          <span class="inv-panel-val" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" :title="inv.income_account">{{inv.income_account}}</span>
-        </div>
-        <div class="inv-panel-row" v-if="inv.cost_center">
-          <span class="inv-panel-lbl">Cost Center</span>
-          <span class="inv-panel-val">{{inv.cost_center}}</span>
-        </div>
+        <div class="zb-panel-row" v-if="inv.debit_to"><span>AR Account</span><span style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.debit_to">{{inv.debit_to}}</span></div>
+        <div class="zb-panel-row" v-if="inv.income_account"><span>Income Acct</span><span style="max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px" :title="inv.income_account">{{inv.income_account}}</span></div>
       </div>
+    </div>
 
-      <!-- Actions -->
-      <div class="inv-panel-card" v-if="isDraft">
-        <div class="inv-panel-card-title">Actions</div>
-        <button class="b-btn b-btn-primary" style="width:100%;justify-content:center;margin-bottom:8px" @click="submitInvoice" :disabled="submitting">
-          <span v-if="submitting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite;margin-right:6px"></span>
-          <span v-else v-html="icon('check',13)" style="margin-right:6px"></span>
-          {{submitting?'Submitting…':'Submit Invoice'}}
-        </button>
-        <button class="b-btn b-btn-ghost" style="width:100%;justify-content:center" @click="printInvoice">
-          <span v-html="icon('print',13)" style="margin-right:6px"></span> Print / Download PDF
-        </button>
-      </div>
-      <div class="inv-panel-card" v-else>
-        <div class="inv-panel-card-title">Actions</div>
-        <button class="b-btn b-btn-ghost" style="width:100%;justify-content:center" @click="printInvoice">
-          <span v-html="icon('print',13)" style="margin-right:6px"></span> Print / Download PDF
-        </button>
-      </div>
-
-    </div><!-- /inv-panel -->
-  </div><!-- /inv-body -->
+  </div><!-- /body -->
 </div>
 
-<!-- Loading -->
-<div v-else-if="loading" class="inv-shell" style="align-items:center;justify-content:center;min-height:400px">
+<!-- Loading skeleton -->
+<div v-else-if="loading" style="display:flex;align-items:center;justify-content:center;height:300px">
   <div style="text-align:center">
-    <div class="b-shimmer" style="width:240px;height:16px;border-radius:4px;margin:0 auto 12px"></div>
-    <div class="b-shimmer" style="width:160px;height:12px;border-radius:4px;margin:0 auto"></div>
+    <div class="b-shimmer" style="width:220px;height:14px;border-radius:4px;margin:0 auto 10px"></div>
+    <div class="b-shimmer" style="width:140px;height:11px;border-radius:4px;margin:0 auto"></div>
   </div>
 </div>
 
@@ -1868,65 +2008,91 @@ const modalCSS=`
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
-/* ── Invoice Detail Layout ── */
-.inv-shell{display:flex;flex-direction:column;height:calc(100vh - var(--topbar-h));overflow:hidden}
-.inv-topbar{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;gap:12px}
-.inv-tb-btn{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid var(--border);background:var(--surface);color:var(--text-2);transition:.15s}
-.inv-tb-btn:hover{background:var(--surface-2);border-color:var(--border-2)}
-.inv-tb-primary{background:var(--accent)!important;color:#fff!important;border-color:var(--accent)!important}
-.inv-tb-primary:hover{opacity:.9}
-.inv-tb-divider{width:1px;height:20px;background:var(--border)}
-.inv-body{display:flex;flex:1;overflow:hidden}
-/* PDF wrap - scrollable left column */
-.inv-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:28px;display:flex;justify-content:center;align-items:flex-start}
-/* The actual paper */
-.inv-pdf-paper{width:100%;max-width:700px;background:#fff;border-radius:4px;box-shadow:0 2px 20px rgba(0,0,0,.12);padding:48px 52px;font-family:'DM Sans',var(--font),sans-serif}
-.inv-pdf-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:36px;padding-bottom:28px;border-bottom:2px solid #f0f0f0}
-.inv-pdf-company-block{display:flex;align-items:flex-start;gap:14px}
-.inv-pdf-company-logo{width:48px;height:48px;border-radius:10px;background:var(--accent);color:#fff;font-weight:800;font-size:20px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.inv-pdf-company-name{font-size:16px;font-weight:800;color:#1a1d23;line-height:1.2;margin-bottom:4px}
-.inv-pdf-company-meta{font-size:11px;color:#888;line-height:1.6}
-.inv-pdf-title-block{text-align:right}
-.inv-pdf-title{font-size:28px;font-weight:900;color:var(--accent);letter-spacing:2px;line-height:1}
-.inv-pdf-inv-num{font-size:12px;color:#888;margin-top:6px;font-family:monospace}
-.inv-pdf-meta-row{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px}
-.inv-pdf-bill-to{}
-.inv-pdf-section-lbl{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#aaa;margin-bottom:6px;display:block}
-.inv-pdf-customer-name{font-size:15px;font-weight:700;color:#1a1d23}
-.inv-pdf-customer-id{font-size:11px;color:#888;margin-top:2px}
-.inv-pdf-dates{display:flex;flex-direction:column;gap:10px;text-align:right}
-.inv-pdf-date-row{display:flex;gap:20px;justify-content:flex-end;align-items:center}
-.inv-pdf-date-val{font-size:13px;font-weight:600;color:#1a1d23}
-/* Table */
-.inv-pdf-table{width:100%;border-collapse:collapse;margin-bottom:24px}
-.inv-pdf-th{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#aaa;padding:8px 6px;border-bottom:2px solid #f0f0f0;text-align:left}
-.inv-pdf-td{padding:11px 6px;border-bottom:1px solid #f7f7f7;vertical-align:top}
-.inv-pdf-tr:last-child .inv-pdf-td{border-bottom:none}
-/* Totals */
-.inv-pdf-totals-wrap{display:flex;margin-bottom:28px}
-.inv-pdf-totals{width:280px;border-top:2px solid #f0f0f0;padding-top:16px}
-.inv-pdf-total-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:13px;color:#555}
-.inv-pdf-total-divider{height:1px;background:#e8e8e8;margin:10px 0}
-.inv-pdf-grand{font-size:16px;font-weight:800;color:#1a1d23;margin-bottom:8px}
-.inv-pdf-notes{border-top:1px solid #f0f0f0;padding-top:20px;margin-bottom:20px}
-.inv-pdf-footer{border-top:1px solid #f0f0f0;padding-top:16px;text-align:center;font-size:12px;color:#aaa}
+/* ═══ Zoho Books Detail Layout ═══ */
+.zb-detail-shell{display:flex;flex-direction:column;height:calc(100vh - var(--topbar-h));overflow:hidden;background:#f4f5f7}
+.zb-actionbar{display:flex;align-items:center;justify-content:space-between;padding:8px 16px;background:#fff;border-bottom:1px solid #e0e2e7;flex-shrink:0;gap:12px}
+.zb-actionbar .zb-ab-title{font-size:14px;font-weight:700;color:#1a1d23}
+.zb-ab-btn{display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:5px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #d0d3d9;background:#fff;color:#444;transition:.12s;font-family:inherit}
+.zb-ab-btn:hover{background:#f5f6f8}
+.zb-ab-outline{border-color:#c0c4cc}
+.zb-ab-primary{background:#2563EB!important;color:#fff!important;border-color:#2563EB!important}
+.zb-ab-primary:hover{background:#1d4ed8!important}
+.zb-banner{display:flex;align-items:center;gap:10px;padding:10px 20px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:13px;color:#92400e;flex-shrink:0}
+.zb-banner-icon{font-size:16px;color:#f59e0b}
+.zb-banner-txt{flex:1}
+.zb-body{display:flex;flex:1;overflow:hidden}
+/* PDF wrap */
+.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px 32px;display:flex;justify-content:center;align-items:flex-start}
+.zb-pdf-paper{position:relative;width:100%;max-width:680px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:40px 44px;font-family:inherit;overflow:hidden}
+/* Draft ribbon */
+.zb-draft-ribbon{position:absolute;top:28px;left:-28px;width:120px;background:#6b7280;color:#fff;font-size:11px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10;box-shadow:0 2px 6px rgba(0,0,0,.2)}
+/* PDF Header */
+.zb-pdf-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #e0e0e0}
+.zb-pdf-co-name{font-size:18px;font-weight:800;color:#1a1d23;margin-bottom:3px}
+.zb-pdf-co-meta{font-size:11px;color:#666;line-height:1.6}
+.zb-pdf-inv-title{font-size:24px;font-weight:900;color:#1a1d23;letter-spacing:1px;text-align:right}
+/* Info table */
+.zb-pdf-info-table{width:100%;border-collapse:collapse;margin-bottom:0}
+.zb-pdf-info-table th{background:#f5f6f8;font-size:11px;font-weight:700;color:#555;padding:7px 10px;border:1px solid #e0e0e0;text-align:left}
+.zb-pdf-info-table td{font-size:12px;color:#1a1d23;padding:7px 10px;border:1px solid #e0e0e0}
+/* Bill to */
+.zb-pdf-bill-section{padding:12px 0;border-bottom:1px solid #e0e0e0;margin-bottom:0}
+.zb-pdf-bill-label{font-size:11px;font-weight:700;color:#666;margin-bottom:4px}
+.zb-pdf-bill-name{font-size:14px;font-weight:600;color:#2563EB}
+/* Items */
+.zb-pdf-items{width:100%;border-collapse:collapse;margin-bottom:0}
+.zb-pdf-th{font-size:11px;font-weight:700;color:#555;padding:8px 8px;background:#f5f6f8;border:1px solid #e0e0e0;text-align:left}
+.zb-pdf-td{padding:9px 8px;border:1px solid #e0e0e0;font-size:13px;vertical-align:top}
+.zb-pdf-item-row:nth-child(even) .zb-pdf-td{background:#fafafa}
+/* Bottom */
+.zb-pdf-bottom{display:flex;border-top:1px solid #e0e0e0}
+.zb-pdf-words-block{flex:1;padding:14px 12px;border-right:1px solid #e0e0e0;font-size:12px}
+.zb-pdf-words-lbl{font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#aaa;margin-bottom:4px}
+.zb-pdf-words-val{font-size:12px;color:#333;line-height:1.5}
+.zb-pdf-totals-block{width:260px;padding:10px 14px;display:flex;flex-direction:column;gap:0}
+.zb-pdf-total-row{display:flex;justify-content:space-between;font-size:12px;color:#444;padding:5px 0;border-bottom:1px solid #f0f0f0}
+.zb-pdf-total-row:last-child{border-bottom:none}
+.zb-pdf-total-bold{font-weight:700;font-size:14px;color:#1a1d23;padding:8px 0}
+.zb-pdf-balance{font-weight:800;font-size:14px;color:#1a1d23;border-top:2px solid #1a1d23!important;padding-top:8px}
+/* Signature */
+.zb-pdf-sig-row{display:flex;justify-content:flex-end;padding:16px 0 8px}
+.zb-pdf-sig-box{width:200px;text-align:center;border-top:1px solid #999;padding-top:6px;font-size:11px;color:#666}
+/* PDF footer */
+.zb-pdf-footer{text-align:right;font-size:11px;color:#aaa;border-top:1px solid #eee;padding-top:10px;margin-top:4px}
 /* Right panel */
-.inv-panel{width:280px;flex-shrink:0;border-left:1px solid var(--border);background:var(--surface);overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
-.inv-panel-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px}
-.inv-panel-card-title{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:12px}
-.inv-panel-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid var(--border)}
-.inv-panel-row:last-child{border-bottom:none}
-.inv-panel-lbl{font-size:11px;color:var(--text-3);font-weight:600}
-.inv-panel-val{font-size:12px;color:var(--text);font-weight:500;text-align:right}
-/* Print styles */
+.zb-right-panel{width:270px;flex-shrink:0;border-left:1px solid #e0e2e7;background:#fff;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:12px}
+.zb-panel-card{border:1px solid #e8eaed;border-radius:8px;padding:14px}
+.zb-panel-title{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:10px}
+.zb-panel-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px;color:var(--text-2);border-bottom:1px solid var(--border)}
+.zb-panel-row:last-child{border-bottom:none}
+/* Edit form */
+.zb-edit-wrap{flex:1;overflow-y:auto;padding:24px 32px;background:#f4f5f7}
+.zb-edit-form{max-width:820px;background:#fff;border-radius:8px;padding:28px 32px;box-shadow:0 1px 8px rgba(0,0,0,.06)}
+.zb-form-section-title{font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#888;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid #f0f0f0}
+.zb-form-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+.zb-form-field{display:flex;flex-direction:column;gap:5px}
+.zb-form-label{font-size:11px;font-weight:600;color:#666;text-transform:uppercase;letter-spacing:.04em}
+.zb-form-input{padding:8px 10px;border:1px solid #d0d3d9;border-radius:5px;font-size:13px;font-family:inherit;color:#1a1d23;background:#fff;transition:.12s;width:100%}
+.zb-form-input:focus{outline:none;border-color:#2563EB;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+.zb-items-table{width:100%;border-collapse:collapse;margin-bottom:8px}
+.zb-items-table th{font-size:11px;font-weight:700;color:#888;padding:6px 8px;border-bottom:2px solid #f0f0f0;text-align:left;background:#fafafa}
+.zb-items-table td{padding:5px 4px;border-bottom:1px solid #f5f5f5;vertical-align:middle}
+.zb-cell-input{width:100%;border:1px solid transparent;border-radius:4px;padding:5px 6px;font-size:13px;font-family:inherit;background:#fafafa;transition:.1s}
+.zb-cell-input:focus{outline:none;border-color:#2563EB;background:#fff;box-shadow:0 0 0 2px rgba(37,99,235,.1)}
+.zb-cell-num{text-align:right;width:80px}
+.zb-add-row{background:none;border:none;color:#2563EB;font-size:12px;font-weight:600;cursor:pointer;padding:6px 4px;font-family:inherit}
+.zb-add-row:hover{text-decoration:underline}
+.zb-edit-totals{display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid #f0f0f0}
+.zb-edit-total-row{display:flex;gap:60px;justify-content:flex-end;font-size:13px;color:#555}
+.zb-edit-grand{font-size:16px;font-weight:800;color:#1a1d23;padding-top:6px;border-top:2px solid #1a1d23;width:100%;max-width:300px;justify-content:space-between}
+/* Print */
 @media print{
   .no-print{display:none!important}
-  .inv-shell{height:auto!important;overflow:visible!important}
-  .inv-body{display:block!important;overflow:visible!important}
-  .inv-pdf-wrap{background:white!important;padding:0!important;overflow:visible!important}
-  .inv-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}
-  .inv-panel{display:none!important}
-}}
+  .zb-detail-shell{height:auto!important;overflow:visible!important}
+  .zb-body{display:block!important;overflow:visible!important}
+  .zb-pdf-wrap{background:#fff!important;padding:0!important;overflow:visible!important}
+  .zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}
+}
 `;
 
 if(!document.getElementById("books-modal-css")){
