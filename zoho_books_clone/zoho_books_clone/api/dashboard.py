@@ -3,7 +3,7 @@ from frappe.utils import flt, today, get_first_day, get_last_day
 from zoho_books_clone.db import queries
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET", "POST"])
 def get_home_dashboard(company: str | None = None) -> dict:
     """All KPI data for the Books dashboard in one API call."""
     if not company:
@@ -40,7 +40,7 @@ def get_home_dashboard(company: str | None = None) -> dict:
     }
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET", "POST"])
 def get_cash_position(company: str | None = None) -> dict:
     if not company:
         try:
@@ -56,7 +56,7 @@ def get_cash_position(company: str | None = None) -> dict:
     return {"bank_accounts": bank_accounts, "total_cash": total}
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["GET", "POST"])
 def search_transactions(query: str, company: str | None = None) -> list[dict]:
     if not company:
         try:

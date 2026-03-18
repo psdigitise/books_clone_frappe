@@ -13,7 +13,7 @@ class Customer(Document):
         # Ensure a naming series counter exists
         pass
 
-    @frappe.whitelist()
+    @frappe.whitelist(methods=["GET", "POST"])
     def get_outstanding_invoices(self):
         return frappe.get_all(
             "Sales Invoice",

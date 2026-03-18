@@ -490,7 +490,3 @@ body[data-route^="zoho-books"] .page-content {
 
 /* ── Teleport modal overlay ── */
 [data-v-teleport-target] { position: relative; z-index: 9000; }
-
-/* SmartSelect */
-.ss-fade-enter-active,.ss-fade-leave-active{transition:opacity .12s ease,transform .12s ease}
-.ss-fade-enter-from,.ss-fade-leave-to{opacity:0;transform:translateY(-4px)}
