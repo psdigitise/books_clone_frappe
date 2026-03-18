@@ -33,6 +33,7 @@ def get_invoice_email_defaults(invoice_name):
         "body": body,
         "invoice_name": inv.name,
         "customer_name": inv.customer_name or inv.customer,
+        "from_email": frappe.session.user,
     }
 
 

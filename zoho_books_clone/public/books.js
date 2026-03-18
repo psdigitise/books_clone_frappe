@@ -5,7 +5,7 @@ if(typeof Vue==="undefined"||typeof VueRouter==="undefined"){
   console.error("[Books] Vue/VueRouter not loaded");return;
 }
 
-const{createApp,ref,computed,onMounted,reactive,watch,defineComponent}=Vue;
+const{createApp,ref,computed,onMounted,reactive,watch,defineComponent,nextTick}=Vue;
 const{createRouter,createWebHashHistory,useRoute,useRouter}=VueRouter;
 
 /* Expose URL helpers globally immediately so templates can use them */
@@ -591,127 +591,280 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 `});
 
 /* ═══════════════════════════════════════════════════════════════
-   SEND EMAIL MODAL — uses Frappe's configured email account
+   SEND EMAIL PAGE — full Zoho Books style
 ═══════════════════════════════════════════════════════════════ */
 const SendEmailModal=defineComponent({name:"SendEmailModal",
-  props:{show:Boolean,invoiceName:{type:String,default:""}},
+  props:{show:Boolean,invoiceName:{type:String,default:""},inv:{type:Object,default:null}},
   emits:["close","sent"],
   setup(props,{emit}){
     const sending=ref(false),loading=ref(false);
-    const form=reactive({to:"",cc:"",subject:"",body:""});
     const error=ref("");
+    const fromEmail=ref("");
+    // "To" as tag chips
+    const toInput=ref(""),toTags=ref([]);
+    const ccInput=ref(""),ccTags=ref([]);
+    const bccInput=ref(""),bccTags=ref([]);
+    const showCc=ref(true),showBcc=ref(false);
+    const subject=ref("");
+    const editorRef=ref(null);
+
+    function addTag(input,tags){
+      const val=input.value.trim().replace(/,$/,"");
+      if(val&&!tags.value.includes(val)){tags.value.push(val);}
+      input.value="";
+    }
+    function removeTag(tags,i){tags.value.splice(i,1);}
+    function onToKey(e){if(e.key===","||e.key==="Enter"||e.key===" "){e.preventDefault();addTag(toInput,toTags);}}
+    function onCcKey(e){if(e.key===","||e.key==="Enter"||e.key===" "){e.preventDefault();addTag(ccInput,ccTags);}}
+    function onBccKey(e){if(e.key===","||e.key==="Enter"||e.key===" "){e.preventDefault();addTag(bccInput,bccTags);}}
+
+    // Rich text commands
+    function execCmd(cmd,val){document.execCommand(cmd,false,val||null);editorRef.value?.focus();}
+
+    function buildInvoiceHtml(inv){
+      if(!inv)return"";
+      const amt=n=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR"}).format(n||0);
+      const rows=(inv.items||[]).map((it,i)=>`
+        <tr>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#555">${i+1}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#1a1d23;font-weight:600">${it.item_name||it.item_code||""}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${(it.qty||0).toFixed(2)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${amt(it.rate)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;font-weight:700">${amt(it.amount)}</td>
+        </tr>`).join("");
+      const taxes=(inv.taxes||[]).map(t=>`
+        <tr><td style="padding:4px 12px;font-size:12px;color:#666" colspan="3"></td>
+          <td style="padding:4px 12px;font-size:12px;color:#666;text-align:right">${t.tax_type||""} (${t.rate||0}%)</td>
+          <td style="padding:4px 12px;font-size:12px;text-align:right">${amt(t.tax_amount)}</td></tr>`).join("");
+      return `
+<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto">
+  <div style="background:#2563EB;padding:24px 32px;text-align:center;border-radius:8px 8px 0 0">
+    <h2 style="color:#fff;margin:0;font-size:20px;letter-spacing:.5px">Invoice #${inv.name}</h2>
+  </div>
+  <div style="background:#fff;padding:28px 32px;border:1px solid #e8eaed;border-top:none;border-radius:0 0 8px 8px">
+    <p style="font-size:15px;color:#1a1d23;margin:0 0 6px">Dear ${inv.customer_name||inv.customer||"Customer"},</p>
+    <p style="font-size:14px;color:#555;margin:0 0 20px;line-height:1.6">Thank you for your business. Your invoice can be viewed, printed and downloaded as PDF from the link below. You can also choose to pay it online.</p>
+    <div style="background:#f8faff;border:1px solid #dbe4ff;border-radius:8px;padding:18px 24px;margin-bottom:24px">
+      <div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:8px">INVOICE AMOUNT</div>
+      <div style="font-size:28px;font-weight:800;color:#2563EB">${amt(inv.grand_total)}</div>
+      <div style="font-size:12px;color:#888;margin-top:4px">Due: ${inv.due_date||"—"}</div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+      <thead>
+        <tr style="background:#f5f6f8">
+          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:left;border-bottom:2px solid #e8eaed">#</th>
+          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:left;border-bottom:2px solid #e8eaed">Item</th>
+          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:right;border-bottom:2px solid #e8eaed">Qty</th>
+          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:right;border-bottom:2px solid #e8eaed">Rate</th>
+          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:right;border-bottom:2px solid #e8eaed">Amount</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+      <tfoot>
+        ${taxes}
+        <tr><td colspan="3"></td>
+          <td style="padding:8px 12px;font-size:13px;font-weight:700;border-top:2px solid #1a1d23;text-align:right">Total</td>
+          <td style="padding:8px 12px;font-size:14px;font-weight:800;border-top:2px solid #1a1d23;text-align:right;color:#1a1d23">${amt(inv.grand_total)}</td></tr>
+        <tr><td colspan="3"></td>
+          <td style="padding:6px 12px;font-size:13px;font-weight:700;color:#2563EB;text-align:right">Balance Due</td>
+          <td style="padding:6px 12px;font-size:15px;font-weight:800;color:#2563EB;text-align:right">${amt(inv.outstanding_amount)}</td></tr>
+      </tfoot>
+    </table>
+    <p style="font-size:13px;color:#888;margin:0">If you have any questions, please reply to this email.</p>
+  </div>
+</div>`;
+    }
 
     async function loadDefaults(){
       if(!props.invoiceName)return;
       loading.value=true; error.value="";
       try{
-        const d=await apiGET("zoho_books_clone.api.docs.get_invoice_email_defaults",{
-          invoice_name:props.invoiceName
-        });
-        form.to=d.to||"";
-        form.cc="";
-        form.subject=d.subject||"";
-        form.body=d.body||"";
-      }catch(e){error.value="Could not load email defaults: "+e.message;}
+        const d=await apiGET("zoho_books_clone.api.docs.get_invoice_email_defaults",{invoice_name:props.invoiceName});
+        toTags.value=d.to?[d.to]:[];
+        subject.value=d.subject||"";
+        fromEmail.value=d.from_email||frappe?.session?.user||"";
+        // Set editor content to beautiful HTML template
+        if(editorRef.value){
+          editorRef.value.innerHTML=buildInvoiceHtml(props.inv);
+        }
+      }catch(e){error.value="Could not load defaults: "+e.message;}
       finally{loading.value=false;}
     }
 
-    watch(()=>props.show,v=>{if(v&&props.invoiceName)loadDefaults();});
+    watch(()=>props.show,async v=>{
+      if(v&&props.invoiceName){
+        await nextTick();
+        loadDefaults();
+      }
+    });
+    // Also watch inv change to rebuild template
+    watch(()=>props.inv,v=>{
+      if(props.show&&editorRef.value&&v)editorRef.value.innerHTML=buildInvoiceHtml(v);
+    });
 
     async function send(){
-      if(!form.to.trim()){error.value="Please enter a recipient email address.";return;}
+      // Flush any pending tag input
+      if(toInput.value.trim())addTag(toInput,toTags);
+      if(!toTags.value.length){error.value="Please enter at least one recipient email address.";return;}
       sending.value=true; error.value="";
+      const bodyHtml=editorRef.value?editorRef.value.innerHTML:"";
       try{
         await apiGET("zoho_books_clone.api.docs.send_invoice_email",{
           invoice_name:props.invoiceName,
-          to:form.to,
-          subject:form.subject,
-          body:form.body,
-          cc:form.cc||""
+          to:toTags.value.join(","),
+          subject:subject.value,
+          body:bodyHtml,
+          cc:ccTags.value.join(",")
         });
-        toast("Invoice emailed to "+form.to,"success");
+        toast("Invoice emailed to "+toTags.value.join(", "),"success");
         emit("sent");
         emit("close");
       }catch(e){error.value=e.message||"Failed to send email.";}
       finally{sending.value=false;}
     }
 
-    return{form,sending,loading,error,send};
+    return{form:{},sending,loading,error,fromEmail,
+      toInput,toTags,ccInput,ccTags,bccInput,bccTags,showCc,showBcc,subject,editorRef,
+      addTag,removeTag,onToKey,onCcKey,onBccKey,execCmd,send};
   },
   template:`
 <teleport to="body">
-  <div v-if="show" class="mi-overlay" @click.self="$emit('close')">
-    <div class="mi-modal" style="max-width:600px;width:96vw">
-      <!-- Header -->
-      <div class="mi-modal-head">
-        <div style="display:flex;align-items:center;gap:10px">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-          <span style="font-size:15px;font-weight:700;color:#1a1d23">Send Invoice</span>
-          <span style="font-size:12px;color:#888;background:#f0f4ff;padding:2px 8px;border-radius:20px;font-weight:600">{{invoiceName}}</span>
-        </div>
-        <button class="mi-close" @click="$emit('close')">✕</button>
-      </div>
-
-      <!-- Loading state -->
-      <div v-if="loading" style="padding:32px;text-align:center">
-        <div class="b-shimmer" style="height:14px;border-radius:4px;margin-bottom:10px"></div>
-        <div class="b-shimmer" style="height:14px;border-radius:4px;width:70%"></div>
-      </div>
-
-      <div v-else style="padding:20px 24px">
-        <!-- Error -->
-        <div v-if="error" style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#b91c1c;display:flex;align-items:center;gap:8px">
-          <span style="font-size:15px">⚠</span> {{error}}
-        </div>
-
-        <!-- To -->
-        <div class="zb-form-field" style="margin-bottom:12px">
-          <label class="sem-label">To <span style="color:#e03131">*</span></label>
-          <input v-model="form.to" class="sem-input" placeholder="customer@example.com" type="email"/>
-          <span style="font-size:11px;color:#888;margin-top:3px">Comma-separate multiple addresses</span>
-        </div>
-
-        <!-- CC -->
-        <div class="zb-form-field" style="margin-bottom:12px">
-          <label class="sem-label">CC</label>
-          <input v-model="form.cc" class="sem-input" placeholder="optional@example.com"/>
-        </div>
-
-        <!-- Subject -->
-        <div class="zb-form-field" style="margin-bottom:12px">
-          <label class="sem-label">Subject</label>
-          <input v-model="form.subject" class="sem-input" placeholder="Invoice subject"/>
-        </div>
-
-        <!-- Body (rich text preview + editable) -->
-        <div class="zb-form-field" style="margin-bottom:16px">
-          <label class="sem-label">Message</label>
-          <div class="sem-body-wrap">
-            <textarea v-model="form.body" class="sem-textarea" rows="9" placeholder="Email message..."></textarea>
-          </div>
-          <span style="font-size:11px;color:#888;margin-top:3px">The invoice PDF will be automatically attached.</span>
-        </div>
-
-        <!-- Info box -->
-        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:18px;font-size:12px;color:#1e40af;display:flex;align-items:flex-start;gap:8px">
-          <span style="font-size:14px;margin-top:1px">ℹ</span>
-          <span>This email will be sent using your configured Frappe outgoing email account and a PDF of the invoice will be attached automatically.</span>
-        </div>
-
-        <!-- Actions -->
-        <div style="display:flex;justify-content:flex-end;gap:8px">
-          <button class="zb-ab-btn" @click="$emit('close')" :disabled="sending">Cancel</button>
-          <button class="zb-ab-btn zb-ab-primary" @click="send" :disabled="sending||!form.to.trim()">
-            <span v-if="sending" style="display:inline-block;animation:spin 1s linear infinite">↻</span>
-            <span v-else>
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-            </span>
-            {{sending ? 'Sending…' : 'Send Email'}}
-          </button>
-        </div>
-      </div>
+<div v-if="show" class="sem-page">
+  <!-- Page header -->
+  <div class="sem-page-header">
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="sem-back-btn" @click="$emit('close')" title="Back">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      </button>
+      <h2 class="sem-page-title">Email To {{inv&&(inv.customer_name||inv.customer)||'Customer'}}</h2>
     </div>
   </div>
+
+  <div v-if="loading" style="padding:40px;text-align:center">
+    <div class="b-shimmer" style="height:16px;border-radius:4px;margin-bottom:12px"></div>
+    <div class="b-shimmer" style="height:16px;border-radius:4px;width:60%"></div>
+  </div>
+
+  <div v-else class="sem-content">
+    <!-- Error -->
+    <div v-if="error" class="sem-error">⚠ {{error}}</div>
+
+    <!-- From -->
+    <div class="sem-row">
+      <span class="sem-row-label">From</span>
+      <div class="sem-row-value sem-from-val">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+        <span style="font-size:13px;color:#444">{{fromEmail||'(configured outgoing account)'}}</span>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </div>
+      <div class="sem-row-actions">
+        <button class="sem-link-btn" v-if="!showBcc" @click="showBcc=true">Bcc</button>
+      </div>
+    </div>
+
+    <!-- Send To (chips) -->
+    <div class="sem-row sem-row-tall">
+      <span class="sem-row-label">Send To</span>
+      <div class="sem-chips-wrap">
+        <div v-for="(tag,i) in toTags" :key="tag" class="sem-chip">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          <span>{{tag}}</span>
+          <button @click="removeTag(toTags,i)" class="sem-chip-remove">✕</button>
+        </div>
+        <input ref="toInput" v-model="toInput" class="sem-chip-input" placeholder="Enter email and press Enter or comma"
+          @keydown="onToKey" @blur="()=>{if(toInput.trim())addTag({value:toInput},toTags);toInput='';}"/>
+      </div>
+    </div>
+
+    <!-- CC (chips) -->
+    <div class="sem-row sem-row-tall" v-if="showCc">
+      <span class="sem-row-label">Cc</span>
+      <div class="sem-chips-wrap">
+        <div v-for="(tag,i) in ccTags" :key="tag" class="sem-chip">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          <span>{{tag}}</span>
+          <button @click="removeTag(ccTags,i)" class="sem-chip-remove">✕</button>
+        </div>
+        <input v-model="ccInput" class="sem-chip-input" placeholder="Add CC recipients"
+          @keydown="onCcKey" @blur="()=>{if(ccInput.trim())addTag({value:ccInput},ccTags);ccInput='';}"/>
+      </div>
+    </div>
+
+    <!-- BCC (chips) -->
+    <div class="sem-row sem-row-tall" v-if="showBcc">
+      <span class="sem-row-label">Bcc</span>
+      <div class="sem-chips-wrap">
+        <div v-for="(tag,i) in bccTags" :key="tag" class="sem-chip">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          <span>{{tag}}</span>
+          <button @click="removeTag(bccTags,i)" class="sem-chip-remove">✕</button>
+        </div>
+        <input v-model="bccInput" class="sem-chip-input" placeholder="Add BCC recipients"
+          @keydown="onBccKey" @blur="()=>{if(bccInput.trim())addTag({value:bccInput},bccTags);bccInput='';}"/>
+      </div>
+    </div>
+
+    <!-- Subject -->
+    <div class="sem-row">
+      <span class="sem-row-label">Subject</span>
+      <input v-model="subject" class="sem-subject-input" placeholder="Email subject"/>
+    </div>
+
+    <!-- Rich text toolbar -->
+    <div class="sem-toolbar">
+      <button class="sem-tb-btn" @click="execCmd('bold')" title="Bold"><b>B</b></button>
+      <button class="sem-tb-btn" @click="execCmd('italic')" title="Italic"><i>I</i></button>
+      <button class="sem-tb-btn" @click="execCmd('underline')" title="Underline"><u>U</u></button>
+      <button class="sem-tb-btn" @click="execCmd('strikeThrough')" title="Strikethrough"><s>S</s></button>
+      <div class="sem-tb-sep"></div>
+      <select class="sem-tb-select" @change="e=>execCmd('fontSize',e.target.value)" title="Font size">
+        <option value="2">12px</option>
+        <option value="3" selected>16px</option>
+        <option value="4">18px</option>
+        <option value="5">24px</option>
+        <option value="6">32px</option>
+      </select>
+      <select class="sem-tb-select" @change="e=>execCmd('fontName',e.target.value)" title="Font">
+        <option>Arial</option>
+        <option>Georgia</option>
+        <option>Times New Roman</option>
+        <option>Courier New</option>
+      </select>
+      <div class="sem-tb-sep"></div>
+      <button class="sem-tb-btn" @click="execCmd('justifyLeft')" title="Align left">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="15" y2="12"/><line x1="3" y1="18" x2="18" y2="18"/></svg>
+      </button>
+      <button class="sem-tb-btn" @click="execCmd('justifyCenter')" title="Center">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="6" y1="12" x2="18" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
+      </button>
+      <button class="sem-tb-btn" @click="execCmd('insertUnorderedList')" title="Bullet list">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="9" y1="6" x2="20" y2="6"/><line x1="9" y1="12" x2="20" y2="12"/><line x1="9" y1="18" x2="20" y2="18"/><circle cx="4" cy="6" r="1" fill="currentColor"/><circle cx="4" cy="12" r="1" fill="currentColor"/><circle cx="4" cy="18" r="1" fill="currentColor"/></svg>
+      </button>
+      <button class="sem-tb-btn" @click="execCmd('insertOrderedList')" title="Numbered list">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="10" y1="6" x2="21" y2="6"/><line x1="10" y1="12" x2="21" y2="12"/><line x1="10" y1="18" x2="21" y2="18"/><text x="2" y="7" font-size="6" fill="currentColor" stroke="none">1</text><text x="2" y="13" font-size="6" fill="currentColor" stroke="none">2</text><text x="2" y="19" font-size="6" fill="currentColor" stroke="none">3</text></svg>
+      </button>
+      <div class="sem-tb-sep"></div>
+      <button class="sem-tb-btn" @click="execCmd('createLink',prompt('URL:','https://'))" title="Insert link">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      </button>
+    </div>
+
+    <!-- Rich text editor -->
+    <div ref="editorRef" class="sem-editor" contenteditable="true" spellcheck="true"
+      style="min-height:420px;padding:24px 32px;outline:none;font-family:Arial,sans-serif;font-size:14px;line-height:1.6;overflow-y:auto">
+    </div>
+
+    <!-- Footer actions -->
+    <div class="sem-footer">
+      <button class="sem-send-btn" @click="send" :disabled="sending||!toTags.length">
+        <span v-if="sending" style="display:inline-block;animation:spin .8s linear infinite;font-size:15px">↻</span>
+        <svg v-else width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        {{sending?'Sending…':'Send'}}
+      </button>
+      <button class="sem-cancel-btn" @click="$emit('close')" :disabled="sending">Cancel</button>
+    </div>
+  </div>
+</div>
 </teleport>
 `});
 
@@ -1402,6 +1555,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     const router=useRouter();
     const invName=computed(()=>route.params.name);
     const showSendEmail=ref(false);
+    const showSendMenu=ref(false);
 
     // ── List (sidebar) ──────────────────────────────────────────
     const list=ref([]),listLoading=ref(true),active=ref("all"),search=ref("");
@@ -1551,7 +1705,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
     return{
       list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,
+      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
@@ -1648,7 +1802,21 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
         </template>
         <template v-else>
           <button class="zb-ab-btn" @click="startEdit"><span v-html="icon('edit',12)"></span> Edit</button>
-          <button class="zb-ab-btn" @click="showSendEmail=true"><span v-html="icon('send',12)"></span> Send</button>
+          <div class="sem-send-dropdown" style="position:relative;display:inline-block">
+            <button class="zb-ab-btn sem-send-toggle" @click="showSendMenu=!showSendMenu">
+              <span v-html="icon('send',12)"></span> Send ▾
+            </button>
+            <div v-if="showSendMenu" class="sem-dropdown-menu" @mouseleave="showSendMenu=false">
+              <button class="sem-dropdown-item" @click="showSendEmail=true;showSendMenu=false">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+                Email
+              </button>
+              <button class="sem-dropdown-item" @click="showSendMenu=false;toast('SMS feature coming soon','info')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 13.73 19.79 19.79 0 0 1 1.64 5.11 2 2 0 0 1 3.61 3h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L7.91 10.9a16 16 0 0 0 6 6l.98-.98a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 18.18"/></svg>
+                SMS
+              </button>
+            </div>
+          </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
           <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
@@ -1869,7 +2037,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
     </div><!-- /flex row -->
   </div><!-- /detail area -->
-  <SendEmailModal :show="showSendEmail" :invoice-name="invName" @close="showSendEmail=false" @sent="showSendEmail=false"/>
+  <SendEmailModal :show="showSendEmail" :invoice-name="invName" :inv="inv" @close="showSendEmail=false" @sent="showSendEmail=false"/>
 </div>
 `});
 
@@ -2391,12 +2559,52 @@ const modalCSS=`
 .zb-edit-total-row{display:flex;gap:48px;font-size:12px;color:#555}
 .zb-edit-grand{font-size:15px;font-weight:800;color:#1a1d23;padding-top:5px;border-top:2px solid #1a1d23;width:100%;max-width:260px;justify-content:space-between}
 @keyframes spin{to{transform:rotate(360deg)}}
-/* Send Email Modal */
-.sem-label{font-size:11px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;display:block}
-.sem-input{width:100%;padding:8px 11px;border:1px solid #d0d3d9;border-radius:6px;font-size:13px;font-family:inherit;color:#1a1d23;background:#fff;transition:.12s;box-sizing:border-box}
-.sem-input:focus{outline:none;border-color:#2563EB;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
-.sem-body-wrap{border:1px solid #d0d3d9;border-radius:6px;overflow:hidden;background:#fff}
-.sem-textarea{width:100%;padding:10px 12px;border:none;outline:none;font-size:13px;font-family:inherit;color:#1a1d23;resize:vertical;min-height:160px;box-sizing:border-box;background:#fff}
+/* ── Send Email Full Page ── */
+.sem-page{position:fixed;inset:0;background:#fff;z-index:9999;display:flex;flex-direction:column;overflow:hidden}
+.sem-page-header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid #e0e2e7;background:#fff;flex-shrink:0}
+.sem-page-title{font-size:18px;font-weight:700;color:#1a1d23;margin:0}
+.sem-back-btn{background:none;border:none;cursor:pointer;color:#555;padding:5px;border-radius:5px;display:flex;align-items:center;transition:.12s}
+.sem-back-btn:hover{background:#f5f6f8}
+.sem-content{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.sem-error{background:#fef2f2;border-bottom:1px solid #fca5a5;padding:10px 24px;font-size:13px;color:#b91c1c}
+/* Rows (From, To, CC, Subject) */
+.sem-row{display:flex;align-items:center;border-bottom:1px solid #f0f0f0;min-height:48px;padding:0 24px;gap:16px;flex-shrink:0}
+.sem-row-tall{align-items:flex-start;padding-top:10px;padding-bottom:10px;min-height:52px}
+.sem-row-label{font-size:13px;color:#888;font-weight:500;width:80px;flex-shrink:0}
+.sem-row-value{flex:1;display:flex;align-items:center;gap:8px}
+.sem-from-val{color:#444;font-size:13px;gap:6px}
+.sem-row-actions{display:flex;gap:8px}
+.sem-link-btn{background:none;border:none;color:#2563EB;font-size:13px;font-weight:600;cursor:pointer;padding:2px 6px;border-radius:4px}
+.sem-link-btn:hover{background:#eff6ff}
+/* Email chips */
+.sem-chips-wrap{flex:1;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.sem-chip{display:inline-flex;align-items:center;gap:5px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:20px;padding:3px 10px 3px 8px;font-size:12px;color:#1e40af;font-weight:500}
+.sem-chip-remove{background:none;border:none;cursor:pointer;color:#93c5fd;font-size:11px;padding:0;margin-left:2px;line-height:1;transition:.1s}
+.sem-chip-remove:hover{color:#e03131}
+.sem-chip-input{border:none;outline:none;font-size:13px;font-family:inherit;color:#1a1d23;min-width:220px;flex:1;padding:2px 0}
+/* Subject */
+.sem-subject-input{flex:1;border:none;outline:none;font-size:14px;font-family:inherit;color:#1a1d23;background:transparent;padding:4px 0}
+/* Toolbar */
+.sem-toolbar{display:flex;align-items:center;gap:2px;padding:8px 16px;border-bottom:1px solid #e8eaed;border-top:1px solid #e8eaed;background:#fafafa;flex-wrap:wrap;flex-shrink:0}
+.sem-tb-btn{background:none;border:1px solid transparent;border-radius:4px;cursor:pointer;color:#444;padding:4px 7px;font-size:13px;font-family:inherit;display:inline-flex;align-items:center;justify-content:center;min-width:28px;transition:.1s}
+.sem-tb-btn:hover{background:#e8eaed;border-color:#d0d3d9}
+.sem-tb-sep{width:1px;height:20px;background:#e0e2e7;margin:0 4px}
+.sem-tb-select{border:1px solid #d0d3d9;border-radius:4px;font-size:12px;padding:3px 6px;background:#fff;color:#444;cursor:pointer;font-family:inherit}
+/* Editor */
+.sem-editor{flex:1;border:none;outline:none;font-family:Arial,sans-serif;font-size:14px;line-height:1.6;padding:24px 40px;background:#f9f9f9;min-height:400px;overflow-y:auto}
+/* Footer */
+.sem-footer{display:flex;align-items:center;gap:10px;padding:14px 24px;border-top:1px solid #e0e2e7;background:#fff;flex-shrink:0}
+.sem-send-btn{display:inline-flex;align-items:center;gap:7px;background:#2563EB;color:#fff;border:none;border-radius:6px;padding:9px 22px;font-size:14px;font-weight:700;cursor:pointer;transition:.12s;font-family:inherit}
+.sem-send-btn:hover{background:#1d4ed8}
+.sem-send-btn:disabled{opacity:.65;cursor:not-allowed}
+.sem-cancel-btn{background:none;border:1px solid #d0d3d9;border-radius:6px;padding:9px 18px;font-size:13px;font-weight:600;cursor:pointer;color:#444;transition:.12s;font-family:inherit}
+.sem-cancel-btn:hover{background:#f5f6f8}
+/* Send dropdown */
+.sem-send-toggle{position:relative}
+.sem-dropdown-menu{position:absolute;top:calc(100% + 4px);left:0;background:#fff;border:1px solid #e0e2e7;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);z-index:1000;min-width:140px;padding:4px 0;animation:fadeIn .1s ease}
+.sem-dropdown-item{display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;padding:10px 16px;font-size:13px;font-weight:500;color:#1a1d23;cursor:pointer;font-family:inherit;transition:.1s;text-align:left}
+.sem-dropdown-item:hover{background:#f5f6f8;color:#2563EB}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 /* Print */
 @media print{
   .no-print{display:none!important}
