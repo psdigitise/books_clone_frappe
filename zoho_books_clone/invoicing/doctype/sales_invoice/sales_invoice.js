@@ -396,8 +396,13 @@ function _show_email_composer(frm, defaults) {
       },
     ],
     primary_action_label: __("Send"),
-    primary_action: function(vals) {
-      if (!vals.to) {
+    primary_action: function() {
+      var to      = String(d.get_value("to") || "").trim();
+      var subject = String(d.get_value("subject") || "").trim();
+      var body    = d.get_value("body") || "";
+      var cc      = String(d.get_value("cc") || "").trim();
+
+      if (!to) {
         frappe.msgprint(__("Please enter a recipient email address"));
         return;
       }
@@ -405,10 +410,10 @@ function _show_email_composer(frm, defaults) {
         method: "zoho_books_clone.api.docs.send_invoice_email",
         args: {
           invoice_name: frm.doc.name,
-          to: vals.to,
-          subject: vals.subject,
-          body: vals.body,
-          cc: vals.cc || "",
+          to: to,
+          subject: subject,
+          body: body,
+          cc: cc,
         },
         freeze: true,
         freeze_message: __("Sending email..."),
@@ -437,12 +442,19 @@ function _show_email_composer(frm, defaults) {
 
   d.show();
 
-  // Inject the blue invoice banner (Zoho style)
+  // Explicitly set values after show to avoid [object HTMLInputElement] bug
+  // (Frappe Dialog `default` can resolve to a DOM ref instead of the string)
   setTimeout(function() {
+    d.set_value("from_email", String(defaults.from_email || frappe.session.user || ""));
+    d.set_value("to",         String(defaults.to || ""));
+    d.set_value("cc",         String(defaults.cc || defaults.from_email || frappe.session.user || ""));
+    d.set_value("subject",    String(defaults.subject || ""));
+
+    // Inject the blue invoice banner (Zoho style)
     var banner = $('<div style="background:#3B82F6;color:#fff;text-align:center;' +
       'font-size:16px;font-weight:600;padding:14px 20px;' +
       'border-radius:6px;margin-bottom:16px;">' +
       'Invoice #' + frm.doc.name + '</div>');
     d.$wrapper.find(".frappe-dialog-body .form-layout").prepend(banner);
-  }, 100);
+  }, 150);
 }
