@@ -32,14 +32,8 @@ frappe.ui.form.on("Sales Invoice", {
     // 3. Action buttons for submitted invoices
     if (frm.doc.docstatus === 1) {
       frm.add_custom_button(__("Record Payment"), () => _payment_dialog(frm), __("Actions"));
-      frm.add_custom_button(__("Send Email"), () => {
-        frappe.confirm(__("Send invoice to {0}?", [frm.doc.customer_name]), () =>
-          frappe.call({
-            method: "send_invoice_email", doc: frm.doc,
-            callback: () => frappe.show_alert({ message: __("Email sent"), indicator: "green" })
-          })
-        );
-      }, __("Actions"));
+      frm.add_custom_button(__("Send Email"), () => _send_email_dialog(frm), __("Actions")); // REPLACED_PLACEHOLDER
+
       frm.add_custom_button(__("View GL Entries"), () =>
         frappe.set_route("query-report", "General Ledger", {
           voucher_no: frm.doc.name
@@ -316,4 +310,139 @@ function _payment_dialog(frm) {
 
 function _round(n, places = 2) {
   return Math.round(n * Math.pow(10, places)) / Math.pow(10, places);
+}
+
+/* ── Zoho-style Send Email Dialog ─────────────────────────────────────────── */
+function _send_email_dialog(frm) {
+  frappe.call({
+    method: "zoho_books_clone.api.docs.get_invoice_email_defaults",
+    args: { invoice_name: frm.doc.name },
+    freeze: true,
+    freeze_message: __("Loading email..."),
+    callback({ message: defaults }) {
+      if (!defaults) {
+        frappe.show_alert({ message: __("Could not load email defaults"), indicator: "red" });
+        return;
+      }
+      _show_email_composer(frm, defaults);
+    },
+    error() {
+      _show_email_composer(frm, {
+        to: "",
+        cc: frappe.session.user,
+        subject: "Invoice - " + frm.doc.name + " from " + (frm.doc.company || ""),
+        body: _default_email_body(frm),
+        customer_name: frm.doc.customer_name || frm.doc.customer,
+      });
+    }
+  });
+}
+
+function _default_email_body(frm) {
+  var grand = flt(frm.doc.grand_total).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  return (
+    "<p>Dear " + (frm.doc.customer_name || frm.doc.customer) + ",</p>" +
+    "<p>Thank you for your business. Your invoice can be viewed, printed and downloaded as PDF from the link below. You can also choose to pay it online.</p>" +
+    "<table style='border-collapse:collapse;font-size:14px;margin:12px 0'>" +
+    "<tr><td style='padding:4px 16px 4px 0;color:#666'>Invoice #</td><td><b>" + frm.doc.name + "</b></td></tr>" +
+    "<tr><td style='padding:4px 16px 4px 0;color:#666'>Amount Due</td><td><b>&#8377;" + grand + "</b></td></tr>" +
+    "<tr><td style='padding:4px 16px 4px 0;color:#666'>Due Date</td><td>" + (frm.doc.due_date || "") + "</td></tr>" +
+    "</table>" +
+    "<p>Kindly make the payment by the due date.</p>" +
+    "<p>Thanks &amp; Regards,<br>" + (frm.doc.company || "") + "</p>"
+  );
+}
+
+function _show_email_composer(frm, defaults) {
+  var d = new frappe.ui.Dialog({
+    title: __("Email To {0}", [defaults.customer_name || frm.doc.customer_name]),
+    size: "large",
+    fields: [
+      {
+        fieldname: "from_email",
+        label: __("From"),
+        fieldtype: "Data",
+        default: defaults.from_email || frappe.session.user,
+        read_only: 1,
+      },
+      {
+        fieldname: "to",
+        label: __("Send To"),
+        fieldtype: "Data",
+        reqd: 1,
+        default: defaults.to || "",
+        description: __("Separate multiple addresses with a comma"),
+      },
+      {
+        fieldname: "cc",
+        label: __("Cc"),
+        fieldtype: "Data",
+        default: defaults.cc || defaults.from_email || frappe.session.user,
+        description: __("Separate multiple addresses with a comma"),
+      },
+      {
+        fieldname: "subject",
+        label: __("Subject"),
+        fieldtype: "Data",
+        reqd: 1,
+        default: defaults.subject || "",
+      },
+      {
+        fieldname: "body",
+        label: __("Message"),
+        fieldtype: "Text Editor",
+        reqd: 1,
+        default: defaults.body || _default_email_body(frm),
+      },
+    ],
+    primary_action_label: __("Send"),
+    primary_action: function(vals) {
+      if (!vals.to) {
+        frappe.msgprint(__("Please enter a recipient email address"));
+        return;
+      }
+      frappe.call({
+        method: "zoho_books_clone.api.docs.send_invoice_email",
+        args: {
+          invoice_name: frm.doc.name,
+          to: vals.to,
+          subject: vals.subject,
+          body: vals.body,
+          cc: vals.cc || "",
+        },
+        freeze: true,
+        freeze_message: __("Sending email..."),
+        callback: function(r) {
+          var message = r.message;
+          if (message && message.status === "sent") {
+            d.hide();
+            frappe.show_alert({
+              message: __("Email sent to {0}", [message.to]),
+              indicator: "green",
+            });
+            frm.reload_doc();
+          }
+        },
+        error: function() {
+          frappe.show_alert({
+            message: __("Failed to send email. Please check your Email Account settings."),
+            indicator: "red"
+          });
+        }
+      });
+    },
+    secondary_action_label: __("Cancel"),
+    secondary_action: function() { d.hide(); }
+  });
+
+  d.show();
+
+  // Inject the blue invoice banner (Zoho style)
+  setTimeout(function() {
+    var banner = $('<div style="background:#3B82F6;color:#fff;text-align:center;' +
+      'font-size:16px;font-weight:600;padding:14px 20px;' +
+      'border-radius:6px;margin-bottom:16px;">' +
+      'Invoice #' + frm.doc.name + '</div>');
+    d.$wrapper.find(".frappe-dialog-body .form-layout").prepend(banner);
+  }, 100);
 }
