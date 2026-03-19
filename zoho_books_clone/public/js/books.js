@@ -1727,10 +1727,11 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
     const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
     const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
+    const showCustMenu=ref(false);
 
     return{
       list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,
+      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,showCustMenu,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
@@ -1844,7 +1845,6 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
           </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
-          <button class="zb-ab-btn" @click="$router.push('/template-editor')" style="color:#2563EB;border-color:#bfdbfe;background:#eff6ff"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Edit Template</button>
           <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
           <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
             <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
@@ -1888,6 +1888,46 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
         <div class="zb-pdf-paper">
           <div class="zb-sent-ribbon" v-if="!isDraft">Sent</div>
           <div class="zb-draft-ribbon" v-else>Draft</div>
+
+          <!-- Customize Button (top-right, Zoho style) -->
+          <div style="position:absolute;top:16px;right:16px;z-index:20" @mouseleave="showCustMenu=false">
+            <button @click="showCustMenu=!showCustMenu"
+              style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,.3)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+              Customize ▾
+            </button>
+            <div v-if="showCustMenu"
+              style="position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.13);min-width:200px;overflow:hidden;z-index:100">
+              <div style="padding:4px 0">
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                  Standard Template
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m10 0h3a2 2 0 0 0 2-2v-3"/></svg>
+                  Change Template
+                </button>
+                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
+                <button @click="showCustMenu=false;$router.push('/template-editor')" class="zb-cust-menu-item" style="color:#2563EB;font-weight:600">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  Edit Template
+                </button>
+                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  Update Logo &amp; Address
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                  Manage Custom Fields
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                  Terms &amp; Conditions
+                </button>
+              </div>
+            </div>
+          </div>
           <div class="zb-pdf-head">
             <div>
               <div class="zb-pdf-co-name">{{inv.company||'Your Company'}}</div>
@@ -2556,6 +2596,8 @@ const modalCSS=`
 /* PDF wrap */
 .zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;justify-content:center;align-items:flex-start}
 .zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:hidden}
+.zb-cust-menu-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 16px;background:transparent;border:none;font-size:13px;color:#374151;cursor:pointer;text-align:left;font-family:inherit;transition:background .1s}
+.zb-cust-menu-item:hover{background:#f5f7ff;color:#2563EB}
 .zb-draft-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#6b7280;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
 .zb-sent-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#2563EB;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
 .zb-banner-upi{background:#f0f9ff;border-bottom-color:#bae6fd;padding:7px 16px}
