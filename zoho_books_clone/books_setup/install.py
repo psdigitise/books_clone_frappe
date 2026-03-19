@@ -1,5 +1,6 @@
 import frappe
 from frappe import _
+import os
 
 
 def after_install():
@@ -10,6 +11,7 @@ def after_install():
     seed_modes_of_payment()
     seed_payment_terms()
     create_default_accounts()
+    seed_print_formats()
     frappe.db.commit()
     print("✅  Zoho Books Clone installed successfully!")
 
@@ -22,6 +24,7 @@ def after_migrate():
         seed_modes_of_payment()
     if frappe.db.exists("DocType", "Payment Terms"):
         seed_payment_terms()
+    seed_print_formats()
     frappe.db.commit()
 
 
@@ -210,3 +213,51 @@ def seed_cost_centers():
             }).insert(ignore_permissions=True)
         except Exception:
             pass
+
+
+# ─── Print Formats ───────────────────────────────────────────────────────────
+def seed_print_formats():
+    """
+    Create or update the 'Tax Invoice' Print Format in the Frappe database.
+    Reads the HTML from the app's templates/print_formats/sales_invoice.html file.
+    """
+    try:
+        # Resolve path to the HTML template relative to this file
+        app_path = frappe.get_app_path("zoho_books_clone")
+        html_path = os.path.join(app_path, "templates", "print_formats", "sales_invoice.html")
+
+        if not os.path.exists(html_path):
+            frappe.log_error(f"Print format HTML not found at {html_path}", "seed_print_formats")
+            return
+
+        with open(html_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+        format_name = "Tax Invoice"
+
+        if frappe.db.exists("Print Format", format_name):
+            # Update existing
+            pf = frappe.get_doc("Print Format", format_name)
+            pf.html = html_content
+            pf.print_format_type = "Jinja"
+            pf.save(ignore_permissions=True)
+        else:
+            # Create new
+            frappe.get_doc({
+                "doctype":           "Print Format",
+                "name":              format_name,
+                "doc_type":          "Sales Invoice",
+                "module":            "Zoho Books Clone",
+                "print_format_type": "Jinja",
+                "html":              html_content,
+                "standard":          "No",
+                "disabled":          0,
+            }).insert(ignore_permissions=True)
+
+        frappe.db.commit()
+        print(f"✅  Print Format '{format_name}' seeded successfully.")
+
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "seed_print_formats failed")
+        print(f"⚠️  Could not seed print format: {e}")
+

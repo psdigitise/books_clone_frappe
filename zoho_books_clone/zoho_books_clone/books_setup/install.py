@@ -1,56 +1,6 @@
 import frappe
 from frappe import _
-
-
-def before_migrate():
-    """Fix Module Def and DocType module assignments before Frappe runs orphan detection."""
-    MODULE_APP_MAP = {
-        "Books Setup": "zoho_books_clone",
-        "Invoicing":   "zoho_books_clone",
-        "Payments":    "zoho_books_clone",
-        "Accounts":    "zoho_books_clone",
-        "Banking":     "zoho_books_clone",
-        "Taxes":       "zoho_books_clone",
-        "Reports":     "zoho_books_clone",
-    }
-    DOCTYPE_MODULE_MAP = {
-        "Books Payment Mode":      "Books Setup",
-        "Books Settings":          "Books Setup",
-        "Currency":                "Books Setup",
-        "UOM":                     "Books Setup",
-        "Payment Terms":           "Books Setup",
-        "Sales Invoice":           "Invoicing",
-        "Purchase Invoice":        "Invoicing",
-        "Sales Invoice Item":      "Invoicing",
-        "Purchase Invoice Item":   "Invoicing",
-        "Customer":                "Invoicing",
-        "Supplier":                "Invoicing",
-        "Item":                    "Invoicing",
-        "Tax Line":                "Invoicing",
-        "Payment Entry":           "Payments",
-        "Payment Entry Reference": "Payments",
-        "Account":                 "Accounts",
-        "Cost Center":             "Accounts",
-        "Fiscal Year":             "Accounts",
-        "General Ledger Entry":    "Accounts",
-        "Bank Account":            "Banking",
-        "Bank Transaction":        "Banking",
-        "Tax Template":            "Taxes",
-        "Tax Template Detail":     "Taxes",
-    }
-    for module, app in MODULE_APP_MAP.items():
-        if frappe.db.exists("Module Def", module):
-            frappe.db.set_value("Module Def", module, "app_name", app)
-        else:
-            frappe.get_doc({
-                "doctype": "Module Def",
-                "module_name": module,
-                "app_name": app,
-            }).insert(ignore_permissions=True, ignore_if_duplicate=True)
-    for doctype, module in DOCTYPE_MODULE_MAP.items():
-        if frappe.db.exists("DocType", doctype):
-            frappe.db.set_value("DocType", doctype, "module", module)
-    frappe.db.commit()
+import os
 
 
 def after_install():
@@ -61,6 +11,7 @@ def after_install():
     seed_modes_of_payment()
     seed_payment_terms()
     create_default_accounts()
+    seed_print_formats()
     frappe.db.commit()
     print("✅  Zoho Books Clone installed successfully!")
 
@@ -69,8 +20,11 @@ def after_migrate():
     seed_naming_series()
     seed_currencies()
     seed_uoms()
-    seed_modes_of_payment()
-    seed_payment_terms()
+    if frappe.db.exists("DocType", "Books Payment Mode"):
+        seed_modes_of_payment()
+    if frappe.db.exists("DocType", "Payment Terms"):
+        seed_payment_terms()
+    seed_print_formats()
     frappe.db.commit()
 
 
@@ -259,3 +213,51 @@ def seed_cost_centers():
             }).insert(ignore_permissions=True)
         except Exception:
             pass
+
+
+# ─── Print Formats ───────────────────────────────────────────────────────────
+def seed_print_formats():
+    """
+    Create or update the 'Tax Invoice' Print Format in the Frappe database.
+    Reads the HTML from the app's templates/print_formats/sales_invoice.html file.
+    """
+    try:
+        # Resolve path to the HTML template relative to this file
+        app_path = frappe.get_app_path("zoho_books_clone")
+        html_path = os.path.join(app_path, "templates", "print_formats", "sales_invoice.html")
+
+        if not os.path.exists(html_path):
+            frappe.log_error(f"Print format HTML not found at {html_path}", "seed_print_formats")
+            return
+
+        with open(html_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+        format_name = "Tax Invoice"
+
+        if frappe.db.exists("Print Format", format_name):
+            # Update existing
+            pf = frappe.get_doc("Print Format", format_name)
+            pf.html = html_content
+            pf.print_format_type = "Jinja"
+            pf.save(ignore_permissions=True)
+        else:
+            # Create new
+            frappe.get_doc({
+                "doctype":           "Print Format",
+                "name":              format_name,
+                "doc_type":          "Sales Invoice",
+                "module":            "Zoho Books Clone",
+                "print_format_type": "Jinja",
+                "html":              html_content,
+                "standard":          "No",
+                "disabled":          0,
+            }).insert(ignore_permissions=True)
+
+        frappe.db.commit()
+        print(f"✅  Print Format '{format_name}' seeded successfully.")
+
+    except Exception as e:
+        frappe.log_error(frappe.get_traceback(), "seed_print_formats failed")
+        print(f"⚠️  Could not seed print format: {e}")
+
