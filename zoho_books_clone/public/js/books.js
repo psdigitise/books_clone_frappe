@@ -1574,7 +1574,7 @@ const Invoices=defineComponent({name:"Invoices",
 
 // ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
 const InvoiceDetail=defineComponent({name:"InvoiceDetail",
-  components:{SendEmailModal},
+  components:{SendEmailModal,PaymentModal},
   setup(){
     const route=useRoute();
     const router=useRouter();
@@ -1728,10 +1728,84 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
     const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
     const showCustMenu=ref(false);
+    const showRecPay=ref(false);
+    const recPaySaving=ref(false);
+    const recPayAccounts=ref([]);
+    const recPay=reactive({
+      amount:0,bank_charges:0,tax_deducted:"no",
+      payment_date:new Date().toISOString().slice(0,10),
+      received_on:"",mode:"Cash",deposit_to:"",
+      reference:"",notes:"",ref_no:"",send_thankyou:false
+    });
+
+    watch(()=>inv.value,(v)=>{
+      if(v){
+        recPay.amount=flt(v.outstanding_amount)||flt(v.grand_total);
+        recPay.ref_no=v.name;
+      }
+    });
+
+    watch(showRecPay,async(v)=>{
+      if(v&&!recPayAccounts.value.length){
+        try{
+          const accs=await apiList("Account",{fields:["name","account_type"],filters:[["account_type","in",["Bank","Cash"]],["is_group","=",0]]});
+          recPayAccounts.value=accs;
+          if(!recPay.deposit_to&&accs.length) recPay.deposit_to=accs[0].name;
+        }catch(e){}
+      }
+    });
+
+    async function saveRecPay(submit){
+      if(!recPay.amount||recPay.amount<=0){toast("Please enter a valid amount","error");return;}
+      if(!recPay.deposit_to){toast("Please select a Deposit To account","error");return;}
+      recPaySaving.value=true;
+      try{
+        const company=inv.value?.company||co();
+        const arAcc=await frappe_db_get_value("Account",{"account_type":"Receivable","company":company},"name");
+        const doc={
+          doctype:"Payment Entry",
+          payment_type:"Receive",
+          party_type:"Customer",
+          party:inv.value?.customer,
+          party_name:inv.value?.customer_name||inv.value?.customer,
+          posting_date:recPay.payment_date,
+          paid_amount:recPay.amount,
+          received_amount:recPay.amount,
+          paid_from:arAcc||"",
+          paid_to:recPay.deposit_to,
+          mode_of_payment:recPay.mode,
+          reference_no:recPay.reference||recPay.ref_no,
+          company:company,
+          remarks:recPay.notes,
+          references:[{
+            doctype:"Payment Entry Reference",
+            reference_doctype:"Sales Invoice",
+            reference_name:inv.value?.name,
+            allocated_amount:recPay.amount
+          }]
+        };
+        const saved=await apiSave(doc);
+        if(submit) await apiSubmit("Payment Entry",saved.name);
+        toast("Payment "+(submit?"recorded":"saved as draft")+" successfully!");
+        showRecPay.value=false;
+        await loadDetail(invName.value);
+        loadList();
+      }catch(e){toast(e.message||"Could not save payment","error");}
+      finally{recPaySaving.value=false;}
+    }
+
+    async function frappe_db_get_value(doctype,filters,fieldname){
+      try{
+        const qs=Object.entries(filters).map(([k,v])=>`filters[${k}]=${encodeURIComponent(v)}`).join("&");
+        const r=await fetch(`/api/method/frappe.client.get_value?doctype=${doctype}&fieldname=${fieldname}&${qs}`,{credentials:"same-origin"});
+        const d=await r.json();
+        return d.message?.[fieldname]||"";
+      }catch(e){return "";}
+    }
 
     return{
       list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,showCustMenu,
+      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,showCustMenu,showRecPay,recPay,recPaySaving,recPayAccounts,saveRecPay,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
@@ -1845,7 +1919,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
           </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
-          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
+          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="showRecPay=true">💳 Record Payment ▾</button>
           <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
             <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
             {{submitting?'Submitting…':'Submit'}}
@@ -1859,7 +1933,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     <div class="zb-banner no-print" v-if="inv&&!isDraft&&!editing">
       <span style="color:#f59e0b;font-size:15px">✦</span>
       <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Invoice has been sent. Record payment for it as soon as you receive payment. <a href="#" style="color:#2563EB;font-weight:600;text-decoration:none">Learn More</a></span>
-      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0">Record Payment</button>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="showRecPay=true">Record Payment</button>
     </div>
     <div class="zb-banner zb-banner-upi no-print" v-if="inv&&!isDraft&&!editing">
       <span style="font-size:12px;color:#444">🖥 Get paid faster by <a href="#" style="color:#2563EB;text-decoration:none">setting up payment gateways</a> or <a href="#" style="color:#2563EB;text-decoration:none">display a UPI QR code</a>.</span>
@@ -1886,42 +1960,44 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
       <!-- PDF view or Edit form -->
       <div class="zb-pdf-wrap" v-if="!editing">
 
-        <!-- Customize Button — floats top-right of preview area -->
-        <div style="position:absolute;top:16px;right:16px;z-index:50" @mouseleave="showCustMenu=false">
-          <button @click="showCustMenu=!showCustMenu"
-            style="display:inline-flex;align-items:center;gap:6px;padding:7px 16px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,.35)">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
-            Customize ▾
-          </button>
-          <div v-if="showCustMenu"
-            style="position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.13);min-width:210px;overflow:hidden;z-index:200">
-            <div style="padding:4px 0">
-              <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-                Standard Template
-              </button>
-              <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m10 0h3a2 2 0 0 0 2-2v-3"/></svg>
-                Change Template
-              </button>
-              <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
-              <button @click="showCustMenu=false;$router.push('/template-editor')" class="zb-cust-menu-item" style="color:#2563EB;font-weight:600">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                Edit Template
-              </button>
-              <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
-              <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                Update Logo &amp; Address
-              </button>
-              <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                Manage Custom Fields
-              </button>
-              <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                Terms &amp; Conditions
-              </button>
+        <!-- Sticky toolbar row with Customize button -->
+        <div style="width:100%;max-width:660px;display:flex;justify-content:flex-end;margin-bottom:10px;position:sticky;top:0;z-index:50">
+          <div @mouseleave="showCustMenu=false" style="position:relative">
+            <button @click="showCustMenu=!showCustMenu"
+              style="display:inline-flex;align-items:center;gap:6px;padding:7px 16px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,.35)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+              Customize ▾
+            </button>
+            <div v-if="showCustMenu"
+              style="position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.13);min-width:210px;overflow:hidden;z-index:200">
+              <div style="padding:4px 0">
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                  Standard Template
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m10 0h3a2 2 0 0 0 2-2v-3"/></svg>
+                  Change Template
+                </button>
+                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
+                <button @click="showCustMenu=false;$router.push('/template-editor')" class="zb-cust-menu-item" style="color:#2563EB;font-weight:600">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  Edit Template
+                </button>
+                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  Update Logo &amp; Address
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                  Manage Custom Fields
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                  Terms &amp; Conditions
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -2111,6 +2187,165 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     </div><!-- /flex row -->
   </div><!-- /detail area -->
   <SendEmailModal :show="showSendEmail" :invoice-name="invName" :inv="inv" @close="showSendEmail=false" @sent="showSendEmail=false"/>
+
+  <!-- ── Record Payment Modal (Zoho style) ── -->
+  <teleport to="body">
+  <div v-if="showRecPay" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:0" @click.self="showRecPay=false">
+    <div style="background:#fff;width:100%;max-width:860px;min-height:100vh;display:flex;flex-direction:column">
+
+      <!-- Header -->
+      <div style="padding:20px 32px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between">
+        <h2 style="font-size:17px;font-weight:700;color:#111;margin:0">Payment for {{invName}}</h2>
+        <button @click="showRecPay=false" style="background:none;border:none;cursor:pointer;font-size:22px;color:#6b7280;line-height:1">✕</button>
+      </div>
+
+      <!-- Body -->
+      <div style="flex:1;padding:32px;display:grid;grid-template-columns:1fr 280px;gap:32px">
+        <!-- Left form -->
+        <div>
+          <!-- Row 1: Customer + Payment # -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Customer Name*</label>
+              <input :value="inv?.customer_name||inv?.customer" readonly style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#f9fafb"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment #*</label>
+              <div style="position:relative">
+                <input v-model="recPay.ref_no" style="width:100%;padding:8px 36px 8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#6b7280">⚙</span>
+              </div>
+            </div>
+          </div>
+
+          <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
+
+          <!-- Row 2: Amount + Bank Charges -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:6px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Amount Received (INR)*</label>
+              <input v-model.number="recPay.amount" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:2px solid #2563EB;border-radius:6px;font-size:13px;font-weight:600"/>
+              <div style="font-size:11px;color:#2563EB;margin-top:4px;cursor:pointer">PAN: <span style="text-decoration:underline">Add PAN</span></div>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Bank Charges (if any)</label>
+              <input v-model.number="recPay.bank_charges" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+            </div>
+          </div>
+
+          <!-- Tax deducted -->
+          <div style="margin-bottom:20px;padding:12px 0;border-bottom:1px solid #e5e7eb">
+            <span style="font-size:12.5px;color:#374151;margin-right:16px">Tax deducted?</span>
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-right:16px">
+              <input type="radio" v-model="recPay.tax_deducted" value="no"> No Tax deducted
+            </label>
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+              <input type="radio" v-model="recPay.tax_deducted" value="yes"> Yes, TDS (Income Tax)
+            </label>
+          </div>
+
+          <!-- Row 3: Payment Date + Payment Mode -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Payment Date*</label>
+              <input v-model="recPay.payment_date" type="date" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Mode</label>
+              <select v-model="recPay.mode" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
+                <option>Cash</option><option>Bank Transfer</option><option>UPI</option><option>NEFT</option><option>RTGS</option><option>Cheque</option><option>Credit Card</option><option>Debit Card</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Row 4: Payment Received On + Deposit To -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Received On</label>
+              <input v-model="recPay.received_on" type="date" placeholder="dd/MM/yyyy" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Deposit To*</label>
+              <select v-model="recPay.deposit_to" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
+                <option value="">— Select Account —</option>
+                <option v-for="a in recPayAccounts" :key="a.name" :value="a.name">{{a.name}}</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Row 5: Reference# + Notes -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Reference#</label>
+              <input v-model="recPay.reference" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Notes</label>
+              <textarea v-model="recPay.notes" rows="3" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical"></textarea>
+            </div>
+          </div>
+
+          <!-- Attachments -->
+          <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-bottom:20px">
+            <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px">Attachments</div>
+            <button style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151">
+              ⬆ Upload File ▾
+            </button>
+            <div style="font-size:11px;color:#9ca3af;margin-top:6px">You can upload a maximum of 5 files, 5MB each</div>
+          </div>
+
+          <!-- Thank you note -->
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
+            <input type="checkbox" v-model="recPay.send_thankyou" style="width:14px;height:14px">
+            Send a "Thank you" note for this payment
+          </label>
+        </div>
+
+        <!-- Right sidebar: Customer details -->
+        <div>
+          <div style="background:#1e3a5f;border-radius:8px;overflow:hidden">
+            <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+              <span style="color:#fff;font-size:13px;font-weight:600">{{inv?.customer_name||inv?.customer}}'s Details</span>
+              <span style="color:#fff;font-size:16px">›</span>
+            </div>
+          </div>
+          <div style="margin-top:16px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#9ca3af;margin-bottom:10px">Invoice Summary</div>
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+              <span style="color:#6b7280">Invoice #</span>
+              <span style="font-weight:600;color:#2563EB">{{invName}}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+              <span style="color:#6b7280">Grand Total</span>
+              <span style="font-weight:600">{{fmt(inv?.grand_total)}}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+              <span style="color:#6b7280">Paid</span>
+              <span style="font-weight:600;color:#16a34a">{{fmt(paidAmt)}}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px">
+              <span style="color:#6b7280">Balance Due</span>
+              <span style="font-weight:700;color:#dc2626">{{fmt(inv?.outstanding_amount)}}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer buttons -->
+      <div style="padding:16px 32px;border-top:1px solid #e5e7eb;background:#fff;display:flex;align-items:center;gap:12px">
+        <button @click="saveRecPay(false)" :disabled="recPaySaving" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit">
+          {{recPaySaving?'Saving…':'Save as Draft'}}
+        </button>
+        <button @click="saveRecPay(true)" :disabled="recPaySaving" style="padding:9px 22px;border:none;border-radius:6px;background:#2563EB;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
+          {{recPaySaving?'Saving…':'Save as Paid'}}
+        </button>
+        <button @click="showRecPay=false" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:500;cursor:pointer;color:#6b7280;font-family:inherit">Cancel</button>
+      </div>
+
+    </div>
+  </div>
+  </teleport>
+
 </div>
 `});
 
@@ -2595,7 +2830,7 @@ const modalCSS=`
 .zb-ab-success:hover{background:#276835!important}
 .zb-banner{display:flex;align-items:center;gap:10px;padding:9px 16px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#92400e;flex-shrink:0}
 /* PDF wrap */
-.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;justify-content:center;align-items:flex-start;position:relative}
+.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;flex-direction:column;align-items:center;position:relative}
 .zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:visible}
 .zb-cust-menu-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 16px;background:transparent;border:none;font-size:13px;color:#374151;cursor:pointer;text-align:left;font-family:inherit;transition:background .1s}
 .zb-cust-menu-item:hover{background:#f5f7ff;color:#2563EB}
