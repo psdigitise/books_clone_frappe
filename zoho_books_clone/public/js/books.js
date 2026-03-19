@@ -1724,7 +1724,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
       if(s==="Cancelled")return"b-badge-muted";
       return"b-badge-amber";
     });
-    const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
+    const isDraft=computed(()=>!inv.value||String(inv.value.docstatus)==="0"||inv.value.status==="Draft");
     const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
     const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
     const showCustMenu=ref(false);
@@ -1745,15 +1745,30 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
       }
     });
 
-    watch(showRecPay,async(v)=>{
-      if(v&&!recPayAccounts.value.length){
-        try{
-          const accs=await apiList("Account",{fields:["name","account_type"],filters:[["account_type","in",["Bank","Cash"]],["is_group","=",0]]});
-          recPayAccounts.value=accs;
-          if(!recPay.deposit_to&&accs.length) recPay.deposit_to=accs[0].name;
-        }catch(e){}
+    async function openRecPay(){
+      // Load bank/cash accounts fresh each time
+      try{
+        const accs=await apiList("Account",{
+          fields:["name","account_type"],
+          filters:[["is_group","=",0]],
+          limit:100
+        });
+        // Filter client-side to avoid server-side IN operator issues
+        recPayAccounts.value=accs.filter(a=>["Bank","Cash"].includes(a.account_type));
+        if(!recPay.deposit_to&&recPayAccounts.value.length){
+          recPay.deposit_to=recPayAccounts.value[0].name;
+        }
+      }catch(e){
+        recPayAccounts.value=[];
       }
-    });
+      // Reset amount from current outstanding
+      if(inv.value){
+        recPay.amount=flt(inv.value.outstanding_amount)||flt(inv.value.grand_total);
+        recPay.ref_no=inv.value.name;
+        recPay.payment_date=new Date().toISOString().slice(0,10);
+      }
+      showRecPay.value=true;
+    }
 
     async function saveRecPay(submit){
       if(!recPay.amount||recPay.amount<=0){toast("Please enter a valid amount","error");return;}
@@ -1783,7 +1798,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
     return{
       list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,showCustMenu,showRecPay,recPay,recPaySaving,recPayAccounts,saveRecPay,
+      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,showCustMenu,showRecPay,recPay,recPaySaving,recPayAccounts,saveRecPay,openRecPay,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
@@ -1897,7 +1912,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
           </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
-          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="showRecPay=true">💳 Record Payment ▾</button>
+          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="openRecPay()">💳 Record Payment ▾</button>
           <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
             <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
             {{submitting?'Submitting…':'Submit'}}
@@ -1911,7 +1926,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     <div class="zb-banner no-print" v-if="inv&&!isDraft&&!editing">
       <span style="color:#f59e0b;font-size:15px">✦</span>
       <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Invoice has been sent. Record payment for it as soon as you receive payment. <a href="#" style="color:#2563EB;font-weight:600;text-decoration:none">Learn More</a></span>
-      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="showRecPay=true">Record Payment</button>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="openRecPay()">Record Payment</button>
     </div>
     <div class="zb-banner zb-banner-upi no-print" v-if="inv&&!isDraft&&!editing">
       <span style="font-size:12px;color:#444">🖥 Get paid faster by <a href="#" style="color:#2563EB;text-decoration:none">setting up payment gateways</a> or <a href="#" style="color:#2563EB;text-decoration:none">display a UPI QR code</a>.</span>
