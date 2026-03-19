@@ -1877,8 +1877,163 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
   <!-- ══ RIGHT: DETAIL AREA ══ -->
   <div class="zb-detail-area">
 
-    <!-- Action bar -->
-    <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
+    <template v-if="showRecPay">
+      <div style="display:flex;flex-direction:column;min-height:100%;flex:1;background:#fff;overflow:hidden">
+        <!-- Header -->
+        <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;background:#fff;position:sticky;top:0;z-index:10">
+          <h2 style="font-size:17px;font-weight:700;color:#111;margin:0">Payment for {{invName}}</h2>
+          <button @click="showRecPay=false" style="background:none;border:none;cursor:pointer;font-size:22px;color:#6b7280;line-height:1">✕</button>
+        </div>
+
+        <!-- Body -->
+        <div style="flex:1;padding:24px;display:grid;grid-template-columns:1fr 280px;gap:24px;overflow-y:auto;background:#fff">
+          <!-- Left form -->
+          <div>
+            <!-- Row 1: Customer + Payment # -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Customer Name*</label>
+                <input :value="inv?.customer_name||inv?.customer" readonly style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#f9fafb"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment #*</label>
+                <div style="position:relative">
+                  <input v-model="recPay.ref_no" style="width:100%;padding:8px 36px 8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+                  <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#6b7280">⚙</span>
+                </div>
+              </div>
+            </div>
+
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
+
+            <!-- Row 2: Amount + Bank Charges -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:6px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Amount Received (INR)*</label>
+                <input v-model.number="recPay.amount" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:2px solid #2563EB;border-radius:6px;font-size:13px;font-weight:600"/>
+                <div style="font-size:11px;color:#2563EB;margin-top:4px;cursor:pointer">PAN: <span style="text-decoration:underline">Add PAN</span></div>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Bank Charges (if any)</label>
+                <input v-model.number="recPay.bank_charges" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+            </div>
+
+            <!-- Tax deducted -->
+            <div style="margin-bottom:20px;padding:12px 0;border-bottom:1px solid #e5e7eb">
+              <span style="font-size:12.5px;color:#374151;margin-right:16px">Tax deducted?</span>
+              <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-right:16px">
+                <input type="radio" v-model="recPay.tax_deducted" value="no"> No Tax deducted
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+                <input type="radio" v-model="recPay.tax_deducted" value="yes"> Yes, TDS (Income Tax)
+              </label>
+            </div>
+
+            <!-- Row 3: Payment Date + Payment Mode -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Payment Date*</label>
+                <input v-model="recPay.payment_date" type="date" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Mode</label>
+                <select v-model="recPay.mode" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
+                  <option>Cash</option><option>Bank Transfer</option><option>UPI</option><option>NEFT</option><option>RTGS</option><option>Cheque</option><option>Credit Card</option><option>Debit Card</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Row 4: Payment Received On + Deposit To -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Received On</label>
+                <input v-model="recPay.received_on" type="date" placeholder="dd/MM/yyyy" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Deposit To*</label>
+                <select v-model="recPay.deposit_to" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
+                  <option value="">— Select Account —</option>
+                  <option v-for="a in recPayAccounts" :key="a.name" :value="a.name">{{a.name}}</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Row 5: Reference# + Notes -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Reference#</label>
+                <input v-model="recPay.reference" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Notes</label>
+                <textarea v-model="recPay.notes" rows="3" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical"></textarea>
+              </div>
+            </div>
+
+            <!-- Attachments -->
+            <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-bottom:20px">
+              <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px">Attachments</div>
+              <button style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151">
+                ⬆ Upload File ▾
+              </button>
+              <div style="font-size:11px;color:#9ca3af;margin-top:6px">You can upload a maximum of 5 files, 5MB each</div>
+            </div>
+
+            <!-- Thank you note -->
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
+              <input type="checkbox" v-model="recPay.send_thankyou" style="width:14px;height:14px">
+              Send a "Thank you" note for this payment
+            </label>
+          </div>
+
+          <!-- Right sidebar: Customer details -->
+          <div>
+            <div style="background:#1e3a5f;border-radius:8px;overflow:hidden">
+              <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+                <span style="color:#fff;font-size:13px;font-weight:600">{{inv?.customer_name||inv?.customer}}'s Details</span>
+                <span style="color:#fff;font-size:16px">›</span>
+              </div>
+            </div>
+            <div style="margin-top:16px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#9ca3af;margin-bottom:10px">Invoice Summary</div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+                <span style="color:#6b7280">Invoice #</span>
+                <span style="font-weight:600;color:#2563EB">{{invName}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+                <span style="color:#6b7280">Grand Total</span>
+                <span style="font-weight:600">{{fmt(inv?.grand_total)}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+                <span style="color:#6b7280">Paid</span>
+                <span style="font-weight:600;color:#16a34a">{{fmt(paidAmt)}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px">
+                <span style="color:#6b7280">Balance Due</span>
+                <span style="font-weight:700;color:#dc2626">{{fmt(inv?.outstanding_amount)}}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer buttons -->
+        <div style="padding:16px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;align-items:center;gap:12px;position:sticky;bottom:0;z-index:10">
+          <button @click="saveRecPay(false)" :disabled="recPaySaving" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit">
+            {{recPaySaving?'Saving…':'Save as Draft'}}
+          </button>
+          <button @click="saveRecPay(true)" :disabled="recPaySaving" style="padding:9px 22px;border:none;border-radius:6px;background:#2563EB;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
+            {{recPaySaving?'Saving…':'Save as Paid'}}
+          </button>
+          <button @click="showRecPay=false" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:500;cursor:pointer;color:#6b7280;font-family:inherit">Cancel</button>
+        </div>
+      </div>
+    </template>
+    
+    <template v-else>
+      <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+        <!-- Action bar -->
+        <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
       <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
         <span style="font-size:14px;font-weight:700;color:#1a1d23">{{inv.name}}</span>
         <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">
@@ -2177,167 +2332,12 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
         </div>
       </div>
 
-    </div><!-- /flex row -->
+      </div><!-- /right panel -->
+      </div><!-- /flex row -->
+    </template>
   </div><!-- /detail area -->
+  
   <SendEmailModal :show="showSendEmail" :invoice-name="invName" :inv="inv" @close="showSendEmail=false" @sent="showSendEmail=false"/>
-
-  <!-- ── Record Payment Modal (Zoho style) ── -->
-  <teleport to="body">
-  <div v-if="showRecPay" style="position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.4);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:0" @click.self="showRecPay=false">
-    <div style="background:#fff;width:100%;max-width:860px;min-height:100vh;display:flex;flex-direction:column">
-
-      <!-- Header -->
-      <div style="padding:20px 32px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between">
-        <h2 style="font-size:17px;font-weight:700;color:#111;margin:0">Payment for {{invName}}</h2>
-        <button @click="showRecPay=false" style="background:none;border:none;cursor:pointer;font-size:22px;color:#6b7280;line-height:1">✕</button>
-      </div>
-
-      <!-- Body -->
-      <div style="flex:1;padding:32px;display:grid;grid-template-columns:1fr 280px;gap:32px">
-        <!-- Left form -->
-        <div>
-          <!-- Row 1: Customer + Payment # -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Customer Name*</label>
-              <input :value="inv?.customer_name||inv?.customer" readonly style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#f9fafb"/>
-            </div>
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment #*</label>
-              <div style="position:relative">
-                <input v-model="recPay.ref_no" style="width:100%;padding:8px 36px 8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-                <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#6b7280">⚙</span>
-              </div>
-            </div>
-          </div>
-
-          <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
-
-          <!-- Row 2: Amount + Bank Charges -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:6px">
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Amount Received (INR)*</label>
-              <input v-model.number="recPay.amount" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:2px solid #2563EB;border-radius:6px;font-size:13px;font-weight:600"/>
-              <div style="font-size:11px;color:#2563EB;margin-top:4px;cursor:pointer">PAN: <span style="text-decoration:underline">Add PAN</span></div>
-            </div>
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Bank Charges (if any)</label>
-              <input v-model.number="recPay.bank_charges" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-            </div>
-          </div>
-
-          <!-- Tax deducted -->
-          <div style="margin-bottom:20px;padding:12px 0;border-bottom:1px solid #e5e7eb">
-            <span style="font-size:12.5px;color:#374151;margin-right:16px">Tax deducted?</span>
-            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-right:16px">
-              <input type="radio" v-model="recPay.tax_deducted" value="no"> No Tax deducted
-            </label>
-            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
-              <input type="radio" v-model="recPay.tax_deducted" value="yes"> Yes, TDS (Income Tax)
-            </label>
-          </div>
-
-          <!-- Row 3: Payment Date + Payment Mode -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Payment Date*</label>
-              <input v-model="recPay.payment_date" type="date" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-            </div>
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Mode</label>
-              <select v-model="recPay.mode" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
-                <option>Cash</option><option>Bank Transfer</option><option>UPI</option><option>NEFT</option><option>RTGS</option><option>Cheque</option><option>Credit Card</option><option>Debit Card</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Row 4: Payment Received On + Deposit To -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Received On</label>
-              <input v-model="recPay.received_on" type="date" placeholder="dd/MM/yyyy" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-            </div>
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Deposit To*</label>
-              <select v-model="recPay.deposit_to" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
-                <option value="">— Select Account —</option>
-                <option v-for="a in recPayAccounts" :key="a.name" :value="a.name">{{a.name}}</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Row 5: Reference# + Notes -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Reference#</label>
-              <input v-model="recPay.reference" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-            </div>
-            <div>
-              <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Notes</label>
-              <textarea v-model="recPay.notes" rows="3" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical"></textarea>
-            </div>
-          </div>
-
-          <!-- Attachments -->
-          <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-bottom:20px">
-            <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px">Attachments</div>
-            <button style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151">
-              ⬆ Upload File ▾
-            </button>
-            <div style="font-size:11px;color:#9ca3af;margin-top:6px">You can upload a maximum of 5 files, 5MB each</div>
-          </div>
-
-          <!-- Thank you note -->
-          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
-            <input type="checkbox" v-model="recPay.send_thankyou" style="width:14px;height:14px">
-            Send a "Thank you" note for this payment
-          </label>
-        </div>
-
-        <!-- Right sidebar: Customer details -->
-        <div>
-          <div style="background:#1e3a5f;border-radius:8px;overflow:hidden">
-            <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer">
-              <span style="color:#fff;font-size:13px;font-weight:600">{{inv?.customer_name||inv?.customer}}'s Details</span>
-              <span style="color:#fff;font-size:16px">›</span>
-            </div>
-          </div>
-          <div style="margin-top:16px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
-            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#9ca3af;margin-bottom:10px">Invoice Summary</div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
-              <span style="color:#6b7280">Invoice #</span>
-              <span style="font-weight:600;color:#2563EB">{{invName}}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
-              <span style="color:#6b7280">Grand Total</span>
-              <span style="font-weight:600">{{fmt(inv?.grand_total)}}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
-              <span style="color:#6b7280">Paid</span>
-              <span style="font-weight:600;color:#16a34a">{{fmt(paidAmt)}}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px">
-              <span style="color:#6b7280">Balance Due</span>
-              <span style="font-weight:700;color:#dc2626">{{fmt(inv?.outstanding_amount)}}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Footer buttons -->
-      <div style="padding:16px 32px;border-top:1px solid #e5e7eb;background:#fff;display:flex;align-items:center;gap:12px">
-        <button @click="saveRecPay(false)" :disabled="recPaySaving" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit">
-          {{recPaySaving?'Saving…':'Save as Draft'}}
-        </button>
-        <button @click="saveRecPay(true)" :disabled="recPaySaving" style="padding:9px 22px;border:none;border-radius:6px;background:#2563EB;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
-          {{recPaySaving?'Saving…':'Save as Paid'}}
-        </button>
-        <button @click="showRecPay=false" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:500;cursor:pointer;color:#6b7280;font-family:inherit">Cancel</button>
-      </div>
-
-    </div>
-  </div>
-  </teleport>
 
 </div>
 `});
