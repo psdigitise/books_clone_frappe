@@ -247,7 +247,7 @@ def seed_print_formats():
                 "doctype":           "Print Format",
                 "name":              format_name,
                 "doc_type":          "Sales Invoice",
-                "module":            "Zoho Books Clone",
+                "module":            "Invoicing",
                 "print_format_type": "Jinja",
                 "html":              html_content,
                 "standard":          "No",
