@@ -1760,47 +1760,25 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
       if(!recPay.deposit_to){toast("Please select a Deposit To account","error");return;}
       recPaySaving.value=true;
       try{
-        const company=inv.value?.company||co();
-        const arAcc=await frappe_db_get_value("Account",{"account_type":"Receivable","company":company},"name");
-        const doc={
-          doctype:"Payment Entry",
-          payment_type:"Receive",
-          party_type:"Customer",
-          party:inv.value?.customer,
-          party_name:inv.value?.customer_name||inv.value?.customer,
-          posting_date:recPay.payment_date,
-          paid_amount:recPay.amount,
-          received_amount:recPay.amount,
-          paid_from:arAcc||"",
-          paid_to:recPay.deposit_to,
-          mode_of_payment:recPay.mode,
-          reference_no:recPay.reference||recPay.ref_no,
-          company:company,
-          remarks:recPay.notes,
-          references:[{
-            doctype:"Payment Entry Reference",
-            reference_doctype:"Sales Invoice",
-            reference_name:inv.value?.name,
-            allocated_amount:recPay.amount
-          }]
-        };
-        const saved=await apiSave(doc);
-        if(submit) await apiSubmit("Payment Entry",saved.name);
-        toast("Payment "+(submit?"recorded":"saved as draft")+" successfully!");
+        const result=await apiGET("zoho_books_clone.api.docs.record_payment",{
+          invoice_name: inv.value?.name,
+          amount:       recPay.amount,
+          deposit_to:   recPay.deposit_to,
+          mode_of_payment: recPay.mode||"Cash",
+          payment_date: recPay.payment_date,
+          reference_no: recPay.reference||recPay.ref_no||"",
+          notes:        recPay.notes||"",
+          submit:       submit?1:0,
+        });
+        toast("Payment "+result.name+" "+(submit?"recorded!":"saved as draft!"));
         showRecPay.value=false;
         await loadDetail(invName.value);
         loadList();
-      }catch(e){toast(e.message||"Could not save payment","error");}
+      }catch(e){
+        const msg=e?.message||String(e)||"Could not save payment";
+        toast(msg,"error");
+      }
       finally{recPaySaving.value=false;}
-    }
-
-    async function frappe_db_get_value(doctype,filters,fieldname){
-      try{
-        const qs=Object.entries(filters).map(([k,v])=>`filters[${k}]=${encodeURIComponent(v)}`).join("&");
-        const r=await fetch(`/api/method/frappe.client.get_value?doctype=${doctype}&fieldname=${fieldname}&${qs}`,{credentials:"same-origin"});
-        const d=await r.json();
-        return d.message?.[fieldname]||"";
-      }catch(e){return "";}
     }
 
     return{

@@ -144,3 +144,86 @@ def submit_doc(doctype, name):
     d.submit()
     frappe.db.commit()
     return d.as_dict()
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def record_payment(invoice_name, amount, deposit_to, mode_of_payment=None,
+                   payment_date=None, reference_no=None, notes=None, submit=True):
+    """
+    Record a payment for a Sales Invoice.
+    Called from the Books SPA Record Payment form.
+    """
+    import json
+    from frappe.utils import today, flt
+
+    # Coerce types
+    amount     = flt(amount)
+    submit     = str(submit).lower() not in ("0", "false", "no")
+    payment_date = payment_date or today()
+
+    if not invoice_name:
+        frappe.throw("invoice_name is required")
+    if amount <= 0:
+        frappe.throw("Amount must be greater than zero")
+    if not deposit_to:
+        frappe.throw("Deposit To account is required")
+
+    # Load the invoice
+    inv = frappe.get_doc("Sales Invoice", invoice_name)
+    if inv.docstatus != 1:
+        frappe.throw(f"Invoice {invoice_name} must be submitted before recording a payment")
+
+    company = inv.company or frappe.defaults.get_user_default("company") or ""
+
+    # Find the AR (Receivable) account for this company
+    paid_from = frappe.db.get_value(
+        "Account",
+        {"account_type": "Receivable", "company": company, "is_group": 0},
+        "name"
+    ) or inv.debit_to or ""
+
+    if not paid_from:
+        frappe.throw("Could not find a Receivable account for company: " + company)
+
+    # Build Payment Entry
+    pe = frappe.get_doc({
+        "doctype":          "Payment Entry",
+        "payment_type":     "Receive",
+        "party_type":       "Customer",
+        "party":            inv.customer,
+        "party_name":       inv.customer_name or inv.customer,
+        "posting_date":     payment_date,
+        "paid_amount":      amount,
+        "received_amount":  amount,
+        "paid_from":        paid_from,
+        "paid_to":          deposit_to,
+        "mode_of_payment":  mode_of_payment or "Cash",
+        "reference_no":     reference_no or invoice_name,
+        "company":          company,
+        "remarks":          notes or f"Payment for {invoice_name}",
+        "references": [{
+            "doctype":            "Payment Entry Reference",
+            "reference_doctype":  "Sales Invoice",
+            "reference_name":     invoice_name,
+            "allocated_amount":   amount,
+        }],
+    })
+
+    pe.insert(ignore_permissions=True)
+
+    if submit:
+        pe.submit()
+        # Reduce outstanding on invoice
+        outstanding = flt(inv.outstanding_amount) - amount
+        frappe.db.set_value(
+            "Sales Invoice", invoice_name,
+            "outstanding_amount", max(0, outstanding)
+        )
+        # Update status
+        if outstanding <= 0:
+            frappe.db.set_value("Sales Invoice", invoice_name, "status", "Paid")
+        elif outstanding < flt(inv.grand_total):
+            frappe.db.set_value("Sales Invoice", invoice_name, "status", "Partly Paid")
+
+    frappe.db.commit()
+    return {"name": pe.name, "status": "submitted" if submit else "draft"}
