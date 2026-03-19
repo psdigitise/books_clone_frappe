@@ -143,3 +143,176 @@ def submit_doc(doctype, name):
     d.submit()
     frappe.db.commit()
     return d.as_dict()
+import frappe
+import json
+from frappe.utils import nowdate, flt
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_payment_defaults(invoice_name):
+    """
+    Return pre-filled data for the Record Payment dialog.
+    Mirrors what Zoho Books shows when you click 'Record Payment' on an invoice.
+    """
+    inv = frappe.get_doc("Sales Invoice", invoice_name)
+
+    # Get next payment number
+    last_payment = frappe.db.sql("""
+        SELECT MAX(CAST(reference_no AS UNSIGNED))
+        FROM `tabPayment Entry`
+        WHERE reference_doctype = 'Sales Invoice'
+        AND reference_name = %s
+    """, invoice_name)
+    next_num = (last_payment[0][0] or 0) + 1
+
+    # Balance due = grand_total - paid amount
+    balance_due = flt(inv.grand_total) - flt(inv.advance_paid)
+
+    # Get bank accounts for deposit
+    bank_accounts = frappe.get_all(
+        "Account",
+        filters={
+            "account_type": ["in", ["Bank", "Cash"]],
+            "is_group": 0,
+            "company": inv.company or frappe.defaults.get_default("company"),
+        },
+        fields=["name", "account_type"],
+        order_by="account_type desc",  # Cash first
+    )
+
+    # Payment modes from fixtures
+    payment_modes = frappe.get_all(
+        "Mode of Payment",
+        fields=["name"],
+        order_by="name",
+    )
+
+    return {
+        "invoice_name": inv.name,
+        "customer_name": inv.customer_name or inv.customer,
+        "customer": inv.customer,
+        "grand_total": flt(inv.grand_total),
+        "balance_due": balance_due,
+        "currency": inv.currency or "INR",
+        "payment_number": str(next_num),
+        "payment_date": nowdate(),
+        "bank_accounts": bank_accounts,
+        "payment_modes": [m.name for m in payment_modes],
+        "company": inv.company or frappe.defaults.get_default("company"),
+    }
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def record_payment(
+    invoice_name,
+    amount_received,
+    payment_date,
+    payment_mode="Cash",
+    deposit_to=None,
+    bank_charges=0,
+    reference_no=None,
+    notes=None,
+    tds_deducted=0,
+    tds_amount=0,
+    save_as_draft=False,
+):
+    """
+    Create a Payment Entry against a Sales Invoice.
+    Mirrors Zoho Books 'Record Payment' behavior:
+      - Creates Payment Entry (linked to the invoice)
+      - Optionally saves as Draft or submits immediately
+    """
+    if isinstance(save_as_draft, str):
+        save_as_draft = save_as_draft.lower() in ("true", "1", "yes")
+
+    amount_received = flt(amount_received)
+    bank_charges = flt(bank_charges)
+    tds_amount = flt(tds_amount)
+
+    if not frappe.has_permission("Sales Invoice", "write", invoice_name):
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    inv = frappe.get_doc("Sales Invoice", invoice_name)
+
+    company = inv.company or frappe.defaults.get_default("company")
+    currency = inv.currency or "INR"
+
+    # Resolve deposit_to account
+    if not deposit_to:
+        if payment_mode == "Cash":
+            deposit_to = frappe.db.get_value(
+                "Account",
+                {"account_type": "Cash", "company": company, "is_group": 0},
+                "name",
+            )
+        else:
+            deposit_to = frappe.db.get_value(
+                "Account",
+                {"account_type": "Bank", "company": company, "is_group": 0},
+                "name",
+            )
+
+    # Receivable account from invoice
+    debtors_account = inv.debit_to or frappe.db.get_value(
+        "Company", company, "default_receivable_account"
+    )
+
+    # Build Payment Entry
+    pe = frappe.new_doc("Payment Entry")
+    pe.payment_type = "Receive"
+    pe.company = company
+    pe.posting_date = payment_date
+    pe.mode_of_payment = payment_mode
+    pe.party_type = "Customer"
+    pe.party = inv.customer
+    pe.party_name = inv.customer_name or inv.customer
+    pe.paid_from = debtors_account
+    pe.paid_to = deposit_to
+    pe.paid_amount = amount_received
+    pe.received_amount = amount_received
+    pe.source_exchange_rate = 1
+    pe.target_exchange_rate = 1
+    pe.paid_from_account_currency = currency
+    pe.paid_to_account_currency = currency
+    pe.reference_no = reference_no or pe.name
+    pe.reference_date = payment_date
+    pe.remarks = notes or f"Payment against {invoice_name}"
+
+    # Link to invoice
+    pe.append("references", {
+        "reference_doctype": "Sales Invoice",
+        "reference_name": invoice_name,
+        "due_date": inv.due_date,
+        "bill_no": inv.po_no or "",
+        "bill_date": inv.po_date or None,
+        "total_amount": flt(inv.grand_total),
+        "outstanding_amount": flt(inv.outstanding_amount),
+        "allocated_amount": amount_received,
+    })
+
+    # Bank charges deduction
+    if bank_charges > 0:
+        bank_charges_account = frappe.db.get_value(
+            "Account",
+            {"account_type": "Bank", "company": company, "is_group": 0},
+            "name",
+        )
+        pe.append("deductions", {
+            "account": bank_charges_account or debtors_account,
+            "cost_center": frappe.db.get_value("Company", company, "cost_center"),
+            "amount": bank_charges,
+        })
+
+    pe.insert(ignore_permissions=False)
+
+    if not save_as_draft:
+        pe.submit()
+
+    frappe.db.commit()
+
+    return {
+        "status": "draft" if save_as_draft else "submitted",
+        "payment_entry": pe.name,
+        "invoice": invoice_name,
+        "amount": amount_received,
+    }
