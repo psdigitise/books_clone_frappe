@@ -1,197 +1,347 @@
 {% set inv = doc %}
+{% set company = frappe.db.get_single_value("Global Defaults","default_company") or "Your Company" %}
+{% set company_doc = frappe.get_doc("Company", company) if frappe.db.exists("Company", company) else None %}
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'DM Sans', sans-serif; color: #1A1D23; background: #fff; }
-  .page { max-width: 800px; margin: 0 auto; padding: 48px; }
+  body { font-family: 'Inter', Arial, sans-serif; color: #333; background: #fff; font-size: 13px; }
+  .page { max-width: 794px; margin: 0 auto; padding: 32px 40px; }
 
-  /* Header */
-  .inv-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 36px; }
-  .brand-name { font-size: 24px; font-weight: 700; color: #3B5BDB; letter-spacing: -0.5px; }
-  .brand-sub  { font-size: 12px; color: #868E96; margin-top: 4px; }
-  .inv-title-block { text-align: right; }
-  .inv-title  { font-size: 32px; font-weight: 700; color: #3B5BDB; letter-spacing: -1px; }
-  .inv-meta   { margin-top: 10px; }
-  .inv-meta table { margin-left: auto; border-collapse: collapse; }
-  .inv-meta td { padding: 3px 0 3px 16px; font-size: 12.5px; }
-  .inv-meta td:first-child { color: #868E96; }
-  .inv-meta td:last-child  { font-weight: 500; color: #1A1D23; }
+  /* ── OVERDUE RIBBON ── */
+  .ribbon-wrap { position: relative; overflow: hidden; }
+  .ribbon {
+    position: absolute; top: 18px; left: -28px;
+    background: #F6A623; color: #fff;
+    font-size: 10px; font-weight: 700; letter-spacing: .8px;
+    padding: 5px 36px; transform: rotate(-45deg);
+    text-transform: uppercase; z-index: 10;
+  }
+  .ribbon.paid     { background: #2D8A4E; }
+  .ribbon.overdue  { background: #F6A623; }
+  .ribbon.draft    { background: #9E9E9E; }
 
-  /* Status strip */
-  .status-strip {
-    padding: 8px 16px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 600;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
+  /* ── HEADER ── */
+  .inv-header {
+    display: flex; justify-content: space-between; align-items: flex-start;
     margin-bottom: 28px;
   }
-  .status-strip::before { content:''; width:8px; height:8px; border-radius:50%; background:currentColor; opacity:.7; }
-  .status-paid      { background: #EBFBEE; color: #2F9E44; }
-  .status-overdue   { background: #FFF5F5; color: #C92A2A; }
-  .status-submitted { background: #E7F5FF; color: #1971C2; }
-  .status-draft     { background: #F1F3F5; color: #495057; }
-  .status-partial   { background: #FFF3BF; color: #E67700; }
-
-  /* Parties */
-  .parties { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; background: #F8F9FC;
-             border-radius: 10px; padding: 20px 24px; margin-bottom: 28px; }
-  .party-label { font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
-                 color: #ADB5BD; margin-bottom: 6px; }
-  .party-name  { font-size: 15px; font-weight: 600; color: #1A1D23; margin-bottom: 3px; }
-  .party-detail{ font-size: 12.5px; color: #868E96; }
-
-  /* Items table */
-  table.items { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-  table.items thead tr { background: #3B5BDB; color: #fff; }
-  table.items thead th { padding: 11px 14px; font-size: 11.5px; font-weight: 600; letter-spacing: .3px; text-align: left; }
-  table.items thead th:last-child { text-align: right; }
-  table.items tbody td { padding: 12px 14px; font-size: 13px; color: #495057; border-bottom: 1px solid #E8ECF0; }
-  table.items tbody tr:nth-child(even) td { background: #FAFBFC; }
-  table.items tbody td.amount { text-align: right; font-family: 'DM Mono', monospace; }
-  table.items tfoot td { padding: 10px 14px; font-size: 13px; border-top: 1px solid #CDD5E0; }
-  table.items tfoot td.label { color: #868E96; text-align: right; padding-right: 24px; }
-  table.items tfoot td.amount { text-align: right; font-family: 'DM Mono', monospace; font-weight: 500; }
-  table.items tfoot tr.grand td {
-    background: #EEF2FF; color: #3B5BDB;
-    font-size: 15px; font-weight: 700;
-    border-top: 2px solid #3B5BDB;
+  .logo-block { display: flex; flex-direction: column; gap: 6px; }
+  .logo-block img {
+    max-height: 56px; max-width: 180px;
+    object-fit: contain; object-position: left center;
   }
-  table.items tfoot tr.outstanding td {
-    background: #FFF5F5; color: #C92A2A; font-size: 13px; font-weight: 600;
+  .logo-placeholder {
+    display: flex; align-items: center; justify-content: center;
+    width: 140px; height: 52px;
+    border: 2px dashed #D0D5DD; border-radius: 6px;
+    font-size: 11px; color: #9AA0AB; letter-spacing: .3px;
   }
+  .company-info { font-size: 12px; color: #555; line-height: 1.6; }
+  .company-info strong { font-size: 14px; font-weight: 600; color: #1A1A2E; display: block; margin-bottom: 2px; }
 
-  /* Notes / Terms */
-  .notes { background: #F8F9FC; border-left: 3px solid #3B5BDB;
-           border-radius: 0 6px 6px 0; padding: 12px 16px;
-           font-size: 13px; color: #495057; margin-bottom: 16px; }
-  .notes strong { display: block; font-size: 11px; font-weight: 700; letter-spacing: .5px;
-                  text-transform: uppercase; color: #868E96; margin-bottom: 4px; }
+  .inv-title-block { text-align: right; }
+  .inv-label { font-size: 11px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #9AA0AB; margin-bottom: 4px; }
+  .inv-number { font-size: 22px; font-weight: 700; color: #1A1A2E; margin-bottom: 12px; }
 
-  /* Footer */
-  .inv-footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #E8ECF0;
-               display: flex; justify-content: space-between; align-items: flex-end; }
-  .thank-you  { font-size: 14px; font-weight: 600; color: #3B5BDB; }
-  .footer-meta{ font-size: 11px; color: #ADB5BD; text-align: right; }
+  .inv-meta-table { margin-left: auto; border-collapse: collapse; }
+  .inv-meta-table td { padding: 3px 0 3px 20px; font-size: 12.5px; }
+  .inv-meta-table td:first-child { color: #9AA0AB; font-weight: 400; }
+  .inv-meta-table td:last-child  { font-weight: 500; color: #1A1A2E; }
+
+  /* ── DIVIDER ── */
+  .divider { border: none; border-top: 1px solid #E8ECF0; margin: 16px 0; }
+
+  /* ── BILL TO / FROM SECTION ── */
+  .parties-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 24px; gap: 24px; }
+  .party-block { flex: 1; }
+  .party-tag { font-size: 10px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; color: #9AA0AB; margin-bottom: 6px; }
+  .party-name { font-size: 14px; font-weight: 600; color: #1A1A2E; margin-bottom: 4px; }
+  .party-detail { font-size: 12px; color: #6B7280; line-height: 1.6; }
+
+  /* ── STATUS BADGE ── */
+  .badge {
+    display: inline-block; padding: 4px 10px; border-radius: 20px;
+    font-size: 11px; font-weight: 600; letter-spacing: .4px;
+  }
+  .badge-paid     { background: #E8F9EE; color: #1C7C3B; }
+  .badge-overdue  { background: #FEF3CD; color: #B45309; }
+  .badge-draft    { background: #F1F3F5; color: #6B7280; }
+  .badge-partial  { background: #FEF3CD; color: #B45309; }
+  .badge-submitted{ background: #EBF5FF; color: #1565C0; }
+
+  /* ── ITEMS TABLE ── */
+  .items-table { width: 100%; border-collapse: collapse; margin-bottom: 0; }
+  .items-table thead tr { background: #F8FAFC; }
+  .items-table thead th {
+    padding: 10px 14px; font-size: 11px; font-weight: 600;
+    letter-spacing: .5px; text-transform: uppercase;
+    color: #6B7280; text-align: left; border-bottom: 2px solid #E4E7EC;
+  }
+  .items-table thead th.right { text-align: right; }
+  .items-table tbody td {
+    padding: 12px 14px; font-size: 13px; color: #374151;
+    border-bottom: 1px solid #F2F4F7; vertical-align: top;
+  }
+  .items-table tbody tr:last-child td { border-bottom: none; }
+  .items-table td.mono { font-variant-numeric: tabular-nums; text-align: right; }
+  .item-name { font-weight: 500; color: #111827; }
+  .item-desc { font-size: 11.5px; color: #9AA0AB; margin-top: 2px; }
+  .item-hsn  { font-size: 10.5px; color: #B8BDC7; }
+
+  /* ── TOTALS + QR SECTION ── */
+  .bottom-section { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 16px; gap: 24px; }
+  .notes-section { flex: 1; }
+  .notes-block { background: #F8FAFC; border-radius: 6px; padding: 12px 16px; margin-bottom: 12px; }
+  .notes-block .notes-title { font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: #9AA0AB; margin-bottom: 6px; }
+  .notes-block p { font-size: 12.5px; color: #555; line-height: 1.6; }
+
+  /* QR Code Block */
+  .qr-block { text-align: center; padding: 12px 16px; background: #F8FAFC; border-radius: 8px; border: 1px solid #E8ECF0; min-width: 140px; }
+  .qr-block .qr-title { font-size: 10px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; color: #9AA0AB; margin-bottom: 8px; }
+  .qr-block .qr-canvas { margin: 0 auto 8px; }
+  .qr-block .qr-upi-id { font-size: 10.5px; color: #6B7280; word-break: break-all; }
+  .qr-block .qr-amount { font-size: 12px; font-weight: 600; color: #1A1A2E; margin-top: 4px; }
+  #qr-canvas { display: flex; justify-content: center; }
+
+  /* Totals */
+  .totals-block { min-width: 260px; }
+  .totals-table { width: 100%; border-collapse: collapse; }
+  .totals-table td { padding: 7px 14px; font-size: 13px; }
+  .totals-table td.t-label { color: #6B7280; }
+  .totals-table td.t-value { text-align: right; font-variant-numeric: tabular-nums; color: #374151; }
+  .totals-table .grand-row td { font-size: 15px; font-weight: 700; color: #1A1A2E; border-top: 2px solid #E4E7EC; padding-top: 10px; }
+  .totals-table .payment-row td { color: #2D8A4E; }
+  .totals-table .balance-row td { color: #D92D20; font-size: 14px; font-weight: 600; background: #FFF6F5; border-radius: 4px; }
+  .totals-table .subtotal-row td { border-top: 1px solid #F2F4F7; }
+  .total-words { font-size: 11.5px; color: #9AA0AB; margin-top: 8px; padding: 0 14px; font-style: italic; }
+
+  /* ── SIGNATURE / FOOTER ── */
+  .footer-row { display: flex; justify-content: space-between; align-items: flex-end; margin-top: 36px; padding-top: 20px; border-top: 1px solid #E8ECF0; }
+  .sig-block { text-align: center; }
+  .sig-line { width: 160px; border-top: 1px solid #CDD5E0; margin: 0 auto 6px; padding-top: 6px; }
+  .sig-label { font-size: 11px; color: #9AA0AB; }
+  .footer-note { font-size: 11px; color: #B8BDC7; text-align: right; line-height: 1.7; }
+  .thank-msg { font-size: 13px; font-weight: 600; color: #1A1A2E; }
 
   @media print {
-    .page { padding: 24px; }
+    .page { padding: 20px 28px; }
     body  { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   }
 </style>
 </head>
 <body>
-<div class="page">
+<div class="page ribbon-wrap">
 
-  <!-- Header -->
+  <!-- Overdue / Status Ribbon -->
+  {% if inv.status == "Overdue" %}
+  <div class="ribbon overdue">Overdue</div>
+  {% elif inv.status == "Paid" %}
+  <div class="ribbon paid">Paid</div>
+  {% elif inv.status == "Draft" %}
+  <div class="ribbon draft">Draft</div>
+  {% endif %}
+
+  <!-- ── HEADER ── -->
   <div class="inv-header">
-    <div>
-      <div class="brand-name">{{ frappe.db.get_single_value("Global Defaults","default_company") or "Your Company" }}</div>
-      <div class="brand-sub">GST Compliant Tax Invoice</div>
+    <div class="logo-block">
+      {# Logo: looks for company logo via attachment #}
+      {% set logo_url = company_doc.company_logo if company_doc and company_doc.company_logo else None %}
+      {% if logo_url %}
+        <img src="{{ logo_url }}" alt="{{ company }} logo" />
+      {% else %}
+        <div class="logo-placeholder">Your Logo Here</div>
+      {% endif %}
+      <div class="company-info" style="margin-top:8px">
+        <strong>{{ company }}</strong>
+        {% if company_doc %}
+          {{ company_doc.address or "" }}<br>
+          {% if company_doc.city %}{{ company_doc.city }}, {% endif %}
+          {{ company_doc.country or "India" }}<br>
+          {% if company_doc.tax_id %}GSTIN: {{ company_doc.tax_id }}{% endif %}
+        {% else %}
+          Tamil Nadu, India
+        {% endif %}
+      </div>
     </div>
+
     <div class="inv-title-block">
-      <div class="inv-title">INVOICE</div>
-      <div class="inv-meta">
-        <table>
-          <tr><td>Invoice No</td><td>{{ inv.name }}</td></tr>
-          <tr><td>Date</td><td>{{ frappe.format(inv.posting_date, "Date") }}</td></tr>
-          <tr><td>Due Date</td><td>{{ frappe.format(inv.due_date, "Date") }}</td></tr>
-          {% if inv.invoice_number %}<tr><td>Ref No</td><td>{{ inv.invoice_number }}</td></tr>{% endif %}
-        </table>
+      <div class="inv-label">Tax Invoice</div>
+      <div class="inv-number">{{ inv.name }}</div>
+      <table class="inv-meta-table">
+        <tr><td>Invoice Date</td><td>{{ frappe.format(inv.posting_date, "Date") }}</td></tr>
+        <tr><td>Due Date</td><td>{{ frappe.format(inv.due_date, "Date") }}</td></tr>
+        <tr><td>Terms</td><td>{{ inv.payment_terms_template or "Due on Receipt" }}</td></tr>
+        {% if inv.po_no %}<tr><td>P.O. #</td><td>{{ inv.po_no }}</td></tr>{% endif %}
+      </table>
+    </div>
+  </div>
+
+  <hr class="divider">
+
+  <!-- ── BILL TO / STATUS ── -->
+  <div class="parties-row">
+    <div class="party-block">
+      <div class="party-tag">Bill To</div>
+      <div class="party-name">{{ inv.customer_name }}</div>
+      <div class="party-detail">
+        {{ inv.address_display | replace("<br>", "\n") | striptags | replace("\n", "<br>") if inv.address_display else inv.customer }}
+      </div>
+    </div>
+    <div class="party-block" style="text-align:right">
+      <div class="party-tag">Status</div>
+      {% set smap = {"Paid":"badge-paid","Overdue":"badge-overdue","Draft":"badge-draft","Partly Paid":"badge-partial","Submitted":"badge-submitted"} %}
+      <span class="badge {{ smap.get(inv.status,'badge-draft') }}">{{ inv.status }}</span>
+      <div style="margin-top:10px">
+        <div class="party-tag">Currency</div>
+        <div class="party-name">{{ inv.currency or "INR" }}</div>
       </div>
     </div>
   </div>
 
-  <!-- Status -->
-  {% set smap = {"Paid":"status-paid","Overdue":"status-overdue","Submitted":"status-submitted","Draft":"status-draft","Partly Paid":"status-partial","Cancelled":"status-draft"} %}
-  <span class="status-strip {{ smap.get(inv.status,'status-draft') }}">{{ inv.status }}</span>
-
-  <!-- Parties -->
-  <div class="parties">
-    <div>
-      <div class="party-label">Bill To</div>
-      <div class="party-name">{{ inv.customer_name }}</div>
-      <div class="party-detail">{{ inv.customer }}</div>
-    </div>
-    <div style="text-align:right">
-      <div class="party-label">Currency</div>
-      <div class="party-name">{{ inv.currency or "INR" }}</div>
-      {% if inv.cost_center %}<div class="party-detail">{{ inv.cost_center }}</div>{% endif %}
-    </div>
-  </div>
-
-  <!-- Items -->
-  <table class="items">
+  <!-- ── ITEMS TABLE ── -->
+  <table class="items-table">
     <thead>
       <tr>
-        <th style="width:40px">#</th>
-        <th>Item / Description</th>
-        <th style="width:80px;text-align:right">Qty</th>
-        <th style="width:120px;text-align:right">Rate</th>
-        <th style="width:140px;text-align:right">Amount</th>
+        <th style="width:36px">#</th>
+        <th>Item &amp; Description</th>
+        <th class="right" style="width:72px">Qty</th>
+        <th class="right" style="width:110px">Rate</th>
+        <th class="right" style="width:120px">Amount</th>
       </tr>
     </thead>
     <tbody>
       {% for item in inv.items %}
       <tr>
-        <td style="color:#ADB5BD">{{ loop.index }}</td>
+        <td style="color:#B8BDC7">{{ loop.index }}</td>
         <td>
-          <div style="font-weight:500;color:#1A1D23">{{ item.item_name }}</div>
-          {% if item.description %}<div style="font-size:11.5px;color:#868E96;margin-top:2px">{{ item.description }}</div>{% endif %}
-          {% if item.hsn_code %}<div style="font-size:11px;color:#ADB5BD">HSN: {{ item.hsn_code }}</div>{% endif %}
+          <div class="item-name">{{ item.item_name }}</div>
+          {% if item.description and item.description != item.item_name %}
+            <div class="item-desc">{{ item.description }}</div>
+          {% endif %}
+          {% if item.gst_hsn_code %}<div class="item-hsn">HSN: {{ item.gst_hsn_code }}</div>{% endif %}
         </td>
-        <td class="amount">{{ item.qty }}</td>
-        <td class="amount">{{ frappe.format(item.rate,"Currency") }}</td>
-        <td class="amount">{{ frappe.format(item.amount,"Currency") }}</td>
+        <td class="mono">{{ item.qty }} {{ item.uom or "pcs" }}</td>
+        <td class="mono">{{ frappe.format(item.rate, "Currency") }}</td>
+        <td class="mono">{{ frappe.format(item.amount, "Currency") }}</td>
       </tr>
       {% endfor %}
     </tbody>
-    <tfoot>
-      <tr><td colspan="3"></td><td class="label">Subtotal</td><td class="amount">{{ frappe.format(inv.net_total,"Currency") }}</td></tr>
-      {% for tax in inv.taxes %}
-      <tr>
-        <td colspan="3"></td>
-        <td class="label">{{ tax.description }} ({{ tax.rate }}%)</td>
-        <td class="amount">{{ frappe.format(tax.tax_amount,"Currency") }}</td>
-      </tr>
-      {% endfor %}
-      <tr class="grand">
-        <td colspan="3"></td>
-        <td class="label" style="color:#3B5BDB">Total Amount</td>
-        <td class="amount">{{ frappe.format(inv.grand_total,"Currency") }}</td>
-      </tr>
-      {% if inv.outstanding_amount and inv.outstanding_amount > 0 %}
-      <tr class="outstanding">
-        <td colspan="3"></td>
-        <td class="label" style="color:#C92A2A">Balance Due</td>
-        <td class="amount">{{ frappe.format(inv.outstanding_amount,"Currency") }}</td>
-      </tr>
-      {% endif %}
-    </tfoot>
   </table>
 
-  {% if inv.notes %}
-  <div class="notes"><strong>Notes</strong>{{ inv.notes }}</div>
-  {% endif %}
-  {% if inv.terms %}
-  <div class="notes"><strong>Terms & Conditions</strong>{{ inv.terms }}</div>
-  {% endif %}
+  <!-- ── BOTTOM: NOTES + QR + TOTALS ── -->
+  <div class="bottom-section">
 
-  <!-- Footer -->
-  <div class="inv-footer">
-    <div class="thank-you">Thank you for your business!</div>
-    <div class="footer-meta">
-      Generated by Books Accounting<br>
-      {{ frappe.format(frappe.utils.now(),"Datetime") }}
+    <!-- Notes & QR Code (left side) -->
+    <div class="notes-section">
+      {% if inv.terms %}
+      <div class="notes-block">
+        <div class="notes-title">Notes</div>
+        <p>{{ inv.terms }}</p>
+      </div>
+      {% endif %}
+
+      <!-- UPI QR Code -->
+      <div class="qr-block" style="margin-top:12px">
+        <div class="qr-title">Pay via UPI</div>
+        <div id="qr-canvas" class="qr-canvas"></div>
+        <div class="qr-upi-id" id="upi-id-display">
+          {# Pull UPI ID from company doc custom field or fallback #}
+          {{ company_doc.custom_upi_id if company_doc and company_doc.get("custom_upi_id") else "yourupi@bank" }}
+        </div>
+        <div class="qr-amount">
+          Balance: {{ frappe.format(inv.outstanding_amount or inv.grand_total, "Currency") }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Totals (right side) -->
+    <div class="totals-block">
+      <table class="totals-table">
+        <tr class="subtotal-row">
+          <td class="t-label">Sub Total</td>
+          <td class="t-value">{{ frappe.format(inv.net_total, "Currency") }}</td>
+        </tr>
+        {% for tax in inv.taxes %}
+        <tr>
+          <td class="t-label">{{ tax.description }} ({{ tax.rate }}%)</td>
+          <td class="t-value">{{ frappe.format(tax.tax_amount, "Currency") }}</td>
+        </tr>
+        {% endfor %}
+        <tr class="grand-row">
+          <td class="t-label">Total</td>
+          <td class="t-value">{{ frappe.format(inv.grand_total, "Currency") }}</td>
+        </tr>
+        {% if inv.total_advance > 0 %}
+        <tr class="payment-row">
+          <td class="t-label">Payment Made</td>
+          <td class="t-value">(–) {{ frappe.format(inv.total_advance, "Currency") }}</td>
+        </tr>
+        {% endif %}
+        {% if inv.outstanding_amount > 0 %}
+        <tr class="balance-row">
+          <td class="t-label" style="font-weight:600">Balance Due</td>
+          <td class="t-value" style="font-weight:700">{{ frappe.format(inv.outstanding_amount, "Currency") }}</td>
+        </tr>
+        {% endif %}
+      </table>
+      <div class="total-words">
+        {{ inv.in_words or "" }}
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FOOTER ── -->
+  <div class="footer-row">
+    <div>
+      <div class="thank-msg">Thanks for your business.</div>
+    </div>
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div class="sig-label">Authorized Signature</div>
     </div>
   </div>
 
 </div>
+
+<!-- ── QR CODE GENERATION ── -->
+<script>
+(function() {
+  try {
+    var upiId = document.getElementById("upi-id-display").textContent.trim();
+    // Outstanding amount for UPI string
+    var amountEl = document.querySelector(".qr-amount");
+    var amountText = amountEl ? amountEl.textContent.replace(/[^0-9.]/g,"").trim() : "0";
+
+    // Build UPI payment string
+    var companyName = {{ company | tojson }};
+    var invName = {{ inv.name | tojson }};
+    var upiString = "upi://pay?pa=" + encodeURIComponent(upiId)
+      + "&pn=" + encodeURIComponent(companyName)
+      + "&am=" + encodeURIComponent(amountText)
+      + "&cu=INR"
+      + "&tn=" + encodeURIComponent("Payment for " + invName);
+
+    var container = document.getElementById("qr-canvas");
+    new QRCode(container, {
+      text: upiString,
+      width: 110,
+      height: 110,
+      colorDark: "#1A1A2E",
+      colorLight: "#F8FAFC",
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  } catch(e) {
+    // QRCode lib might not be available in print context; silently ignore
+    var container = document.getElementById("qr-canvas");
+    if (container) container.innerHTML = '<div style="width:110px;height:110px;display:flex;align-items:center;justify-content:center;font-size:10px;color:#9AA0AB;border:1px dashed #ccc;border-radius:4px">QR unavailable</div>';
+  }
+})();
+</script>
+
 </body>
 </html>
