@@ -245,66 +245,124 @@ def record_payment(
         "amount":        amount_received,
     }
 
-# ─── AI Chat Proxy ────────────────────────────────────────────────────────────
+# ─── AI Workflow Automator — Rule-based command parser (no API key needed) ───
 
 @frappe.whitelist(allow_guest=False, methods=["POST"])
 def ai_chat(messages, system=None):
     """
-    Proxy for Anthropic Claude API — called from the browser to avoid CORS.
-    Reads the API key from Books Settings or site config.
+    Rule-based command parser for the Books AI Automator.
+    Parses natural language commands and returns structured action JSON.
+    No external API required.
     """
-    import urllib.request
-    import urllib.error
+    import re
 
     if isinstance(messages, str):
         messages = json.loads(messages)
 
-    # Get API key — stored in Books Settings or site_config.json
-    api_key = ""
-    try:
-        api_key = frappe.db.get_single_value("Books Settings", "anthropic_api_key") or ""
-    except Exception:
-        pass
-    if not api_key:
-        api_key = frappe.conf.get("anthropic_api_key", "")
-    if not api_key:
-        frappe.throw("Anthropic API key not configured. Please add it in Books Settings or site_config.json as 'anthropic_api_key'.")
+    # Get the latest user message
+    user_msg = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            user_msg = m.get("content", "").strip()
+            break
 
-    system_prompt = system or (
-        "You are a helpful accounting assistant for a Frappe-based Books application.\n\n"
-        "You can:\n"
-        "1. Answer questions about invoices, payments, customers, and accounting.\n"
-        "2. Create sales invoices by extracting details from user messages.\n\n"
-        "When creating an invoice, respond ONLY with valid JSON like:\n"
-        '{"action": "create_invoice", "customer": "...", "items": [{"item_name": "...", "qty": 1, "rate": 5000, "amount": 5000}], "due_date": "YYYY-MM-DD", "notes": ""}\n\n'
-        "For all other questions, respond in plain conversational text under 150 words.\n"
-        f"Today's date: {nowdate()}"
+    if not user_msg:
+        return {"text": '{"action":"unknown","message":"No command received."}'}
+
+    cmd = user_msg.lower()
+
+    # ── CREATE INVOICE ──────────────────────────────────────────────────────
+    # Patterns: "create invoice for hari laptop 50000"
+    #           "invoice prasath ₹80,000"
+    #           "new invoice for customer Raju item Laptop qty 2 rate 25000"
+    create_patterns = [
+        r"(?:create|make|new|add)\s+(?:an?\s+)?invoice\s+(?:for\s+)?(.+)",
+        r"invoice\s+(?:for\s+)?(.+)",
+        r"bill\s+(?:for\s+)?(.+)",
+    ]
+    for pat in create_patterns:
+        m = re.search(pat, cmd, re.IGNORECASE)
+        if m:
+            rest = m.group(1).strip()
+
+            # Extract amount — ₹1,00,000 or 50000 or rs.5000
+            amt_match = re.search(r"(?:₹|rs\.?|inr)\s*([\d,]+(?:\.\d+)?)|(?:^|\s)([\d,]+(?:\.\d+)?)(?:\s|$)", rest, re.IGNORECASE)
+            amount = 0
+            if amt_match:
+                raw_amt = (amt_match.group(1) or amt_match.group(2) or "0").replace(",", "")
+                amount = float(raw_amt)
+
+            # Extract qty — "qty 2" or "2 units" or "2x"
+            qty = 1
+            qty_match = re.search(r"(?:qty|quantity|x)\s*(\d+)|(\d+)\s*(?:qty|units?|pcs?|nos?)", rest, re.IGNORECASE)
+            if qty_match:
+                qty = int(qty_match.group(1) or qty_match.group(2))
+
+            # Extract item name — keywords that suggest an item
+            item_keywords = ["laptop", "computer", "phone", "mobile", "service", "product",
+                             "item", "work", "design", "consulting", "development", "repair",
+                             "maintenance", "software", "hardware", "table", "chair", "ac",
+                             "printer", "scanner", "camera", "tv", "monitor", "keyboard"]
+            item_name = "Service"
+            for kw in item_keywords:
+                if kw in cmd:
+                    item_name = kw.title()
+                    break
+            # Also try to find explicit item= or item:
+            item_explicit = re.search(r"item[:\s]+([a-z][a-z\s]+?)(?:\s+(?:qty|rate|₹|rs|for|\d)|$)", rest, re.IGNORECASE)
+            if item_explicit:
+                item_name = item_explicit.group(1).strip().title()
+
+            # Extract customer — everything before the item/amount keywords
+            # Remove amount, qty, item mentions to isolate customer name
+            customer_text = rest
+            customer_text = re.sub(r"(?:₹|rs\.?|inr)\s*[\d,]+(?:\.\d+)?", "", customer_text, flags=re.IGNORECASE)
+            customer_text = re.sub(r"(?:qty|quantity|x)\s*\d+|\d+\s*(?:qty|units?|pcs?)", "", customer_text, flags=re.IGNORECASE)
+            customer_text = re.sub(r"\b(?:item|product|service|for|an?|the|of|with|at|rate|price)\b", "", customer_text, flags=re.IGNORECASE)
+            for kw in item_keywords:
+                customer_text = re.sub(r"\b" + kw + r"\b", "", customer_text, flags=re.IGNORECASE)
+            customer_text = re.sub(r"\s+", " ", customer_text).strip().strip(",")
+
+            # Use first word(s) as customer if still messy
+            customer = customer_text.title() if len(customer_text) > 1 else "Customer"
+
+            # Calculate rate
+            rate = amount / qty if qty > 0 and amount > 0 else amount
+
+            return {"text": json.dumps({
+                "action": "create_invoice",
+                "customer": customer,
+                "items": [{"item_name": item_name, "qty": qty, "rate": rate, "amount": amount}],
+                "due_date": nowdate(),
+                "notes": ""
+            })}
+
+    # ── OVERDUE INVOICES ────────────────────────────────────────────────────
+    if any(w in cmd for w in ["overdue", "over due", "past due", "late", "unpaid overdue"]):
+        return {"text": json.dumps({"action": "show_overdue"})}
+
+    # ── FIND / SEARCH CUSTOMER INVOICES ─────────────────────────────────────
+    find_match = re.search(
+        r"(?:find|search|show|get|list)\s+(?:invoices?\s+)?(?:for|of|by)\s+(.+)|"
+        r"(?:invoices?\s+(?:for|of|by))\s+(.+)|"
+        r"(.+?)(?:'s)?\s+invoices?",
+        cmd, re.IGNORECASE
     )
+    if find_match and any(w in cmd for w in ["find", "search", "show", "list", "invoice"]):
+        customer = (find_match.group(1) or find_match.group(2) or find_match.group(3) or "").strip().title()
+        if customer and customer.lower() not in ("all", "my", "the", ""):
+            return {"text": json.dumps({"action": "find_invoices", "customer": customer})}
 
-    payload = json.dumps({
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": 1000,
-        "system": system_prompt,
-        "messages": messages,
-    }).encode("utf-8")
+    # ── OUTSTANDING / TOTAL ──────────────────────────────────────────────────
+    if any(w in cmd for w in ["outstanding", "total due", "total unpaid", "receivables", "how much owed"]):
+        return {"text": json.dumps({"action": "show_outstanding"})}
 
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST",
-    )
+    # ── ALL INVOICES / LIST ──────────────────────────────────────────────────
+    if any(w in cmd for w in ["all invoices", "list invoices", "show invoices", "show all"]):
+        return {"text": json.dumps({"action": "show_overdue"})}
 
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            return {"text": result["content"][0]["text"]}
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8")
-        frappe.throw(f"Anthropic API error {e.code}: {body}")
-    except urllib.error.URLError as e:
-        frappe.throw(f"Could not reach Anthropic API: {e.reason}")
+    # ── UNKNOWN ──────────────────────────────────────────────────────────────
+    return {"text": json.dumps({
+        "action": "unknown",
+        "message": f"I didn't understand \"{user_msg[:60]}\". Try: \"Create invoice for [customer] ₹[amount]\" or \"Show overdue invoices\"."
+    })}

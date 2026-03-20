@@ -3109,10 +3109,10 @@
           return;
         }
 
-        // Fallback
+        // Fallback — unknown action
         aiResult.status = "info";
         aiResult.type = "text";
-        aiResult.message = res?.text || "Done.";
+        aiResult.message = parsed.message || "Try: \"Create invoice for [customer] ₹[amount]\" or \"Show overdue invoices\"";
       }
 
       function onAIKey(e) { if (e.key === "Enter") { e.preventDefault(); runAI(); } }
