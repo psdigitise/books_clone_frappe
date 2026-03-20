@@ -1043,89 +1043,97 @@
     },
     template: `
 <teleport to="body">
-<div v-if="show" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:flex-start;
-     justify-content:center;background:rgba(0,0,0,.45);padding:32px 16px;overflow-y:auto" @click.self="$emit('close')">
-  <div style="background:#fff;border-radius:12px;width:100%;max-width:800px;
-       box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;margin:auto">
-    <div style="background:#2F9E44;padding:18px 24px;display:flex;align-items:center;justify-content:space-between">
-      <div>
-        <div style="color:#fff;font-size:16px;font-weight:700">New Purchase Bill</div>
-        <div style="color:rgba(255,255,255,.65);font-size:12px;margin-top:2px">{{form.company}}</div>
+<div v-if="show" class="nim-overlay" @click.self="$emit('close')">
+  <div class="nim-dialog">
+    <!-- Header -->
+    <div class="nim-header">
+      <div class="nim-header-left">
+        <div class="nim-header-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        </div>
+        <div>
+          <div class="nim-header-title">New Purchase Bill</div>
+          <div class="nim-header-sub">{{form.company}}</div>
+        </div>
       </div>
-      <button @click="$emit('close')" style="background:rgba(255,255,255,.15);border:none;cursor:pointer;
-        width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff"
-        v-html="icon('x',16)"></button>
+      <button class="nim-close" @click="$emit('close')" v-html="icon('x',15)"></button>
     </div>
-    <div style="padding:24px;overflow-y:auto;max-height:calc(100vh - 180px)">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:14px;margin-bottom:16px">
-        <div style="grid-column:1/3">
-          <label class="mi-label">Supplier <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.supplier" @change="onSupplier" class="mi-input">
-            <option value="">— Select Supplier —</option>
+    <!-- Body -->
+    <div class="nim-body">
+      <div class="nim-section-label">Supplier Details</div>
+      <div class="nim-grid-3 nim-mb">
+        <div class="nim-field" style="grid-column:span 2">
+          <label class="nim-label">Supplier <span class="nim-req">*</span></label>
+          <select v-model="form.supplier" @change="onSupplier" class="nim-select">
+            <option value="">Select supplier…</option>
             <option v-for="s in suppliers" :key="s.name" :value="s.name">{{s.name}}</option>
           </select>
         </div>
-        <div>
-          <label class="mi-label">Supplier Invoice No</label>
-          <input v-model="form.bill_no" class="mi-input" placeholder="e.g. INV-001"/>
-        </div>
-        <div>
-          <label class="mi-label">Date</label>
-          <input v-model="form.posting_date" type="date" class="mi-input"/>
+        <div class="nim-field">
+          <label class="nim-label">Supplier Invoice No</label>
+          <input v-model="form.bill_no" class="nim-input" placeholder="e.g. INV-001"/>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
-        <div>
-          <label class="mi-label">Credit To (AP Account) <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.credit_to" class="mi-input">
-            <option value="">— Select —</option>
+      <div class="nim-grid-3 nim-mb">
+        <div class="nim-field">
+          <label class="nim-label">Date</label>
+          <input v-model="form.posting_date" type="date" class="nim-input"/>
+        </div>
+        <div class="nim-field">
+          <label class="nim-label">AP Account <span class="nim-req">*</span></label>
+          <select v-model="form.credit_to" class="nim-select">
+            <option value="">Select account…</option>
             <option v-for="a in accounts_ap" :key="a.name" :value="a.name">{{a.name}}</option>
           </select>
         </div>
-        <div>
-          <label class="mi-label">Expense Account <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.expense_account" class="mi-input">
-            <option value="">— Select —</option>
+        <div class="nim-field">
+          <label class="nim-label">Expense Account <span class="nim-req">*</span></label>
+          <select v-model="form.expense_account" class="nim-select">
+            <option value="">Select account…</option>
             <option v-for="a in accounts_exp" :key="a.name" :value="a.name">{{a.name}}</option>
           </select>
         </div>
       </div>
       <!-- Items -->
-      <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:8px">Items</div>
-      <div style="border:1px solid #E8ECF0;border-radius:8px;overflow:hidden;margin-bottom:16px">
-        <table style="width:100%;border-collapse:collapse">
-          <thead><tr style="background:#F8F9FC">
-            <th class="mi-th">Item Name</th><th class="mi-th" style="text-align:center">Qty</th>
-            <th class="mi-th" style="text-align:right">Rate (₹)</th>
-            <th class="mi-th" style="text-align:right">Amount (₹)</th>
-            <th class="mi-th"></th>
+      <div class="nim-section-label">Line Items</div>
+      <div class="nim-table-wrap nim-mb">
+        <table class="nim-table">
+          <thead><tr>
+            <th style="width:42%">Item Name</th>
+            <th style="width:14%;text-align:center">Qty</th>
+            <th style="width:22%;text-align:right">Rate (₹)</th>
+            <th style="width:18%;text-align:right">Amount (₹)</th>
+            <th style="width:4%"></th>
           </tr></thead>
           <tbody>
-            <tr v-for="(item,i) in form.items" :key="i" :style="i%2===1?'background:#FAFBFC':''">
-              <td class="mi-td"><input v-model="item.item_name" class="mi-cell-input" placeholder="Item name"/></td>
-              <td class="mi-td" style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="mi-cell-input" style="text-align:center;width:60px" @input="recalc"/></td>
-              <td class="mi-td" style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="mi-cell-input" style="text-align:right" @input="recalc"/></td>
-              <td class="mi-td" style="text-align:right;font-family:monospace;font-size:13px;font-weight:600;padding-right:12px">{{flt(item.amount).toLocaleString("en-IN",{minimumFractionDigits:2})}}</td>
-              <td class="mi-td" style="text-align:center"><button @click="removeItem(i)" v-if="form.items.length>1" style="background:none;border:none;cursor:pointer;color:#C92A2A" v-html="icon('trash',14)"></button></td>
+            <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
+              <td><input v-model="item.item_name" class="nim-cell" placeholder="Item name"/></td>
+              <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+              <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="nim-cell nim-num" @input="recalc"/></td>
+              <td class="nim-amount" style="text-align:right;font-variant-numeric:tabular-nums">{{flt(item.amount).toLocaleString("en-IN",{minimumFractionDigits:2})}}</td>
+              <td style="text-align:center"><button @click="removeItem(i)" v-if="form.items.length>1" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
             </tr>
           </tbody>
         </table>
-        <div style="padding:8px 12px;background:#F8F9FC;border-top:1px solid #E8ECF0">
-          <button @click="addItem" style="background:none;border:none;cursor:pointer;color:#2F9E44;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px;font-family:inherit"><span v-html="icon('plus',13)"></span> Add Row</button>
+        <div class="nim-table-footer">
+          <button @click="addItem" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Row</button>
         </div>
       </div>
       <!-- Totals -->
       <div style="display:flex;justify-content:flex-end">
-        <div style="min-width:240px;background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;overflow:hidden">
-          <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:13px;color:#495057;border-bottom:1px solid #86EFAC"><span>Subtotal</span><span style="font-family:monospace">{{fmt(form.net_total)}}</span></div>
-          <div style="display:flex;justify-content:space-between;padding:12px 16px;font-size:15px;font-weight:700;color:#2F9E44"><span>Grand Total</span><span style="font-family:monospace">{{fmt(form.grand_total)}}</span></div>
+        <div class="nim-totals">
+          <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(form.net_total)}}</span></div>
+          <div class="nim-total-grand"><span>Grand Total</span><span>{{fmt(form.grand_total)}}</span></div>
         </div>
       </div>
     </div>
-    <div style="padding:16px 24px;border-top:1px solid #E8ECF0;display:flex;justify-content:flex-end;gap:10px;background:#FAFBFC">
-      <button @click="$emit('close')" :disabled="saving" style="padding:9px 18px;border:1px solid #CDD5E0;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;font-weight:500;color:#495057;font-family:inherit">Cancel</button>
-      <button @click="save(false)" :disabled="saving" style="padding:9px 18px;border:1px solid #2F9E44;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;font-weight:500;color:#2F9E44;font-family:inherit">{{saving?'Saving…':'Save as Draft'}}</button>
-      <button @click="save(true)" :disabled="saving" style="padding:9px 18px;border:none;border-radius:6px;background:#2F9E44;cursor:pointer;font-size:13px;font-weight:600;color:#fff;font-family:inherit">{{saving?'Submitting…':'Save & Submit'}}</button>
+    <!-- Footer -->
+    <div class="nim-footer">
+      <button @click="$emit('close')" :disabled="saving" class="nim-btn nim-btn-ghost">Cancel</button>
+      <div style="display:flex;gap:8px">
+        <button @click="save(false)" :disabled="saving" class="nim-btn nim-btn-outline">{{saving?'Saving…':'Save as Draft'}}</button>
+        <button @click="save(true)" :disabled="saving" class="nim-btn nim-btn-primary">{{saving?'Submitting…':'Save & Submit'}}</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1273,87 +1281,110 @@
     },
     template: `
 <teleport to="body">
-<div v-if="show" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:flex-start;
-     justify-content:center;background:rgba(0,0,0,.45);padding:32px 16px;overflow-y:auto" @click.self="$emit('close')">
-  <div style="background:#fff;border-radius:12px;width:100%;max-width:600px;
-       box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;margin:auto">
-    <div style="background:#7C3AED;padding:18px 24px;display:flex;align-items:center;justify-content:space-between">
-      <div>
-        <div style="color:#fff;font-size:16px;font-weight:700">New Payment</div>
-        <div style="color:rgba(255,255,255,.65);font-size:12px;margin-top:2px">{{form.company}}</div>
+<div v-if="show" class="nim-overlay" @click.self="$emit('close')">
+  <div class="nim-dialog" style="max-width:560px">
+    <!-- Header -->
+    <div class="nim-header">
+      <div class="nim-header-left">
+        <div class="nim-header-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        </div>
+        <div>
+          <div class="nim-header-title">Record Payment</div>
+          <div class="nim-header-sub">{{form.company}}</div>
+        </div>
       </div>
-      <button @click="$emit('close')" style="background:rgba(255,255,255,.15);border:none;cursor:pointer;
-        width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff"
-        v-html="icon('x',16)"></button>
+      <button class="nim-close" @click="$emit('close')" v-html="icon('x',15)"></button>
     </div>
-    <div style="padding:24px;overflow-y:auto;max-height:calc(100vh - 180px)">
-      <!-- Type selector -->
-      <div style="display:flex;gap:8px;margin-bottom:20px">
-        <button v-for="t in ['Receive','Pay']" :key="t" @click="form.payment_type=t"
-          :style="{padding:'9px 20px',borderRadius:'6px',fontSize:'13px',fontWeight:'600',cursor:'pointer',fontFamily:'inherit',transition:'.15s',background:form.payment_type===t?'#7C3AED':'#fff',color:form.payment_type===t?'#fff':'#495057',border:form.payment_type===t?'none':'1px solid #CDD5E0'}">
+    <!-- Body -->
+    <div class="nim-body">
+
+      <!-- Type toggle -->
+      <div class="nim-type-toggle nim-mb">
+        <button v-for="t in ['Receive','Pay']" :key="t"
+          class="nim-type-btn" :class="{active: form.payment_type===t}"
+          @click="form.payment_type=t">
+          <svg v-if="t==='Receive'" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+          <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
           {{t==="Receive"?"Receive (Customer)":"Pay (Supplier)"}}
         </button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-        <div>
-          <label class="mi-label">{{form.party_type}} <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.party" @change="onParty" class="mi-input">
-            <option value="">— Select —</option>
+
+      <!-- Party + Date -->
+      <div class="nim-grid-2 nim-mb">
+        <div class="nim-field">
+          <label class="nim-label">{{form.party_type}} <span class="nim-req">*</span></label>
+          <select v-model="form.party" @change="onParty" class="nim-select">
+            <option value="">Select {{form.party_type.toLowerCase()}}…</option>
             <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.name}}</option>
           </select>
         </div>
-        <div>
-          <label class="mi-label">Payment Date</label>
-          <input v-model="form.payment_date" type="date" class="mi-input"/>
+        <div class="nim-field">
+          <label class="nim-label">Payment Date</label>
+          <input v-model="form.payment_date" type="date" class="nim-input"/>
         </div>
       </div>
-      <div v-if="invoices.length" style="background:#F0FDF4;border:1px solid #86EFAC;border-radius:8px;
-           padding:12px 16px;margin-bottom:14px;font-size:13px">
-        <div style="font-weight:600;color:#2F9E44;margin-bottom:6px">{{invoices.length}} outstanding invoice(s)</div>
-        <div v-for="inv in invoices.slice(0,3)" :key="inv.name"
-             style="display:flex;justify-content:space-between;color:#495057;padding:2px 0">
+
+      <!-- Outstanding invoices banner -->
+      <div v-if="invoices.length" class="nim-invoices-banner nim-mb">
+        <div class="nim-invoices-title">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          {{invoices.length}} outstanding invoice{{invoices.length>1?'s':''}}
+        </div>
+        <div v-for="inv in invoices.slice(0,3)" :key="inv.name" class="nim-invoice-row">
           <span>{{inv.name}}</span>
           <span style="font-family:monospace;font-weight:600">{{fmt(inv.outstanding_amount)}}</span>
         </div>
-        <div v-if="invoices.length>3" style="color:#868E96;font-size:12px;margin-top:4px">+{{invoices.length-3}} more</div>
+        <div v-if="invoices.length>3" class="nim-invoice-more">+{{invoices.length-3}} more</div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-        <div>
-          <label class="mi-label">Amount <span style="color:#C92A2A">*</span></label>
-          <input v-model.number="form.paid_amount" type="number" min="0" step="0.01" class="mi-input" style="font-weight:700;font-size:15px"/>
+
+      <!-- Amount + Mode -->
+      <div class="nim-grid-2 nim-mb">
+        <div class="nim-field">
+          <label class="nim-label">Amount <span class="nim-req">*</span></label>
+          <input v-model.number="form.paid_amount" type="number" min="0" step="0.01"
+            class="nim-input nim-amount-input" placeholder="0.00"/>
         </div>
-        <div>
-          <label class="mi-label">Mode of Payment</label>
-          <select v-model="form.mode_of_payment" class="mi-input">
-            <option value="">— Select —</option>
+        <div class="nim-field">
+          <label class="nim-label">Mode of Payment</label>
+          <select v-model="form.mode_of_payment" class="nim-select">
             <option v-for="m in paymentModes" :key="m.name" :value="m.name">{{m.name}}</option>
           </select>
         </div>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
-        <div>
-          <label class="mi-label">Paid From Account <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.paid_from" class="mi-input">
-            <option value="">— Select —</option>
+
+      <!-- Accounts -->
+      <div class="nim-grid-2 nim-mb">
+        <div class="nim-field">
+          <label class="nim-label">Paid From <span class="nim-req">*</span></label>
+          <select v-model="form.paid_from" class="nim-select">
+            <option value="">Select account…</option>
             <option v-for="a in (form.payment_type==='Receive'?accounts_ar:accounts_bank)" :key="a.name" :value="a.name">{{a.name}}</option>
           </select>
         </div>
-        <div>
-          <label class="mi-label">Paid To Account <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.paid_to" class="mi-input">
-            <option value="">— Select —</option>
+        <div class="nim-field">
+          <label class="nim-label">Paid To <span class="nim-req">*</span></label>
+          <select v-model="form.paid_to" class="nim-select">
+            <option value="">Select account…</option>
             <option v-for="a in (form.payment_type==='Receive'?accounts_bank:accounts_ap)" :key="a.name" :value="a.name">{{a.name}}</option>
           </select>
         </div>
       </div>
-      <div>
-        <label class="mi-label">Reference No (UTR / Cheque)</label>
-        <input v-model="form.reference_no" class="mi-input" placeholder="Optional"/>
+
+      <!-- Reference -->
+      <div class="nim-field">
+        <label class="nim-label">Reference No <span style="color:#9ca3af;font-weight:400">(UTR / Cheque — optional)</span></label>
+        <input v-model="form.reference_no" class="nim-input" placeholder="e.g. UTR123456789"/>
       </div>
+
     </div>
-    <div style="padding:16px 24px;border-top:1px solid #E8ECF0;display:flex;justify-content:flex-end;gap:10px;background:#FAFBFC">
-      <button @click="$emit('close')" :disabled="saving" style="padding:9px 18px;border:1px solid #CDD5E0;border-radius:6px;background:#fff;cursor:pointer;font-size:13px;font-weight:500;color:#495057;font-family:inherit">Cancel</button>
-      <button @click="save" :disabled="saving" style="padding:9px 18px;border:none;border-radius:6px;background:#7C3AED;cursor:pointer;font-size:13px;font-weight:600;color:#fff;font-family:inherit">{{saving?'Processing…':'Record Payment'}}</button>
+    <!-- Footer -->
+    <div class="nim-footer">
+      <button @click="$emit('close')" :disabled="saving" class="nim-btn nim-btn-ghost">Cancel</button>
+      <button @click="save" :disabled="saving" class="nim-btn nim-btn-primary">
+        <span v-if="saving" v-html="icon('refresh',14)" style="animation:spin 1s linear infinite"></span>
+        {{saving?'Processing…':'Record Payment'}}
+      </button>
     </div>
   </div>
 </div>
@@ -3412,6 +3443,45 @@
   .nim-bottom-row{flex-direction:column;}
   .nim-totals{min-width:100%;}
 }
+
+/* Payment type toggle */
+.nim-type-toggle{
+  display:flex;background:#f1f5f9;border-radius:10px;
+  padding:4px;gap:4px;
+}
+.nim-type-btn{
+  flex:1;height:36px;border-radius:7px;border:none;
+  font-size:13px;font-weight:600;cursor:pointer;
+  font-family:inherit;transition:all .18s;
+  display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  color:#6b7280;background:transparent;
+}
+.nim-type-btn:hover{color:#374151;}
+.nim-type-btn.active{
+  background:#fff;color:#2563eb;
+  box-shadow:0 1px 4px rgba(0,0,0,.12),0 0 0 1px rgba(37,99,235,.15);
+}
+/* Amount input */
+.nim-amount-input{
+  font-size:18px !important;font-weight:700 !important;
+  color:#111827;letter-spacing:-.01em;
+}
+/* Outstanding invoices banner */
+.nim-invoices-banner{
+  background:#f0fdf4;border:1.5px solid #86efac;border-radius:9px;
+  padding:12px 14px;font-size:13px;
+}
+.nim-invoices-title{
+  display:flex;align-items:center;gap:6px;
+  font-weight:700;color:#16a34a;margin-bottom:8px;font-size:12.5px;
+}
+.nim-invoice-row{
+  display:flex;justify-content:space-between;
+  color:#374151;padding:3px 0;font-size:12.5px;
+  border-bottom:1px solid rgba(134,239,172,.4);
+}
+.nim-invoice-row:last-of-type{border-bottom:none;}
+.nim-invoice-more{color:#9ca3af;font-size:12px;margin-top:5px;}
 
 /* ══ AI Automator FAB ══ */
 .ai-fab{
