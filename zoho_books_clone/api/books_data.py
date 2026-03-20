@@ -244,3 +244,67 @@ def record_payment(
         "invoice":       invoice_name,
         "amount":        amount_received,
     }
+
+# ─── AI Chat Proxy ────────────────────────────────────────────────────────────
+
+@frappe.whitelist(allow_guest=False, methods=["POST"])
+def ai_chat(messages, system=None):
+    """
+    Proxy for Anthropic Claude API — called from the browser to avoid CORS.
+    Reads the API key from Books Settings or site config.
+    """
+    import urllib.request
+    import urllib.error
+
+    if isinstance(messages, str):
+        messages = json.loads(messages)
+
+    # Get API key — stored in Books Settings or site_config.json
+    api_key = ""
+    try:
+        api_key = frappe.db.get_single_value("Books Settings", "anthropic_api_key") or ""
+    except Exception:
+        pass
+    if not api_key:
+        api_key = frappe.conf.get("anthropic_api_key", "")
+    if not api_key:
+        frappe.throw("Anthropic API key not configured. Please add it in Books Settings or site_config.json as 'anthropic_api_key'.")
+
+    system_prompt = system or (
+        "You are a helpful accounting assistant for a Frappe-based Books application.\n\n"
+        "You can:\n"
+        "1. Answer questions about invoices, payments, customers, and accounting.\n"
+        "2. Create sales invoices by extracting details from user messages.\n\n"
+        "When creating an invoice, respond ONLY with valid JSON like:\n"
+        '{"action": "create_invoice", "customer": "...", "items": [{"item_name": "...", "qty": 1, "rate": 5000, "amount": 5000}], "due_date": "YYYY-MM-DD", "notes": ""}\n\n'
+        "For all other questions, respond in plain conversational text under 150 words.\n"
+        f"Today's date: {nowdate()}"
+    )
+
+    payload = json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1000,
+        "system": system_prompt,
+        "messages": messages,
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode("utf-8"))
+            return {"text": result["content"][0]["text"]}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8")
+        frappe.throw(f"Anthropic API error {e.code}: {body}")
+    except urllib.error.URLError as e:
+        frappe.throw(f"Could not reach Anthropic API: {e.reason}")

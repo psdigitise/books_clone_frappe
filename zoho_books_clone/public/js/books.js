@@ -2854,25 +2854,7 @@
       ]);
       const chatEndRef = ref(null);
 
-      // System prompt for the AI
-      const SYSTEM_PROMPT = `You are a helpful accounting assistant for a Frappe-based Books application (similar to Zoho Books).
-
-You can:
-1. Answer questions about invoices, payments, customers, and accounting concepts
-2. Help create sales invoices by extracting details from user messages
-
-When the user wants to CREATE an invoice, extract:
-- customer: customer name (required)
-- items: array of {item_name, qty, rate, amount}
-- due_date: if mentioned (YYYY-MM-DD format)
-- notes: any notes
-
-Respond in JSON when creating an invoice like:
-{"action": "create_invoice", "customer": "...", "items": [...], "due_date": "...", "notes": "..."}
-
-For all other questions, respond in plain conversational text. Be concise and helpful.
-Keep responses under 150 words unless creating an invoice.
-Current date: ${new Date().toLocaleDateString("en-IN")}`;
+      // System prompt is defined server-side in books_data.py ai_chat()
 
       async function sendChat() {
         const text = chatInput.value.trim();
@@ -2884,33 +2866,28 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
         scrollChat();
 
         try {
-          // Build message history for API (last 10 messages)
+          // Build message history (last 10 messages)
           const history = chatMessages.value.slice(-10).map(m => ({
             role: m.role === "assistant" ? "assistant" : "user",
             content: m.text
           }));
-          // Replace last user message (already added above)
+          // Make sure last message is the user's current message
           history[history.length - 1].content = text;
 
-          const res = await fetch("https://api.anthropic.com/v1/messages", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 1000,
-              system: SYSTEM_PROMPT,
-              messages: history,
-            }),
+          // Call through Frappe backend to avoid CORS
+          const res = await apiPOST("zoho_books_clone.api.books_data.ai_chat", {
+            messages: JSON.stringify(history),
           });
-          const data = await res.json();
-          const rawText = data?.content?.[0]?.text || "Sorry, I couldn't get a response.";
+
+          const rawText = res?.text || "Sorry, I couldn't get a response.";
 
           // Check if it's a create_invoice action
           let jsonMatch = rawText.match(/\{[\s\S]*"action"\s*:\s*"create_invoice"[\s\S]*\}/);
           if (jsonMatch) {
             try {
               const parsed = JSON.parse(jsonMatch[0]);
-              chatMessages.value.push({ role: "assistant", text: rawText.replace(jsonMatch[0], "").trim() || "Sure! Creating that invoice now…", action: parsed });
+              const friendlyText = rawText.replace(jsonMatch[0], "").trim() || "Sure! Creating that invoice now…";
+              chatMessages.value.push({ role: "assistant", text: friendlyText, action: parsed });
               await nextTick();
               scrollChat();
               await createInvoiceFromChat(parsed);
@@ -2919,7 +2896,12 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
           }
           chatMessages.value.push({ role: "assistant", text: rawText });
         } catch (e) {
-          chatMessages.value.push({ role: "assistant", text: "⚠️ Error: " + (e.message || "Could not reach AI service.") });
+          const errMsg = e?.message || String(e) || "Could not reach AI service.";
+          if (errMsg.includes("API key not configured") || errMsg.includes("anthropic_api_key")) {
+            chatMessages.value.push({ role: "assistant", text: "⚙️ **API key not set.** Please go to:\n\n**Frappe Desk → Books Settings → AI Assistant → Anthropic API Key**\n\nGet your key from https://console.anthropic.com" });
+          } else {
+            chatMessages.value.push({ role: "assistant", text: "⚠️ Error: " + errMsg });
+          }
         } finally {
           chatLoading.value = false;
           await nextTick();
@@ -2977,14 +2959,163 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
         chatOpen.value = false;
       }
 
-      function onChatKey(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }
+      // ── AI Workflow Automator ──
+      const aiOpen = ref(false);
+      const aiInput = ref("");
+      const aiRunning = ref(false);
+      const aiResult = reactive({ status: "", message: "", type: "", actions: [], data: null });
 
-      function formatChatText(text) {
-        return text
-          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
-          .replace(/\*(.*?)\*/g, "<em>$1</em>")
-          .replace(/\n/g, "<br>");
+      const COMMANDS = [
+        { icon: "📄", label: "Create invoice for [customer] ₹[amount]",   hint: "e.g. Create invoice for Prasath ₹80,000" },
+        { icon: "📋", label: "Create invoice for [customer] [item] ₹[rate]", hint: "e.g. Create invoice for hari laptop ₹50,000" },
+        { icon: "💳", label: "Record payment for [invoice]",                hint: "e.g. Record payment for INV-2026-00005" },
+        { icon: "📊", label: "Show overdue invoices",                       hint: "Lists all overdue invoices" },
+        { icon: "🔍", label: "Find invoices for [customer]",                hint: "e.g. Find invoices for hari" },
+        { icon: "💰", label: "Show total outstanding",                      hint: "Total unpaid amount across all invoices" },
+      ];
+
+      const filteredCommands = computed(() => {
+        if (!aiInput.value.trim()) return COMMANDS;
+        const q = aiInput.value.toLowerCase();
+        return COMMANDS.filter(c => c.label.toLowerCase().includes(q) || c.hint.toLowerCase().includes(q));
+      });
+
+      function fillCommand(cmd) {
+        // Put just the template text without the icon
+        aiInput.value = cmd.hint;
+        document.getElementById("aiInputEl")?.focus();
       }
+
+      async function runAI() {
+        const raw = aiInput.value.trim();
+        if (!raw || aiRunning.value) return;
+        aiRunning.value = true;
+        aiResult.status = "running";
+        aiResult.message = "Processing…";
+        aiResult.type = "";
+        aiResult.actions = [];
+        aiResult.data = null;
+
+        try {
+          const res = await apiPOST("zoho_books_clone.api.books_data.ai_chat", {
+            messages: JSON.stringify([{ role: "user", content: raw }]),
+          });
+
+          const text = res?.text || "";
+
+          // Try to parse JSON action
+          const jsonMatch = text.match(/\{[\s\S]*"action"[\s\S]*\}/);
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            await executeAction(parsed, raw);
+          } else {
+            // Plain text answer
+            aiResult.status = "info";
+            aiResult.type = "text";
+            aiResult.message = text;
+          }
+        } catch (e) {
+          aiResult.status = "error";
+          aiResult.type = "error";
+          aiResult.message = e.message || String(e);
+        } finally {
+          aiRunning.value = false;
+        }
+      }
+
+      async function executeAction(parsed, raw) {
+        const action = parsed.action;
+
+        // ── Create Invoice ──
+        if (action === "create_invoice") {
+          aiResult.message = "Creating invoice…";
+          const company = window.__booksCompany || "";
+          const today = new Date().toISOString().slice(0, 10);
+          const items = (parsed.items || []).map(it => ({
+            doctype: "Sales Invoice Item",
+            item_name: it.item_name || "Service",
+            item_code: it.item_name || "Service",
+            description: it.item_name || "Service",
+            qty: parseFloat(it.qty) || 1,
+            rate: parseFloat(it.rate) || 0,
+            amount: parseFloat(it.amount) || parseFloat(it.rate) || 0,
+            uom: "Nos",
+          }));
+          const doc = {
+            doctype: "Sales Invoice",
+            customer: parsed.customer,
+            posting_date: today,
+            due_date: parsed.due_date || today,
+            company, currency: "INR", items,
+            notes: parsed.notes || "",
+          };
+          const saved = await apiGET("zoho_books_clone.api.books_data.save_doc", { doc: JSON.stringify(doc) });
+          aiResult.status = "success";
+          aiResult.type = "invoice_created";
+          aiResult.message = "Invoice created successfully!";
+          aiResult.data = saved;
+          aiResult.actions = [
+            { label: "Open Invoice", fn: () => { router.push({ name: "invoice-detail", params: { name: saved.name } }); aiOpen.value = false; } },
+            { label: "Create Another", fn: () => { aiInput.value = ""; aiResult.status = ""; } },
+          ];
+          return;
+        }
+
+        // ── Show Overdue ──
+        if (action === "show_overdue" || raw.toLowerCase().includes("overdue")) {
+          aiResult.message = "Fetching overdue invoices…";
+          const list = await apiList("Sales Invoice", {
+            fields: ["name","customer_name","due_date","outstanding_amount","status"],
+            order: "due_date asc", limit: 50,
+          });
+          const overdue = list.filter(i => i.outstanding_amount > 0 && i.due_date && new Date(i.due_date) < new Date());
+          const total = overdue.reduce((s, i) => s + parseFloat(i.outstanding_amount || 0), 0);
+          aiResult.status = overdue.length ? "warning" : "success";
+          aiResult.type = "invoice_list";
+          aiResult.message = overdue.length ? `${overdue.length} overdue invoices — Total ₹${total.toLocaleString("en-IN")}` : "No overdue invoices! All caught up.";
+          aiResult.data = overdue;
+          return;
+        }
+
+        // ── Find by Customer ──
+        if (action === "find_invoices" || parsed.customer) {
+          aiResult.message = "Searching invoices…";
+          const customer = parsed.customer || raw.replace(/find invoices for/i, "").trim();
+          const list = await apiList("Sales Invoice", {
+            fields: ["name","customer_name","posting_date","grand_total","outstanding_amount","status"],
+            filters: [["customer_name","like",`%${customer}%`]],
+            order: "posting_date desc", limit: 20,
+          });
+          const total = list.reduce((s, i) => s + parseFloat(i.grand_total || 0), 0);
+          aiResult.status = list.length ? "success" : "info";
+          aiResult.type = "invoice_list";
+          aiResult.message = list.length ? `${list.length} invoices for "${customer}" — Total ₹${total.toLocaleString("en-IN")}` : `No invoices found for "${customer}"`;
+          aiResult.data = list;
+          return;
+        }
+
+        // ── Outstanding Total ──
+        if (action === "show_outstanding" || raw.toLowerCase().includes("outstanding")) {
+          aiResult.message = "Calculating…";
+          const list = await apiList("Sales Invoice", {
+            fields: ["name","customer_name","outstanding_amount"],
+            filters: [["outstanding_amount",">",0]], limit: 200,
+          });
+          const total = list.reduce((s, i) => s + parseFloat(i.outstanding_amount || 0), 0);
+          aiResult.status = "info";
+          aiResult.type = "summary";
+          aiResult.message = `Total Outstanding`;
+          aiResult.data = { amount: total, count: list.length };
+          return;
+        }
+
+        // Fallback
+        aiResult.status = "info";
+        aiResult.type = "text";
+        aiResult.message = res?.text || "Done.";
+      }
+
+      function onAIKey(e) { if (e.key === "Enter") { e.preventDefault(); runAI(); } }
 
       function logout() {
         if (window.frappe && window.frappe.call) {
@@ -2992,13 +3123,12 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
         } else { window.location.href = "/login"; }
       }
       function closeMobile() { mobileOpen.value = false; }
+
       return { cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
-               chatOpen, chatInput, chatLoading, chatMessages, chatEndRef,
-               sendChat, onChatKey, openInvoice, formatChatText };
+               aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, fmtDate, fmt };
     },
     template: `
 <div :class="{'books-root':true, collapsed:collapsed, 'mobile-open':mobileOpen}">
-  <!-- Mobile overlay -->
   <div class="b-mob-overlay" v-if="mobileOpen" @click="closeMobile"></div>
 
   <aside class="b-sidebar">
@@ -3019,13 +3149,10 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <!-- AI Chatbot trigger button -->
-      <button class="b-ai-btn" @click="chatOpen=!chatOpen" :title="collapsed?'AI Assistant':''">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/>
-          <path d="M8 10h.01M12 10h.01M16 10h.01"/>
-        </svg>
-        <span class="b-nav-label">AI Assistant</span>
+      <!-- AI Automator button -->
+      <button class="b-ai-btn" @click="aiOpen=!aiOpen" :title="collapsed?'AI Automator':''">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <span class="b-nav-label">AI Automator</span>
         <span v-if="!collapsed" class="b-ai-badge">AI</span>
       </button>
       <button class="b-collapse-btn" @click="collapsed=!collapsed" :title="collapsed?'Expand':'Collapse'">
@@ -3059,71 +3186,146 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
     <main class="b-main"><router-view></router-view></main>
   </div>
 
-  <!-- ── AI Chatbot panel ── -->
+  <!-- ── AI Automator Panel ── -->
   <teleport to="body">
-    <transition name="chat-slide">
-      <div v-if="chatOpen" class="ai-chat-panel">
+    <transition name="ai-slide">
+      <div v-if="aiOpen" class="ai-panel">
+
         <!-- Header -->
-        <div class="ai-chat-header">
+        <div class="ai-panel-header">
           <div style="display:flex;align-items:center;gap:10px">
-            <div class="ai-chat-avatar">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+            <div class="ai-panel-icon">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
             </div>
             <div>
-              <div style="font-size:13px;font-weight:700;color:#fff">Books AI</div>
-              <div style="font-size:10.5px;color:rgba(255,255,255,.65)">Powered by Claude</div>
+              <div style="font-size:13.5px;font-weight:700;color:#fff;letter-spacing:-.01em">AI Automator</div>
+              <div style="font-size:10px;color:rgba(255,255,255,.5);letter-spacing:.03em">Powered by Claude</div>
             </div>
           </div>
-          <button class="ai-chat-close" @click="chatOpen=false">✕</button>
-        </div>
-
-        <!-- Messages -->
-        <div class="ai-chat-messages">
-          <div v-for="(msg, i) in chatMessages" :key="i"
-            :class="['ai-msg', msg.role === 'user' ? 'ai-msg-user' : 'ai-msg-bot']">
-            <div v-if="msg.role==='assistant'" class="ai-msg-icon">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
-            </div>
-            <div class="ai-msg-bubble">
-              <div v-html="formatChatText(msg.text)"></div>
-              <button v-if="msg.invoiceLink" class="ai-inv-link" @click="openInvoice(msg.invoiceLink)">
-                📄 Open {{ msg.invoiceLink }}
-              </button>
-            </div>
-          </div>
-          <!-- Typing indicator -->
-          <div v-if="chatLoading" class="ai-msg ai-msg-bot">
-            <div class="ai-msg-icon">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
-            </div>
-            <div class="ai-msg-bubble ai-typing">
-              <span></span><span></span><span></span>
-            </div>
-          </div>
-          <div ref="chatEndRef"></div>
-        </div>
-
-        <!-- Quick suggestions -->
-        <div class="ai-suggestions">
-          <button class="ai-suggest-btn" @click="chatInput='Create an invoice for '; $refs.chatInputEl.focus()">+ New Invoice</button>
-          <button class="ai-suggest-btn" @click="chatInput='How many overdue invoices?'; sendChat()">Overdue?</button>
-          <button class="ai-suggest-btn" @click="chatInput='Total revenue this month?'; sendChat()">Revenue</button>
+          <button class="ai-panel-close" @click="aiOpen=false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
         </div>
 
         <!-- Input -->
-        <div class="ai-chat-input-wrap">
-          <textarea
-            ref="chatInputEl"
-            v-model="chatInput"
-            class="ai-chat-input"
-            placeholder="Ask anything or say 'Create invoice for Prasath ₹5000'…"
-            rows="2"
-            @keydown="onChatKey"
-          ></textarea>
-          <button class="ai-send-btn" @click="sendChat" :disabled="chatLoading || !chatInput.trim()">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        <div class="ai-input-wrap">
+          <svg class="ai-input-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            id="aiInputEl"
+            v-model="aiInput"
+            class="ai-input"
+            placeholder="Describe what you want to do…"
+            @keydown="onAIKey"
+            :disabled="aiRunning"
+            autocomplete="off"
+          />
+          <button class="ai-run-btn" @click="runAI" :disabled="aiRunning || !aiInput.trim()">
+            <svg v-if="!aiRunning" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <div v-else class="ai-spinner"></div>
           </button>
         </div>
+
+        <!-- Command suggestions (shown when input is empty or typing) -->
+        <div v-if="!aiResult.status" class="ai-commands">
+          <div class="ai-commands-label">What can I do for you?</div>
+          <div v-for="cmd in filteredCommands" :key="cmd.label"
+            class="ai-command-item" @click="fillCommand(cmd)">
+            <span class="ai-command-icon">{{cmd.icon}}</span>
+            <div>
+              <div class="ai-command-title">{{cmd.hint}}</div>
+            </div>
+            <svg class="ai-command-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </div>
+        </div>
+
+        <!-- Result area -->
+        <div v-if="aiResult.status" class="ai-result">
+
+          <!-- Running -->
+          <div v-if="aiResult.status==='running'" class="ai-result-running">
+            <div class="ai-dots"><span></span><span></span><span></span></div>
+            <span>{{aiResult.message}}</span>
+          </div>
+
+          <!-- Error -->
+          <div v-else-if="aiResult.status==='error'" class="ai-result-card ai-card-error">
+            <div class="ai-card-icon">⚠️</div>
+            <div>
+              <div class="ai-card-title">Something went wrong</div>
+              <div class="ai-card-sub">{{aiResult.message}}</div>
+            </div>
+          </div>
+
+          <!-- Invoice Created -->
+          <div v-else-if="aiResult.type==='invoice_created'" class="ai-result-card ai-card-success">
+            <div class="ai-card-icon">✅</div>
+            <div style="flex:1">
+              <div class="ai-card-title">{{aiResult.message}}</div>
+              <div class="ai-card-meta">
+                <span class="ai-meta-pill">{{aiResult.data?.name}}</span>
+                <span class="ai-meta-pill">{{aiResult.data?.customer_name || aiResult.data?.customer}}</span>
+                <span class="ai-meta-pill">₹{{Number(aiResult.data?.grand_total||0).toLocaleString("en-IN")}}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Summary Card (outstanding total) -->
+          <div v-else-if="aiResult.type==='summary'" class="ai-result-card ai-card-info">
+            <div class="ai-card-icon">💰</div>
+            <div>
+              <div class="ai-card-title">{{aiResult.message}}</div>
+              <div style="font-size:22px;font-weight:800;color:#fff;margin-top:4px">₹{{Number(aiResult.data?.amount||0).toLocaleString("en-IN")}}</div>
+              <div class="ai-card-sub">across {{aiResult.data?.count}} invoices</div>
+            </div>
+          </div>
+
+          <!-- Plain text info -->
+          <div v-else-if="aiResult.type==='text'" class="ai-result-card ai-card-info">
+            <div class="ai-card-icon">💬</div>
+            <div class="ai-card-title" style="white-space:pre-wrap">{{aiResult.message}}</div>
+          </div>
+
+          <!-- Invoice List -->
+          <div v-if="aiResult.type==='invoice_list' && aiResult.data">
+            <div class="ai-list-header">
+              <span :class="['ai-status-dot', aiResult.status==='warning'?'dot-warn':'dot-ok']"></span>
+              {{aiResult.message}}
+            </div>
+            <div class="ai-list-wrap">
+              <div v-for="inv in (aiResult.data||[]).slice(0,8)" :key="inv.name"
+                class="ai-list-item">
+                <div>
+                  <div class="ai-list-name">{{inv.customer_name||inv.customer}}</div>
+                  <div class="ai-list-inv">{{inv.name}} · {{fmtDate(inv.due_date||inv.posting_date)}}</div>
+                </div>
+                <div style="text-align:right">
+                  <div class="ai-list-amt" :style="{color:inv.outstanding_amount>0?'#f87171':'#34d399'}">
+                    ₹{{Number(inv.outstanding_amount||inv.grand_total||0).toLocaleString("en-IN")}}
+                  </div>
+                </div>
+              </div>
+              <div v-if="(aiResult.data||[]).length > 8" class="ai-list-more">
+                +{{aiResult.data.length - 8}} more
+              </div>
+            </div>
+          </div>
+
+          <!-- Action buttons -->
+          <div v-if="aiResult.actions && aiResult.actions.length" class="ai-action-btns">
+            <button v-for="(act,i) in aiResult.actions" :key="i"
+              class="ai-action-btn" :class="i===0?'ai-action-primary':'ai-action-secondary'"
+              @click="act.fn()">
+              {{act.label}}
+            </button>
+          </div>
+
+          <!-- Reset -->
+          <button class="ai-reset-btn" @click="aiResult.status='';aiInput=''">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.9"/></svg>
+            New command
+          </button>
+        </div>
+
       </div>
     </transition>
   </teleport>
@@ -3143,144 +3345,118 @@ Current date: ${new Date().toLocaleDateString("en-IN")}`;
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
 
-/* ══ AI Chatbot Button ══ */
+/* ══ AI Automator Button ══ */
 .b-ai-btn{
-  display:flex;align-items:center;gap:10px;
-  width:100%;padding:9px 10px;border-radius:6px;
-  background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(139,92,246,.15));
-  border:1px solid rgba(139,92,246,.25);cursor:pointer;
-  color:rgba(255,255,255,.85);font-size:13px;font-weight:600;
+  display:flex;align-items:center;gap:10px;width:100%;
+  padding:9px 10px;border-radius:6px;
+  background:linear-gradient(135deg,rgba(99,102,241,.18),rgba(139,92,246,.18));
+  border:1px solid rgba(139,92,246,.3);cursor:pointer;
+  color:rgba(255,255,255,.9);font-size:13px;font-weight:600;
   font-family:inherit;transition:all .15s;margin-bottom:6px;
-  white-space:nowrap;overflow:hidden;position:relative;
+  white-space:nowrap;overflow:hidden;
 }
-.b-ai-btn:hover{background:linear-gradient(135deg,rgba(99,102,241,.3),rgba(139,92,246,.3));color:#fff;border-color:rgba(139,92,246,.5);}
-.b-ai-badge{
-  margin-left:auto;background:linear-gradient(135deg,#6366f1,#8b5cf6);
-  color:#fff;font-size:9px;font-weight:800;padding:2px 6px;
-  border-radius:10px;letter-spacing:.05em;flex-shrink:0;
-}
+.b-ai-btn:hover{background:linear-gradient(135deg,rgba(99,102,241,.32),rgba(139,92,246,.32));color:#fff;}
+.b-ai-badge{margin-left:auto;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;letter-spacing:.05em;flex-shrink:0;}
 .books-root.collapsed .b-ai-btn{justify-content:center;padding:10px;}
 .books-root.collapsed .b-ai-badge{display:none;}
 
-/* ══ Chat Panel ══ */
-.ai-chat-panel{
-  position:fixed;
-  bottom:24px;
-  left:232px;
-  width:360px;
-  height:520px;
-  background:#1a1d2e;
-  border-radius:16px;
-  box-shadow:0 24px 64px rgba(0,0,0,.5),0 0 0 1px rgba(139,92,246,.2);
-  display:flex;flex-direction:column;
-  overflow:hidden;
-  z-index:9998;
-  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+/* ══ AI Panel ══ */
+.ai-panel{
+  position:fixed;bottom:20px;left:228px;
+  width:340px;
+  background:#0f1117;
+  border:1px solid rgba(99,102,241,.25);
+  border-radius:14px;
+  box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 0 1px rgba(99,102,241,.1);
+  display:flex;flex-direction:column;overflow:hidden;
+  z-index:9998;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
 }
+.ai-slide-enter-active,.ai-slide-leave-active{transition:all .22s cubic-bezier(.34,1.4,.64,1);}
+.ai-slide-enter-from,.ai-slide-leave-to{opacity:0;transform:translateY(14px) scale(.97);}
 
-.chat-slide-enter-active,.chat-slide-leave-active{transition:all .25s cubic-bezier(.34,1.56,.64,1);}
-.chat-slide-enter-from,.chat-slide-leave-to{opacity:0;transform:translateY(16px) scale(.96);}
-
-.ai-chat-header{
+.ai-panel-header{
   display:flex;align-items:center;justify-content:space-between;
-  padding:14px 16px;
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  flex-shrink:0;
+  padding:13px 14px;
+  background:linear-gradient(135deg,#312e81,#4c1d95);
+  border-bottom:1px solid rgba(255,255,255,.07);flex-shrink:0;
 }
-.ai-chat-avatar{
-  width:32px;height:32px;border-radius:50%;
-  background:rgba(255,255,255,.2);
-  display:grid;place-items:center;color:#fff;
-  flex-shrink:0;
-}
-.ai-chat-close{
-  background:rgba(255,255,255,.15);border:none;cursor:pointer;
-  color:#fff;font-size:14px;width:26px;height:26px;
-  border-radius:50%;display:grid;place-items:center;
-  transition:.15s;
-}
-.ai-chat-close:hover{background:rgba(255,255,255,.3);}
+.ai-panel-icon{width:28px;height:28px;border-radius:8px;background:rgba(255,255,255,.15);display:grid;place-items:center;color:#c4b5fd;flex-shrink:0;}
+.ai-panel-close{background:rgba(255,255,255,.1);border:none;cursor:pointer;color:rgba(255,255,255,.7);width:24px;height:24px;border-radius:6px;display:grid;place-items:center;transition:.15s;}
+.ai-panel-close:hover{background:rgba(255,255,255,.2);color:#fff;}
 
-.ai-chat-messages{
-  flex:1;overflow-y:auto;padding:14px 12px;
-  display:flex;flex-direction:column;gap:10px;
-  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.1) transparent;
+/* Input row */
+.ai-input-wrap{display:flex;align-items:center;gap:8px;padding:12px 12px 10px;border-bottom:1px solid rgba(255,255,255,.06);}
+.ai-input-icon{color:#6366f1;flex-shrink:0;}
+.ai-input{
+  flex:1;background:transparent;border:none;outline:none;
+  font-size:13.5px;color:#e2e8f0;font-family:inherit;
+  caret-color:#818cf8;
 }
-.ai-chat-messages::-webkit-scrollbar{width:4px;}
-.ai-chat-messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px;}
+.ai-input::placeholder{color:rgba(255,255,255,.25);}
+.ai-input:disabled{opacity:.5;}
+.ai-run-btn{
+  width:28px;height:28px;border-radius:8px;flex-shrink:0;
+  background:#4f46e5;border:none;cursor:pointer;
+  display:grid;place-items:center;color:#fff;transition:.15s;
+}
+.ai-run-btn:hover:not(:disabled){background:#6366f1;}
+.ai-run-btn:disabled{opacity:.35;cursor:not-allowed;}
+.ai-spinner{width:12px;height:12px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .6s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
 
-.ai-msg{display:flex;align-items:flex-start;gap:7px;}
-.ai-msg-user{flex-direction:row-reverse;}
-.ai-msg-icon{
-  width:24px;height:24px;border-radius:50%;flex-shrink:0;
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  display:grid;place-items:center;color:#fff;margin-top:2px;
+/* Command list */
+.ai-commands{padding:8px 0 10px;}
+.ai-commands-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.25);padding:0 12px 8px;}
+.ai-command-item{
+  display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;transition:background .12s;
 }
-.ai-msg-bubble{
-  max-width:82%;padding:9px 12px;border-radius:12px;
-  font-size:13px;line-height:1.55;word-wrap:break-word;
-}
-.ai-msg-bot .ai-msg-bubble{
-  background:#252840;color:#e2e8f0;border-radius:4px 12px 12px 12px;
-}
-.ai-msg-user .ai-msg-bubble{
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);
-  color:#fff;border-radius:12px 4px 12px 12px;
-}
-.ai-inv-link{
-  display:inline-flex;align-items:center;gap:6px;
-  margin-top:8px;padding:6px 12px;
-  background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);
-  border-radius:8px;color:#a5b4fc;font-size:12px;font-weight:600;
-  cursor:pointer;transition:.15s;width:100%;
-}
-.ai-inv-link:hover{background:rgba(99,102,241,.35);}
+.ai-command-item:hover{background:rgba(99,102,241,.12);}
+.ai-command-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0;}
+.ai-command-title{font-size:12.5px;color:#c4c9d4;line-height:1.4;}
+.ai-command-arrow{color:rgba(255,255,255,.2);margin-left:auto;flex-shrink:0;}
+.ai-command-item:hover .ai-command-arrow{color:#818cf8;}
 
-/* Typing dots */
-.ai-typing{display:flex;align-items:center;gap:4px;padding:12px 14px !important;}
-.ai-typing span{width:6px;height:6px;border-radius:50%;background:#818cf8;animation:dot-bounce .9s ease-in-out infinite;}
-.ai-typing span:nth-child(2){animation-delay:.15s;}
-.ai-typing span:nth-child(3){animation-delay:.3s;}
-@keyframes dot-bounce{0%,80%,100%{transform:scale(1);opacity:.5}40%{transform:scale(1.3);opacity:1}}
+/* Result area */
+.ai-result{padding:10px 12px 14px;display:flex;flex-direction:column;gap:10px;}
 
-/* Suggestions */
-.ai-suggestions{
-  display:flex;gap:6px;padding:6px 12px;flex-wrap:nowrap;overflow-x:auto;
-  scrollbar-width:none;border-top:1px solid rgba(255,255,255,.06);flex-shrink:0;
-}
-.ai-suggestions::-webkit-scrollbar{display:none;}
-.ai-suggest-btn{
-  flex-shrink:0;padding:5px 11px;border-radius:20px;
-  background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.25);
-  color:#a5b4fc;font-size:11.5px;font-weight:600;cursor:pointer;
-  font-family:inherit;transition:.15s;white-space:nowrap;
-}
-.ai-suggest-btn:hover{background:rgba(99,102,241,.3);color:#c7d2fe;}
+.ai-result-running{display:flex;align-items:center;gap:10px;padding:10px 4px;color:rgba(255,255,255,.5);font-size:13px;}
+.ai-dots{display:flex;gap:4px;}
+.ai-dots span{width:6px;height:6px;border-radius:50%;background:#6366f1;animation:dot-pulse .9s ease-in-out infinite;}
+.ai-dots span:nth-child(2){animation-delay:.15s;}
+.ai-dots span:nth-child(3){animation-delay:.3s;}
+@keyframes dot-pulse{0%,80%,100%{transform:scale(.8);opacity:.4}40%{transform:scale(1.2);opacity:1}}
 
-/* Input area */
-.ai-chat-input-wrap{
-  display:flex;align-items:flex-end;gap:8px;
-  padding:10px 12px;border-top:1px solid rgba(255,255,255,.07);
-  background:#141622;flex-shrink:0;
-}
-.ai-chat-input{
-  flex:1;background:#252840;border:1px solid rgba(255,255,255,.1);
-  border-radius:10px;padding:9px 12px;color:#e2e8f0;font-size:13px;
-  font-family:inherit;resize:none;outline:none;line-height:1.5;
-  transition:border-color .15s;
-  scrollbar-width:none;
-}
-.ai-chat-input:focus{border-color:rgba(99,102,241,.5);}
-.ai-chat-input::placeholder{color:rgba(255,255,255,.3);}
-.ai-chat-input::-webkit-scrollbar{display:none;}
-.ai-send-btn{
-  width:36px;height:36px;border-radius:10px;flex-shrink:0;
-  background:linear-gradient(135deg,#4f46e5,#7c3aed);border:none;
-  cursor:pointer;display:grid;place-items:center;color:#fff;
-  transition:.15s;
-}
-.ai-send-btn:hover:not(:disabled){filter:brightness(1.15);}
-.ai-send-btn:disabled{opacity:.4;cursor:not-allowed;}
+.ai-result-card{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;border-radius:10px;}
+.ai-card-success{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.2);}
+.ai-card-error  {background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.2);}
+.ai-card-info   {background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.2);}
+.ai-card-icon{font-size:20px;line-height:1;flex-shrink:0;margin-top:1px;}
+.ai-card-title{font-size:13px;font-weight:600;color:#e2e8f0;line-height:1.4;}
+.ai-card-sub{font-size:11.5px;color:rgba(255,255,255,.4);margin-top:3px;}
+.ai-card-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
+.ai-meta-pill{padding:3px 9px;border-radius:20px;font-size:11px;font-weight:600;background:rgba(255,255,255,.08);color:#c4b5fd;}
+
+.ai-list-header{font-size:12px;font-weight:600;color:rgba(255,255,255,.5);display:flex;align-items:center;gap:7px;margin-bottom:6px;}
+.ai-status-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;}
+.dot-warn{background:#f59e0b;}
+.dot-ok{background:#10b981;}
+.ai-list-wrap{border:1px solid rgba(255,255,255,.07);border-radius:10px;overflow:hidden;}
+.ai-list-item{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.05);}
+.ai-list-item:last-child{border-bottom:none;}
+.ai-list-name{font-size:12.5px;font-weight:600;color:#e2e8f0;}
+.ai-list-inv{font-size:11px;color:rgba(255,255,255,.3);margin-top:1px;}
+.ai-list-amt{font-size:12.5px;font-weight:700;font-family:monospace;}
+.ai-list-more{padding:7px 12px;font-size:11.5px;color:rgba(255,255,255,.3);text-align:center;border-top:1px solid rgba(255,255,255,.05);}
+
+.ai-action-btns{display:flex;gap:7px;flex-wrap:wrap;}
+.ai-action-btn{height:32px;padding:0 14px;border-radius:8px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;font-family:inherit;transition:.15s;white-space:nowrap;}
+.ai-action-primary{background:#4f46e5;color:#fff;}
+.ai-action-primary:hover{background:#6366f1;}
+.ai-action-secondary{background:rgba(255,255,255,.08);color:rgba(255,255,255,.7);}
+.ai-action-secondary:hover{background:rgba(255,255,255,.14);}
+
+.ai-reset-btn{display:inline-flex;align-items:center;gap:5px;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.3);font-size:11.5px;font-family:inherit;padding:0;transition:.15s;}
+.ai-reset-btn:hover{color:rgba(255,255,255,.6);}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
 /* ═══ Zoho Books Layout ═══ */
 /* Root container */
