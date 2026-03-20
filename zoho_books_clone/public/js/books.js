@@ -1426,7 +1426,7 @@ const Invoices=defineComponent({name:"Invoices",
     const search=ref("");
 
     const filters=[
-      {k:"all",lbl:"All Invoices 1"},
+      {k:"all",lbl:"All Invoices"},
       {k:"Draft",lbl:"Draft"},
       {k:"Submitted",lbl:"Unpaid"},
       {k:"Overdue",lbl:"Overdue"},
@@ -1488,7 +1488,7 @@ const Invoices=defineComponent({name:"Invoices",
   <!-- TOOLBAR -->
   <div class="zb-toolbar no-print">
     <div class="zb-toolbar-left">
-      <span class="zb-toolbar-title">All Invoices 2</span>
+      <span class="zb-toolbar-title">All Invoices</span>
       <span class="zb-toolbar-caret">&#9660;</span>
     </div>
     <div class="zb-toolbar-right">
@@ -1585,7 +1585,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     // ── List (sidebar) ──────────────────────────────────────────
     const list=ref([]),listLoading=ref(true),active=ref("all"),search=ref("");
     const filters=[
-      {k:"all",lbl:"All Invoices 3"},
+      {k:"all",lbl:"All Invoices"},
       {k:"Draft",lbl:"Draft"},
       {k:"Submitted",lbl:"Unpaid"},
       {k:"Overdue",lbl:"Overdue"},
@@ -1746,7 +1746,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     <div class="zb-list-header">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices 4</span>
+          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices</span>
           <span style="font-size:11px;color:var(--text-3)">▾</span>
         </div>
         <div style="display:flex;gap:4px">
