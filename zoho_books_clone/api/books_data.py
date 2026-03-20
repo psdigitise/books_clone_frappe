@@ -35,25 +35,58 @@ def send_invoice_email(invoice_name, to, subject, body, cc=None):
         frappe.throw("Recipient email (To) is required.")
     if not frappe.has_permission("Sales Invoice", "read", invoice_name):
         frappe.throw("Not permitted", frappe.PermissionError)
+
     inv = frappe.get_doc("Sales Invoice", invoice_name)
     recipients = [e.strip() for e in to.split(",") if e.strip()]
     cc_list = [e.strip() for e in (cc or "").split(",") if e.strip()]
+
+    # Try attaching PDF — silently skip if print format not found
+    attachments = []
     try:
-        pdf_attachment = frappe.attach_print(inv.doctype, inv.name, print_format="Sales Invoice", print_letterhead=True)
-        attachments = [pdf_attachment]
+        pdf_attachment = frappe.attach_print(
+            inv.doctype, inv.name,
+            print_format="Sales Invoice",
+            print_letterhead=False,
+        )
+        if pdf_attachment:
+            attachments = [pdf_attachment]
     except Exception:
-        attachments = []
-    frappe.sendmail(recipients=recipients, cc=cc_list, subject=subject, message=body,
-                    attachments=attachments, reference_doctype="Sales Invoice", reference_name=invoice_name, now=True)
-    comm = frappe.get_doc({
-        "doctype": "Communication", "communication_type": "Communication",
-        "communication_medium": "Email", "sent_or_received": "Sent", "email_status": "Sent",
-        "subject": subject, "content": body, "sender": frappe.session.user,
-        "recipients": to, "cc": cc or "",
-        "reference_doctype": "Sales Invoice", "reference_name": invoice_name, "status": "Linked",
-    })
-    comm.insert(ignore_permissions=True)
-    frappe.db.commit()
+        pass
+
+    frappe.sendmail(
+        recipients=recipients,
+        cc=cc_list,
+        subject=subject,
+        message=body,
+        attachments=attachments,
+        reference_doctype="Sales Invoice",
+        reference_name=invoice_name,
+        now=True,
+    )
+
+    # Log communication — "email_status" field does NOT exist in this Frappe version,
+    # use only valid fields: sent_or_received, status
+    try:
+        comm = frappe.get_doc({
+            "doctype": "Communication",
+            "communication_type": "Communication",
+            "communication_medium": "Email",
+            "sent_or_received": "Sent",
+            "subject": subject,
+            "content": body,
+            "sender": frappe.session.user,
+            "recipients": to,
+            "cc": cc or "",
+            "reference_doctype": "Sales Invoice",
+            "reference_name": invoice_name,
+            "status": "Linked",
+        })
+        comm.insert(ignore_permissions=True)
+        frappe.db.commit()
+    except Exception:
+        # Communication log is non-critical — don't fail the send
+        frappe.db.commit()
+
     return {"status": "sent", "to": to, "invoice": invoice_name}
 
 
