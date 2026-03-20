@@ -383,8 +383,7 @@
           }
           emit("saved", saved.name);
           emit("close");
-          // Navigate to the saved doc in Frappe desk
-          setTimeout(() => window.open(docUrl(props.doctype, saved.name), "_blank"), 300);
+          // Navigation handled by parent via 'saved' event
         } catch (e) {
           toast(e.message || "Could not save invoice", "error");
         } finally { saving.value = false; }
@@ -1059,7 +1058,7 @@
           if (andSubmit) { await apiSubmit("Purchase Invoice", saved.name); toast("Bill " + saved.name + " submitted!"); }
           else { toast("Bill " + saved.name + " saved as Draft"); }
           emit("saved", saved.name); emit("close");
-          setTimeout(() => window.open(docUrl("Purchase Invoice", saved.name), "_blank"), 300);
+          // Navigation handled by parent
         } catch (e) { toast(e.message || "Could not save bill", "error"); }
         finally { saving.value = false; }
       }
@@ -1297,7 +1296,6 @@
           }
           toast("Payment " + peName + " recorded!");
           emit("saved", peName); emit("close");
-          setTimeout(() => window.open(docUrl("Payment Entry", peName), "_blank"), 300);
         } catch (e) { toast(e.message || "Could not save payment", "error"); }
         finally { saving.value = false; }
       }
@@ -1487,11 +1485,12 @@
         finally { loading.value = false; }
       }
       onMounted(load);
-      return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc, flt };
+      return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc, flt,
+               onInvoiceSaved: (name) => { useRouter().push({ name: "invoice-detail", params: { name } }); } };
     },
     template: `
 <div class="b-page">
-  <InvoiceModal :show="showSI" @close="showSI=false" @saved="load"/>
+  <InvoiceModal :show="showSI" @close="showSI=false" @saved="name=>{showSI=false;onInvoiceSaved(name)}"/>
   <PurchaseModal :show="showPI" @close="showPI=false" @saved="load"/>
   <PaymentModal :show="showPay" @close="showPay=false" @saved="load"/>
   <div class="b-quick-actions">
@@ -1651,18 +1650,20 @@
       }
       const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(i => selected.value.has(i.name)));
 
+      const router = useRouter();
+      function onInvoiceSaved(name) { showNew.value = false; loadList(); router.push({ name: "invoice-detail", params: { name } }); }
       onMounted(loadList);
       return {
         list, loading, active, showNew, search, filters, counts, filtered,
         selected, allSelected, sortKey,
         loadList, goToInvoice, statusChipCls, statusLabel, pillCountCls,
-        toggleRow, toggleAll, sortBy, sortArrow, isOverdue,
+        toggleRow, toggleAll, sortBy, sortArrow, isOverdue, onInvoiceSaved,
         fmt, fmtDate, flt, icon
       };
     },
     template: `
 <div class="zb-root no-sidebar-pad" style="background:#fff;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-  <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
+  <InvoiceModal :show="showNew" @close="showNew=false" @saved="onInvoiceSaved"/>
 
   <!-- ── TOOLBAR: "All Invoices ▼"  ···  [+ New ▼] [···] ── -->
   <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:#fff;border-bottom:1px solid #e8ecf0">
