@@ -376,229 +376,199 @@
     },
     template: `
 <teleport to="body">
-<div v-if="show" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:flex-start;justify-content:center;
-     background:rgba(0,0,0,.45);padding:32px 16px;overflow-y:auto" @click.self="$emit('close')">
-  <div style="background:#fff;border-radius:12px;width:100%;max-width:860px;
-       box-shadow:0 20px 60px rgba(0,0,0,.25);overflow:hidden;margin:auto">
+<div v-if="show" class="nim-overlay" @click.self="$emit('close')">
+  <div class="nim-dialog">
 
     <!-- Header -->
-    <div style="background:#3B5BDB;padding:18px 24px;display:flex;align-items:center;justify-content:space-between">
-      <div>
-        <div style="color:#fff;font-size:16px;font-weight:700;letter-spacing:-.2px">
-          New {{isSI?'Sales Invoice':'Purchase Bill'}}
+    <div class="nim-header">
+      <div class="nim-header-left">
+        <div class="nim-header-icon">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
         </div>
-        <div style="color:rgba(255,255,255,.65);font-size:12px;margin-top:2px">{{form.company}}</div>
+        <div>
+          <div class="nim-header-title">New {{isSI?'Sales Invoice':'Purchase Bill'}}</div>
+          <div class="nim-header-sub">{{form.company}}</div>
+        </div>
       </div>
-      <button @click="$emit('close')" style="background:rgba(255,255,255,.15);border:none;cursor:pointer;
-        width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#fff"
-        v-html="icon('x',16)"></button>
+      <button class="nim-close" @click="$emit('close')" v-html="icon('x',15)"></button>
     </div>
 
-    <div style="padding:24px;overflow-y:auto;max-height:calc(100vh - 180px)">
+    <!-- Body -->
+    <div class="nim-body">
 
-      <!-- Row 1: Customer + Dates -->
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:16px">
-        <div style="grid-column:1">
-          <label class="mi-label">Customer <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.customer" @change="onCustomer" class="mi-input">
-            <option value="">— Select Customer —</option>
+      <!-- Section: Invoice Details -->
+      <div class="nim-section-label">Invoice Details</div>
+      <div class="nim-grid-3 nim-mb">
+        <div class="nim-field nim-span-1">
+          <label class="nim-label">Customer <span class="nim-req">*</span></label>
+          <select v-model="form.customer" @change="onCustomer" class="nim-select">
+            <option value="">Select customer…</option>
             <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
           </select>
         </div>
-        <div>
-          <label class="mi-label">Invoice Date <span style="color:#C92A2A">*</span></label>
-          <input v-model="form.posting_date" type="date" class="mi-input"
-            @change="onPostingDateChange"/>
+        <div class="nim-field">
+          <label class="nim-label">Invoice Date <span class="nim-req">*</span></label>
+          <input v-model="form.posting_date" type="date" class="nim-input" @change="onPostingDateChange"/>
         </div>
-        <div>
-          <label class="mi-label">Due Date</label>
-          <input v-model="form.due_date" type="date" class="mi-input"/>
+        <div class="nim-field">
+          <label class="nim-label">Due Date</label>
+          <input v-model="form.due_date" type="date" class="nim-input"/>
         </div>
       </div>
 
-      <!-- Row 2: Accounts -->
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
-        <div>
-          <label class="mi-label">Debit To (AR Account) <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.debit_to" class="mi-input">
-            <option value="">— Select —</option>
+      <!-- Section: Accounts -->
+      <div class="nim-grid-2 nim-mb">
+        <div class="nim-field">
+          <label class="nim-label">AR Account <span class="nim-req">*</span></label>
+          <select v-model="form.debit_to" class="nim-select">
+            <option value="">Select account…</option>
             <option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option>
           </select>
         </div>
-        <div>
-          <label class="mi-label">Income Account <span style="color:#C92A2A">*</span></label>
-          <select v-model="form.income_account" class="mi-input">
-            <option value="">— Select —</option>
+        <div class="nim-field">
+          <label class="nim-label">Income Account <span class="nim-req">*</span></label>
+          <select v-model="form.income_account" class="nim-select">
+            <option value="">Select account…</option>
             <option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option>
           </select>
         </div>
       </div>
 
-      <!-- Items table -->
-      <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;
-           color:#868E96;margin-bottom:8px">Items</div>
-      <div style="border:1px solid #E8ECF0;border-radius:8px;overflow:hidden;margin-bottom:16px">
-        <table style="width:100%;border-collapse:collapse">
+      <!-- Section: Items -->
+      <div class="nim-section-header">
+        <div class="nim-section-label" style="margin-bottom:0">Line Items</div>
+      </div>
+      <div class="nim-table-wrap nim-mb">
+        <table class="nim-table">
           <thead>
-            <tr style="background:#F8F9FC">
-              <th class="mi-th" style="width:30%">Item Name</th>
-              <th class="mi-th" style="width:28%">Description</th>
-              <th class="mi-th" style="width:10%;text-align:center">Qty</th>
-              <th class="mi-th" style="width:15%;text-align:right">Rate (₹)</th>
-              <th class="mi-th" style="width:13%;text-align:right">Amount (₹)</th>
-              <th class="mi-th" style="width:4%"></th>
+            <tr>
+              <th style="width:30%">Item Name</th>
+              <th style="width:26%">Description</th>
+              <th style="width:10%;text-align:center">Qty</th>
+              <th style="width:16%;text-align:right">Rate (₹)</th>
+              <th style="width:14%;text-align:right">Amount (₹)</th>
+              <th style="width:4%"></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(item,i) in form.items" :key="i"
-                :style="i%2===1?'background:#FAFBFC':''">
-              <td class="mi-td">
-                <input v-model="item.item_name" class="mi-cell-input" placeholder="Item name"/>
-              </td>
-              <td class="mi-td">
-                <input v-model="item.description" class="mi-cell-input" placeholder="Description"/>
-              </td>
-              <td class="mi-td" style="text-align:center">
+            <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
+              <td><input v-model="item.item_name" class="nim-cell" placeholder="Item name"/></td>
+              <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
+              <td style="text-align:center">
                 <input v-model.number="item.qty" type="number" min="0.01" step="0.01"
-                  class="mi-cell-input" style="text-align:center;width:60px"
-                  @input="recalc"/>
+                  class="nim-cell nim-num" @input="recalc"/>
               </td>
-              <td class="mi-td" style="text-align:right">
+              <td style="text-align:right">
                 <input v-model.number="item.rate" type="number" min="0" step="0.01"
-                  class="mi-cell-input" style="text-align:right"
-                  @input="recalc"/>
+                  class="nim-cell nim-num" @input="recalc"/>
               </td>
-              <td class="mi-td" style="text-align:right;font-family:monospace;font-size:13px;
-                  color:#1A1D23;font-weight:600;padding-right:12px">
+              <td style="text-align:right;font-variant-numeric:tabular-nums" class="nim-amount">
                 {{item.amount?item.amount.toLocaleString("en-IN",{minimumFractionDigits:2}):"0.00"}}
               </td>
-              <td class="mi-td" style="text-align:center">
-                <button @click="removeItem(i)" v-if="form.items.length>1"
-                  style="background:none;border:none;cursor:pointer;color:#C92A2A;padding:2px"
-                  v-html="icon('trash',14)"></button>
+              <td style="text-align:center">
+                <button @click="removeItem(i)" v-if="form.items.length>1" class="nim-del-btn" v-html="icon('trash',13)"></button>
               </td>
             </tr>
           </tbody>
         </table>
-        <div style="padding:8px 12px;background:#F8F9FC;border-top:1px solid #E8ECF0">
-          <button @click="addItem" style="background:none;border:none;cursor:pointer;
-            color:#3B5BDB;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px"
-            :style="{fontFamily:'inherit'}">
-            <span v-html="icon('plus',13)"></span> Add Row
+        <div class="nim-table-footer">
+          <button @click="addItem" class="nim-add-btn">
+            <span v-html="icon('plus',12)"></span> Add Row
           </button>
         </div>
       </div>
 
-      <!-- Taxes section -->
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96">
-          Taxes & Charges
-        </div>
+      <!-- Section: Taxes -->
+      <div class="nim-section-header nim-mb-sm">
+        <div class="nim-section-label" style="margin-bottom:0">Taxes & Charges</div>
         <div style="display:flex;gap:8px;align-items:center">
           <select v-if="taxTemplates.length" @change="e=>{if(e.target.value)applyTaxTemplate(e.target.value)}"
-            style="font-size:12px;border:1px solid #E8ECF0;border-radius:5px;padding:4px 8px;
-                   font-family:inherit;color:#495057;background:#fff;cursor:pointer">
-            <option value="">Apply Template…</option>
+            class="nim-select-sm">
+            <option value="">Apply template…</option>
             <option v-for="t in taxTemplates" :key="t.name" :value="t.name">{{t.title||t.name}}</option>
           </select>
-          <button @click="addTax" style="background:none;border:none;cursor:pointer;
-            color:#3B5BDB;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:4px"
-            :style="{fontFamily:'inherit'}">
-            <span v-html="icon('plus',13)"></span> Add Tax
+          <button @click="addTax" class="nim-add-btn">
+            <span v-html="icon('plus',12)"></span> Add Tax
           </button>
         </div>
       </div>
 
-      <div v-if="form.taxes.length" style="border:1px solid #E8ECF0;border-radius:8px;
-           overflow:hidden;margin-bottom:16px">
-        <table style="width:100%;border-collapse:collapse">
+      <div v-if="form.taxes.length" class="nim-table-wrap nim-mb">
+        <table class="nim-table">
           <thead>
-            <tr style="background:#F8F9FC">
-              <th class="mi-th" style="width:22%">Type</th>
-              <th class="mi-th" style="width:28%">Description</th>
-              <th class="mi-th" style="width:15%;text-align:center">Rate %</th>
-              <th class="mi-th" style="width:30%;text-align:right">Tax Amount (₹)</th>
-              <th class="mi-th" style="width:5%"></th>
+            <tr>
+              <th style="width:20%">Type</th>
+              <th style="width:30%">Description</th>
+              <th style="width:14%;text-align:center">Rate %</th>
+              <th style="width:32%;text-align:right">Amount (₹)</th>
+              <th style="width:4%"></th>
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(tax,i) in form.taxes" :key="i" :style="i%2===1?'background:#FAFBFC':''">
-              <td class="mi-td">
-                <select v-model="tax.tax_type" class="mi-cell-input" @change="tax.description=tax.tax_type">
+            <tr v-for="(tax,i) in form.taxes" :key="i" class="nim-tr">
+              <td>
+                <select v-model="tax.tax_type" class="nim-cell" @change="tax.description=tax.tax_type">
                   <option>CGST</option><option>SGST</option><option>IGST</option>
                   <option>Cess</option><option>Other</option>
                 </select>
               </td>
-              <td class="mi-td"><input v-model="tax.description" class="mi-cell-input"/></td>
-              <td class="mi-td" style="text-align:center">
+              <td><input v-model="tax.description" class="nim-cell"/></td>
+              <td style="text-align:center">
                 <input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01"
-                  class="mi-cell-input" style="text-align:center;width:60px" @input="recalc"/>
+                  class="nim-cell nim-num" @input="recalc"/>
               </td>
-              <td class="mi-td" style="text-align:right;font-family:monospace;font-size:13px;
-                  color:#1A1D23;font-weight:600;padding-right:12px">
+              <td class="nim-amount" style="text-align:right;font-variant-numeric:tabular-nums">
                 {{flt(tax.tax_amount).toLocaleString("en-IN",{minimumFractionDigits:2})}}
               </td>
-              <td class="mi-td" style="text-align:center">
-                <button @click="removeTax(i)" style="background:none;border:none;cursor:pointer;
-                  color:#C92A2A" v-html="icon('trash',14)"></button>
+              <td style="text-align:center">
+                <button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button>
               </td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <!-- Totals -->
-      <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
-        <div style="min-width:260px;background:#F8F9FC;border:1px solid #E8ECF0;
-             border-radius:8px;overflow:hidden">
-          <div style="display:flex;justify-content:space-between;padding:10px 16px;
-               font-size:13px;color:#495057;border-bottom:1px solid #E8ECF0">
-            <span>Subtotal</span>
-            <span style="font-family:monospace">{{fmt(form.net_total)}}</span>
+      <!-- Totals + Notes row -->
+      <div class="nim-bottom-row">
+        <!-- Notes -->
+        <div class="nim-field" style="flex:1">
+          <label class="nim-label">Notes <span style="color:#9ca3af;font-weight:400">(optional)</span></label>
+          <textarea v-model="form.notes" class="nim-input nim-textarea"
+            rows="3" placeholder="Payment terms, remarks…"></textarea>
+        </div>
+        <!-- Totals -->
+        <div class="nim-totals">
+          <div class="nim-total-row">
+            <span class="nim-total-label">Subtotal</span>
+            <span class="nim-total-val">{{fmt(form.net_total)}}</span>
           </div>
-          <div v-for="tax in form.taxes" :key="tax.tax_type"
-               style="display:flex;justify-content:space-between;padding:8px 16px;
-               font-size:12.5px;color:#868E96;border-bottom:1px solid #E8ECF0">
-            <span>{{tax.description}} ({{tax.rate}}%)</span>
-            <span style="font-family:monospace">{{fmt(tax.tax_amount)}}</span>
+          <div v-for="tax in form.taxes" :key="tax.tax_type" class="nim-total-row nim-tax-row">
+            <span class="nim-total-label">{{tax.description||tax.tax_type}} ({{tax.rate}}%)</span>
+            <span class="nim-total-val">{{fmt(tax.tax_amount)}}</span>
           </div>
-          <div style="display:flex;justify-content:space-between;padding:12px 16px;
-               font-size:15px;font-weight:700;color:#3B5BDB;background:#EEF2FF">
+          <div class="nim-total-grand">
             <span>Grand Total</span>
-            <span style="font-family:monospace">{{fmt(form.grand_total)}}</span>
+            <span>{{fmt(form.grand_total)}}</span>
           </div>
         </div>
       </div>
 
-      <!-- Notes -->
-      <div style="margin-bottom:16px">
-        <label class="mi-label">Notes (optional)</label>
-        <textarea v-model="form.notes" class="mi-input" rows="2"
-          style="resize:vertical" placeholder="Payment terms, remarks…"></textarea>
+    </div><!-- /body -->
+
+    <!-- Footer -->
+    <div class="nim-footer">
+      <button @click="$emit('close')" :disabled="saving" class="nim-btn nim-btn-ghost">Cancel</button>
+      <div style="display:flex;gap:8px">
+        <button @click="save(false)" :disabled="saving" class="nim-btn nim-btn-outline">
+          {{saving?'Saving…':'Save as Draft'}}
+        </button>
+        <button @click="save(true)" :disabled="saving" class="nim-btn nim-btn-primary">
+          <span v-if="saving" v-html="icon('refresh',14)" style="animation:spin 1s linear infinite"></span>
+          {{saving?'Submitting…':'Save & Submit'}}
+        </button>
       </div>
-
-    </div><!-- /scroll area -->
-
-    <!-- Footer actions -->
-    <div style="padding:16px 24px;border-top:1px solid #E8ECF0;
-         display:flex;justify-content:flex-end;gap:10px;background:#FAFBFC">
-      <button @click="$emit('close')" :disabled="saving"
-        style="padding:9px 18px;border:1px solid #CDD5E0;border-radius:6px;background:#fff;
-               cursor:pointer;font-size:13px;font-weight:500;color:#495057;font-family:inherit">
-        Cancel
-      </button>
-      <button @click="save(false)" :disabled="saving"
-        style="padding:9px 18px;border:1px solid #3B5BDB;border-radius:6px;background:#fff;
-               cursor:pointer;font-size:13px;font-weight:500;color:#3B5BDB;font-family:inherit">
-        {{saving?'Saving…':'Save as Draft'}}
-      </button>
-      <button @click="save(true)" :disabled="saving"
-        style="padding:9px 18px;border:none;border-radius:6px;background:#3B5BDB;
-               cursor:pointer;font-size:13px;font-weight:600;color:#fff;font-family:inherit;
-               box-shadow:0 2px 8px rgba(59,91,219,.3)">
-        {{saving?'Submitting…':'Save & Submit'}}
-      </button>
     </div>
+
   </div>
 </div>
 </teleport>
@@ -3258,6 +3228,191 @@
 
   /* ── CSS for modal inputs (injected once) ── */
   const modalCSS = `
+/* ══ New Invoice Modal (nim) ══ */
+.nim-overlay{
+  position:fixed;inset:0;z-index:9000;
+  display:flex;align-items:center;justify-content:center;
+  background:rgba(15,23,42,.5);padding:20px 16px;
+  backdrop-filter:blur(3px);
+}
+.nim-dialog{
+  background:#fff;border-radius:14px;width:100%;max-width:840px;
+  box-shadow:0 24px 80px rgba(0,0,0,.2);overflow:hidden;
+  display:flex;flex-direction:column;
+  max-height:92vh;
+}
+/* Header */
+.nim-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 24px;
+  background:linear-gradient(135deg,#2563eb,#4f46e5);
+  flex-shrink:0;
+}
+.nim-header-left{display:flex;align-items:center;gap:12px;}
+.nim-header-icon{
+  width:36px;height:36px;border-radius:9px;
+  background:rgba(255,255,255,.18);
+  display:grid;place-items:center;color:#fff;flex-shrink:0;
+}
+.nim-header-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:-.01em;}
+.nim-header-sub{font-size:11.5px;color:rgba(255,255,255,.6);margin-top:2px;}
+.nim-close{
+  background:rgba(255,255,255,.15);border:none;cursor:pointer;
+  color:#fff;width:30px;height:30px;border-radius:8px;
+  display:grid;place-items:center;transition:.15s;
+}
+.nim-close:hover{background:rgba(255,255,255,.28);}
+/* Body */
+.nim-body{padding:22px 24px;overflow-y:auto;flex:1;}
+.nim-section-label{
+  font-size:10.5px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:#9ca3af;margin-bottom:10px;
+}
+.nim-section-header{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:8px;
+}
+.nim-mb{margin-bottom:18px;}
+.nim-mb-sm{margin-bottom:8px;}
+/* Grid layouts */
+.nim-grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;}
+.nim-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+.nim-span-1{grid-column:1;}
+/* Fields */
+.nim-field{display:flex;flex-direction:column;gap:5px;}
+.nim-label{font-size:11.5px;font-weight:600;color:#6b7280;letter-spacing:.01em;}
+.nim-req{color:#ef4444;}
+.nim-input{
+  height:36px;padding:0 11px;
+  border:1.5px solid #e4e8f0;border-radius:7px;
+  font-size:13.5px;color:#111827;background:#fff;
+  outline:none;width:100%;box-sizing:border-box;
+  transition:border-color .15s,box-shadow .15s;font-family:inherit;
+}
+.nim-input:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1);}
+.nim-select{
+  height:36px;padding:0 11px;
+  border:1.5px solid #e4e8f0;border-radius:7px;
+  font-size:13.5px;color:#111827;background:#fff;
+  outline:none;width:100%;box-sizing:border-box;
+  transition:border-color .15s;font-family:inherit;
+  appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;
+  padding-right:30px;cursor:pointer;
+}
+.nim-select:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1);}
+.nim-select-sm{
+  height:30px;padding:0 26px 0 9px;font-size:12px;
+  border:1.5px solid #e4e8f0;border-radius:6px;
+  color:#374151;background:#fff;outline:none;
+  font-family:inherit;cursor:pointer;
+  appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%236b7280'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 8px center;
+}
+.nim-textarea{height:auto;padding:9px 11px;resize:vertical;line-height:1.5;}
+/* Table */
+.nim-table-wrap{
+  border:1.5px solid #e4e8f0;border-radius:9px;overflow:hidden;
+}
+.nim-table{width:100%;border-collapse:collapse;font-size:13px;}
+.nim-table thead tr{background:#f8f9fc;}
+.nim-table th{
+  padding:9px 12px;text-align:left;
+  font-size:10.5px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:#9ca3af;
+  border-bottom:1.5px solid #e4e8f0;white-space:nowrap;
+}
+.nim-tr td{padding:5px 8px;border-bottom:1px solid #f1f3f7;}
+.nim-tr:last-child td{border-bottom:none;}
+.nim-tr:hover td{background:#f8f9fc;}
+.nim-cell{
+  width:100%;border:none;outline:none;background:transparent;
+  font-size:13px;color:#111827;font-family:inherit;
+  padding:5px 6px;border-radius:5px;transition:background .1s;
+}
+.nim-cell:focus{background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.2);}
+.nim-num{text-align:right;width:80px;}
+.nim-amount{
+  font-size:13px;font-weight:600;color:#111827;
+  padding-right:12px !important;font-family:monospace;
+}
+.nim-del-btn{
+  background:none;border:none;cursor:pointer;
+  color:#d1d5db;padding:3px;border-radius:4px;
+  display:grid;place-items:center;transition:.15s;
+}
+.nim-del-btn:hover{color:#ef4444;background:#fee2e2;}
+.nim-table-footer{
+  padding:8px 12px;background:#f8f9fc;
+  border-top:1px solid #f1f3f7;
+}
+.nim-add-btn{
+  background:none;border:none;cursor:pointer;
+  color:#2563eb;font-size:12.5px;font-weight:600;
+  display:inline-flex;align-items:center;gap:5px;
+  font-family:inherit;padding:3px 6px;border-radius:5px;
+  transition:.15s;
+}
+.nim-add-btn:hover{background:#eff6ff;}
+/* Bottom row */
+.nim-bottom-row{
+  display:flex;gap:20px;align-items:flex-start;margin-top:4px;
+}
+.nim-totals{
+  min-width:260px;border:1.5px solid #e4e8f0;border-radius:9px;
+  overflow:hidden;flex-shrink:0;
+}
+.nim-total-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:9px 14px;border-bottom:1px solid #f1f3f7;
+  font-size:13px;
+}
+.nim-total-label{color:#6b7280;}
+.nim-total-val{font-family:monospace;font-weight:600;color:#111827;}
+.nim-tax-row{font-size:12px;}
+.nim-tax-row .nim-total-label{color:#9ca3af;}
+.nim-total-grand{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:12px 14px;
+  background:#eff6ff;
+  font-size:15px;font-weight:700;color:#2563eb;
+}
+/* Footer */
+.nim-footer{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 24px;border-top:1.5px solid #e4e8f0;
+  background:#f8f9fc;flex-shrink:0;
+}
+.nim-btn{
+  height:37px;padding:0 18px;border-radius:8px;
+  font-size:13.5px;font-weight:600;cursor:pointer;
+  font-family:inherit;border:none;transition:all .15s;
+  display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+}
+.nim-btn:disabled{opacity:.55;cursor:not-allowed;}
+.nim-btn-ghost{
+  background:#fff;border:1.5px solid #e4e8f0;color:#374151;
+}
+.nim-btn-ghost:hover:not(:disabled){background:#f1f3f7;}
+.nim-btn-outline{
+  background:#fff;border:1.5px solid #2563eb;color:#2563eb;
+}
+.nim-btn-outline:hover:not(:disabled){background:#eff6ff;}
+.nim-btn-primary{
+  background:#2563eb;color:#fff;
+  box-shadow:0 2px 8px rgba(37,99,235,.3);
+}
+.nim-btn-primary:hover:not(:disabled){background:#1d4ed8;box-shadow:0 4px 12px rgba(37,99,235,.4);}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:640px){
+  .nim-grid-3{grid-template-columns:1fr 1fr;}
+  .nim-grid-2{grid-template-columns:1fr;}
+  .nim-bottom-row{flex-direction:column;}
+  .nim-totals{min-width:100%;}
+}
+
 /* ══ AI Automator FAB ══ */
 .ai-fab{
   position:fixed;bottom:24px;right:24px;
