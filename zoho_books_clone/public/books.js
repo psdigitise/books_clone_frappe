@@ -658,56 +658,109 @@
       function execCmd(cmd, val) { document.execCommand(cmd, false, val || null); editorRef.value?.focus(); }
 
       function buildInvoiceHtml(inv) {
-        if (!inv) return "";
-        const amt = n => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(n || 0);
-        const rows = (inv.items || []).map((it, i) => `
-        <tr>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#555">${i + 1}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#1a1d23;font-weight:600">${it.item_name || it.item_code || ""}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${(it.qty || 0).toFixed(2)}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${amt(it.rate)}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;font-weight:700">${amt(it.amount)}</td>
-        </tr>`).join("");
-        const taxes = (inv.taxes || []).map(t => `
-        <tr><td style="padding:4px 12px;font-size:12px;color:#666" colspan="3"></td>
-          <td style="padding:4px 12px;font-size:12px;color:#666;text-align:right">${t.tax_type || ""} (${t.rate || 0}%)</td>
-          <td style="padding:4px 12px;font-size:12px;text-align:right">${amt(t.tax_amount)}</td></tr>`).join("");
-        return `
-<div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto">
-  <div style="background:#2563EB;padding:24px 32px;text-align:center;border-radius:8px 8px 0 0">
-    <h2 style="color:#fff;margin:0;font-size:20px;letter-spacing:.5px">Invoice #${inv.name}</h2>
-  </div>
-  <div style="background:#fff;padding:28px 32px;border:1px solid #e8eaed;border-top:none;border-radius:0 0 8px 8px">
-    <p style="font-size:15px;color:#1a1d23;margin:0 0 6px">Dear ${inv.customer_name || inv.customer || "Customer"},</p>
-    <p style="font-size:14px;color:#555;margin:0 0 20px;line-height:1.6">Thank you for your business. Please find your invoice details below.</p>
-    <div style="background:#f8faff;border:1px solid #dbe4ff;border-radius:8px;padding:18px 24px;margin-bottom:24px">
-      <div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:8px">INVOICE AMOUNT</div>
-      <div style="font-size:28px;font-weight:800;color:#2563EB">${amt(inv.grand_total)}</div>
-      <div style="font-size:12px;color:#888;margin-top:4px">Due: ${inv.due_date || "—"}</div>
+        if (!inv) return "<p style='color:#888;padding:20px'>Loading invoice details…</p>";
+        const amt = n => "₹" + Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const items = inv.items || [];
+        const taxes = inv.taxes || [];
+
+        const rows = items.length ? items.map((it, i) => `
+          <tr>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0f2f5;font-size:13px;color:#555;text-align:center">${i + 1}</td>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0f2f5;font-size:13px;color:#1a1d23;font-weight:600">${it.item_name || it.item_code || "Item"}</td>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0f2f5;font-size:13px;text-align:right">${Number(it.qty || 0).toFixed(2)}</td>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0f2f5;font-size:13px;text-align:right">${amt(it.rate)}</td>
+            <td style="padding:10px 14px;border-bottom:1px solid #f0f2f5;font-size:13px;text-align:right;font-weight:700">${amt(it.amount)}</td>
+          </tr>`).join("") : `
+          <tr><td colspan="5" style="padding:20px;text-align:center;color:#9ca3af;font-size:13px">No items</td></tr>`;
+
+        const taxRows = taxes.map(t => `
+          <tr>
+            <td colspan="3"></td>
+            <td style="padding:5px 14px;font-size:12.5px;color:#555;text-align:right">${t.tax_type || ""} ${t.rate ? "("+t.rate+"%)" : ""}</td>
+            <td style="padding:5px 14px;font-size:12.5px;text-align:right">${amt(t.tax_amount)}</td>
+          </tr>`).join("");
+
+        const paidAmt = Math.max(0, (inv.grand_total || 0) - (inv.outstanding_amount || 0));
+
+        return `<div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;background:#fff">
+
+  <!-- Header banner -->
+  <div style="background:linear-gradient(135deg,#1d4ed8,#2563EB);padding:28px 36px;border-radius:10px 10px 0 0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div style="color:rgba(255,255,255,.75);font-size:11px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;margin-bottom:6px">TAX INVOICE</div>
+        <div style="color:#fff;font-size:24px;font-weight:800;letter-spacing:-.5px">${inv.name || ""}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="color:rgba(255,255,255,.75);font-size:11px;margin-bottom:4px">Amount Due</div>
+        <div style="color:#fff;font-size:28px;font-weight:800">${amt(inv.outstanding_amount || inv.grand_total)}</div>
+      </div>
     </div>
-    <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+  </div>
+
+  <!-- Meta row -->
+  <div style="background:#f8faff;border:1px solid #dbe4ff;border-top:none;padding:16px 36px;display:flex;gap:40px;border-radius:0 0 0 0">
+    <div>
+      <div style="font-size:10.5px;font-weight:700;color:#9ca3af;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">Bill To</div>
+      <div style="font-size:14px;font-weight:700;color:#1a1d23">${inv.customer_name || inv.customer || ""}</div>
+    </div>
+    <div>
+      <div style="font-size:10.5px;font-weight:700;color:#9ca3af;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">Invoice Date</div>
+      <div style="font-size:13px;color:#374151">${inv.posting_date || "—"}</div>
+    </div>
+    <div>
+      <div style="font-size:10.5px;font-weight:700;color:#9ca3af;letter-spacing:.08em;text-transform:uppercase;margin-bottom:4px">Due Date</div>
+      <div style="font-size:13px;color:#dc2626;font-weight:600">${inv.due_date || "—"}</div>
+    </div>
+  </div>
+
+  <!-- Greeting -->
+  <div style="padding:24px 36px 16px;border:1px solid #e8eaed;border-top:none">
+    <p style="font-size:14px;color:#374151;margin:0 0 8px;line-height:1.7">Dear <strong>${inv.customer_name || inv.customer || "Customer"}</strong>,</p>
+    <p style="font-size:13.5px;color:#6b7280;margin:0 0 20px;line-height:1.7">Thank you for your business. Please find your invoice details below. Kindly make the payment by the due date.</p>
+
+    <!-- Items table -->
+    <table style="width:100%;border-collapse:collapse;margin-bottom:0">
       <thead>
         <tr style="background:#f5f6f8">
-          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:left;border-bottom:2px solid #e8eaed">#</th>
-          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:left;border-bottom:2px solid #e8eaed">Item</th>
-          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:right;border-bottom:2px solid #e8eaed">Qty</th>
-          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:right;border-bottom:2px solid #e8eaed">Rate</th>
-          <th style="padding:10px 12px;font-size:11px;font-weight:700;color:#888;text-align:right;border-bottom:2px solid #e8eaed">Amount</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;color:#6b7280;text-align:center;border-bottom:2px solid #e8eaed;width:40px">#</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;color:#6b7280;text-align:left;border-bottom:2px solid #e8eaed">ITEM &amp; DESCRIPTION</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;color:#6b7280;text-align:right;border-bottom:2px solid #e8eaed">QTY</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;color:#6b7280;text-align:right;border-bottom:2px solid #e8eaed">RATE</th>
+          <th style="padding:10px 14px;font-size:11px;font-weight:700;color:#6b7280;text-align:right;border-bottom:2px solid #e8eaed">AMOUNT</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
       <tfoot>
-        ${taxes}
-        <tr><td colspan="3"></td>
-          <td style="padding:8px 12px;font-size:13px;font-weight:700;border-top:2px solid #1a1d23;text-align:right">Total</td>
-          <td style="padding:8px 12px;font-size:14px;font-weight:800;border-top:2px solid #1a1d23;text-align:right;color:#1a1d23">${amt(inv.grand_total)}</td></tr>
-        <tr><td colspan="3"></td>
-          <td style="padding:6px 12px;font-size:13px;font-weight:700;color:#2563EB;text-align:right">Balance Due</td>
-          <td style="padding:6px 12px;font-size:15px;font-weight:800;color:#2563EB;text-align:right">${amt(inv.outstanding_amount)}</td></tr>
+        ${taxRows}
+        <tr style="background:#f8faff">
+          <td colspan="3"></td>
+          <td style="padding:12px 14px;font-size:13px;font-weight:700;border-top:2px solid #e8eaed;text-align:right;color:#374151">Sub Total</td>
+          <td style="padding:12px 14px;font-size:13px;font-weight:700;border-top:2px solid #e8eaed;text-align:right;color:#374151">${amt(inv.net_total || inv.grand_total)}</td>
+        </tr>
+        <tr style="background:#f8faff">
+          <td colspan="3"></td>
+          <td style="padding:8px 14px;font-size:14px;font-weight:800;text-align:right;color:#1a1d23;border-top:1px solid #e8eaed">Total</td>
+          <td style="padding:8px 14px;font-size:14px;font-weight:800;text-align:right;color:#1a1d23;border-top:1px solid #e8eaed">${amt(inv.grand_total)}</td>
+        </tr>
+        ${paidAmt > 0 ? `<tr><td colspan="3"></td>
+          <td style="padding:6px 14px;font-size:13px;text-align:right;color:#059669;font-weight:600">Payment Made</td>
+          <td style="padding:6px 14px;font-size:13px;text-align:right;color:#059669;font-weight:600">-${amt(paidAmt)}</td>
+        </tr>` : ""}
+        <tr>
+          <td colspan="3"></td>
+          <td style="padding:10px 14px;font-size:14px;font-weight:800;text-align:right;color:#2563EB;background:#eef2ff;border-radius:0">Balance Due</td>
+          <td style="padding:10px 14px;font-size:15px;font-weight:800;text-align:right;color:#2563EB;background:#eef2ff">${amt(inv.outstanding_amount || inv.grand_total)}</td>
+        </tr>
       </tfoot>
     </table>
-    <p style="font-size:13px;color:#888;margin:0">If you have any questions, please reply to this email.</p>
   </div>
+
+  <!-- Footer -->
+  <div style="padding:20px 36px;border:1px solid #e8eaed;border-top:none;border-radius:0 0 10px 10px;background:#fafbff">
+    <p style="font-size:12.5px;color:#9ca3af;margin:0;text-align:center">If you have any questions about this invoice, please contact us by replying to this email.</p>
+  </div>
+
 </div>`;
       }
 
@@ -719,12 +772,20 @@
           toTags.value = d.to ? [d.to] : [];
           subject.value = d.subject || "";
           fromEmail.value = d.from_email || frappe?.session?.user || "";
+        } catch (e) { error.value = "Could not load defaults: " + e.message; }
+        finally {
+          loading.value = false;
+          // Wait for v-else branch (editor) to render now that loading=false
+          await nextTick();
           await nextTick();
           if (editorRef.value) {
             editorRef.value.innerHTML = buildInvoiceHtml(props.inv);
+          } else {
+            // Fallback: find by class if ref not bound yet
+            const el = document.querySelector(".sem-editor");
+            if (el) el.innerHTML = buildInvoiceHtml(props.inv);
           }
-        } catch (e) { error.value = "Could not load defaults: " + e.message; }
-        finally { loading.value = false; }
+        }
       }
 
       watch(() => props.show, async v => {
@@ -736,8 +797,12 @@
           loadDefaults();
         }
       });
-      watch(() => props.inv, v => {
-        if (props.show && editorRef.value && v) editorRef.value.innerHTML = buildInvoiceHtml(v);
+      watch(() => props.inv, async v => {
+        if (props.show && v) {
+          await nextTick();
+          const el = editorRef.value || document.querySelector(".sem-editor");
+          if (el) el.innerHTML = buildInvoiceHtml(v);
+        }
       });
 
       async function send() {
@@ -745,7 +810,7 @@
         if (toVal.value.trim()) { addTagFromVal(toVal.value, toTags); toVal.value = ""; }
         if (!toTags.value.length) { error.value = "Please enter at least one recipient email address."; return; }
         sending.value = true; error.value = "";
-        const bodyHtml = editorRef.value ? editorRef.value.innerHTML : "";
+        const bodyHtml = (editorRef.value || document.querySelector(".sem-editor"))?.innerHTML || "";
         try {
           await apiPOST("zoho_books_clone.api.books_data.send_invoice_email", {
             invoice_name: props.invoiceName,
