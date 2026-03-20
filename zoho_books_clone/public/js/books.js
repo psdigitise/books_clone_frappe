@@ -75,45 +75,70 @@
     return _parseResponse(json, r.status);
   }
 
-  /* Refresh CSRF token from session endpoint (GET — no CSRF needed) */
+  /* Refresh CSRF token — always fetches fresh from session endpoint */
   async function refreshCsrfToken() {
-    // 1. Already have a valid token
-    if (window.frappe?.csrf_token && window.frappe.csrf_token !== "None" && window.frappe.csrf_token !== "{{ csrf_token }}") return;
-    // 2. Meta tag (Frappe injects this on every page load)
+    // 1. Try meta tag first (cheapest, set by Frappe on page load)
     const meta = document.querySelector("meta[name='csrf-token']");
-    if (meta) { const t = meta.getAttribute("content"); if (t && t !== "None") { window.frappe.csrf_token = t; return; } }
-    // 3. Cookie
-    const ck = document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
-    if (ck) { const t = decodeURIComponent(ck.split("=").slice(1).join("=")); if (t && t !== "None") { window.frappe.csrf_token = t; return; } }
-    // 4. Session endpoint
+    if (meta) {
+      const t = meta.getAttribute("content");
+      if (t && t !== "None" && t !== "{{ csrf_token }}") {
+        if (window.frappe) window.frappe.csrf_token = t;
+        return t;
+      }
+    }
+    // 2. Try window.frappe.csrf_token if already set and valid
+    if (window.frappe?.csrf_token &&
+        window.frappe.csrf_token !== "None" &&
+        window.frappe.csrf_token !== "{{ csrf_token }}") {
+      return window.frappe.csrf_token;
+    }
+    // 3. Try cookie
+    const ck = document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("csrf_token="));
+    if (ck) {
+      const t = decodeURIComponent(ck.split("=").slice(1).join("="));
+      if (t && t !== "None") {
+        if (window.frappe) window.frappe.csrf_token = t;
+        return t;
+      }
+    }
+    // 4. Fetch fresh from session endpoint
     try {
       const r = await fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
-        method: "GET", credentials: "same-origin", headers: { "Accept": "application/json" }
+        method: "GET", credentials: "same-origin",
+        headers: { "Accept": "application/json" }
       });
       const data = await r.json();
       const token = data?.message?.csrf_token;
-      if (token && token !== "None") window.frappe.csrf_token = token;
+      if (token && token !== "None") {
+        if (window.frappe) window.frappe.csrf_token = token;
+        return token;
+      }
     } catch { }
+    return "";
   }
 
-  /* POST — for write operations; always re-fetches CSRF token first */
+  /* POST — always fetches fresh CSRF token, sends via both header and body */
   async function apiPOST(method, args) {
-    // Always refresh the token before posting — prevents stale token errors
-    await refreshCsrfToken();
-    const csrfToken = window.frappe?.csrf_token || getCsrfFromCookie() || "";
+    // Force-invalidate cached token so we always get a fresh one
+    if (window.frappe) window.frappe.csrf_token = null;
+    const csrfToken = await refreshCsrfToken();
+
     const body = new URLSearchParams();
-    if (csrfToken) body.append("csrf_token", csrfToken);
     for (const [k, v] of Object.entries(args || {})) {
       body.append(k, typeof v === "string" ? v : JSON.stringify(v));
     }
+    // Send CSRF both ways: Frappe checks either header OR body param
+    if (csrfToken) body.append("csrf_token", csrfToken);
+
     const r = await fetch("/api/method/" + method, {
-      method: "POST", credentials: "same-origin",
+      method: "POST",
+      credentials: "same-origin",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         "X-Frappe-CSRF-Token": csrfToken || "",
-        "Accept": "application/json"
+        "Accept": "application/json",
       },
-      body: body.toString()
+      body: body.toString(),
     });
     let json;
     try { json = await r.json(); } catch { throw new Error("Non-JSON response (" + r.status + ")"); }
@@ -1987,6 +2012,8 @@
         if (!recPay.deposit_to) { toast("Please select a Deposit To account", "error"); return; }
         recPaySaving.value = true;
         try {
+          // Force fresh CSRF token — prevents stale token 400 errors
+          if (window.frappe) window.frappe.csrf_token = null;
           const result = await apiPOST("zoho_books_clone.api.books_data.record_payment", {
             invoice_name: inv.value?.name,
             amount_received: recPay.amount,
