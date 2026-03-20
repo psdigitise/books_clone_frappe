@@ -314,7 +314,7 @@ body { background: var(--books-bg); color: var(--books-text); font-family: var(-
 }
 
 /* ── Content area ── */
-.books-content { flex: 1; padding: 24px; overflow-y: auto; }
+.books-content { flex: 1; padding: 0; overflow-y: auto; background: #fff; }
 
 /* ── Shared component styles ── */
 .books-card {

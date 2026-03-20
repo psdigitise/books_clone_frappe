@@ -1574,7 +1574,7 @@ const Invoices=defineComponent({name:"Invoices",
 
 // ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
 const InvoiceDetail=defineComponent({name:"InvoiceDetail",
-  components:{SendEmailModal,PaymentModal},
+  components:{SendEmailModal},
   setup(){
     const route=useRoute();
     const router=useRouter();
@@ -1724,81 +1724,13 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
       if(s==="Cancelled")return"b-badge-muted";
       return"b-badge-amber";
     });
-    const isDraft=computed(()=>!inv.value||String(inv.value.docstatus)==="0"||inv.value.status==="Draft");
+    const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
     const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
     const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
-    const showCustMenu=ref(false);
-    const showRecPay=ref(false);
-    const recPaySaving=ref(false);
-    const recPayAccounts=ref([]);
-    const recPay=reactive({
-      amount:0,bank_charges:0,tax_deducted:"no",
-      payment_date:new Date().toISOString().slice(0,10),
-      received_on:"",mode:"Cash",deposit_to:"",
-      reference:"",notes:"",ref_no:"",send_thankyou:false
-    });
-
-    watch(()=>inv.value,(v)=>{
-      if(v){
-        recPay.amount=flt(v.outstanding_amount)||flt(v.grand_total);
-        recPay.ref_no=v.name;
-      }
-    });
-
-    async function openRecPay(){
-      // Load bank/cash accounts fresh each time
-      try{
-        const accs=await apiList("Account",{
-          fields:["name","account_type"],
-          filters:[["is_group","=",0]],
-          limit:100
-        });
-        // Filter client-side to avoid server-side IN operator issues
-        recPayAccounts.value=accs.filter(a=>["Bank","Cash"].includes(a.account_type));
-        if(!recPay.deposit_to&&recPayAccounts.value.length){
-          recPay.deposit_to=recPayAccounts.value[0].name;
-        }
-      }catch(e){
-        recPayAccounts.value=[];
-      }
-      // Reset amount from current outstanding
-      if(inv.value){
-        recPay.amount=flt(inv.value.outstanding_amount)||flt(inv.value.grand_total);
-        recPay.ref_no=inv.value.name;
-        recPay.payment_date=new Date().toISOString().slice(0,10);
-      }
-      showRecPay.value=true;
-    }
-
-    async function saveRecPay(submit){
-      if(!recPay.amount||recPay.amount<=0){toast("Please enter a valid amount","error");return;}
-      if(!recPay.deposit_to){toast("Please select a Deposit To account","error");return;}
-      recPaySaving.value=true;
-      try{
-        const result=await apiGET("zoho_books_clone.api.docs.record_payment",{
-          invoice_name: inv.value?.name,
-          amount:       recPay.amount,
-          deposit_to:   recPay.deposit_to,
-          mode_of_payment: recPay.mode||"Cash",
-          payment_date: recPay.payment_date,
-          reference_no: recPay.reference||recPay.ref_no||"",
-          notes:        recPay.notes||"",
-          submit:       submit?1:0,
-        });
-        toast("Payment "+result.name+" "+(submit?"recorded!":"saved as draft!"));
-        showRecPay.value=false;
-        await loadDetail(invName.value);
-        loadList();
-      }catch(e){
-        const msg=e?.message||String(e)||"Could not save payment";
-        toast(msg,"error");
-      }
-      finally{recPaySaving.value=false;}
-    }
 
     return{
       list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,showCustMenu,showRecPay,recPay,recPaySaving,recPayAccounts,saveRecPay,openRecPay,
+      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,
       form,customers,accounts_ar,accounts_income,
       statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
       startEdit,saveEdit,submitInvoice,printPdf,
@@ -1877,163 +1809,8 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
   <!-- ══ RIGHT: DETAIL AREA ══ -->
   <div class="zb-detail-area">
 
-    <template v-if="showRecPay">
-      <div style="display:flex;flex-direction:column;min-height:100%;flex:1;background:#fff;overflow:hidden">
-        <!-- Header -->
-        <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;background:#fff;position:sticky;top:0;z-index:10">
-          <h2 style="font-size:17px;font-weight:700;color:#111;margin:0">Payment for {{invName}}</h2>
-          <button @click="showRecPay=false" style="background:none;border:none;cursor:pointer;font-size:22px;color:#6b7280;line-height:1">✕</button>
-        </div>
-
-        <!-- Body -->
-        <div style="flex:1;padding:24px;display:grid;grid-template-columns:1fr 280px;gap:24px;overflow-y:auto;background:#fff">
-          <!-- Left form -->
-          <div>
-            <!-- Row 1: Customer + Payment # -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Customer Name*</label>
-                <input :value="inv?.customer_name||inv?.customer" readonly style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#f9fafb"/>
-              </div>
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment #*</label>
-                <div style="position:relative">
-                  <input v-model="recPay.ref_no" style="width:100%;padding:8px 36px 8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-                  <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#6b7280">⚙</span>
-                </div>
-              </div>
-            </div>
-
-            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
-
-            <!-- Row 2: Amount + Bank Charges -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:6px">
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Amount Received (INR)*</label>
-                <input v-model.number="recPay.amount" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:2px solid #2563EB;border-radius:6px;font-size:13px;font-weight:600"/>
-                <div style="font-size:11px;color:#2563EB;margin-top:4px;cursor:pointer">PAN: <span style="text-decoration:underline">Add PAN</span></div>
-              </div>
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Bank Charges (if any)</label>
-                <input v-model.number="recPay.bank_charges" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-              </div>
-            </div>
-
-            <!-- Tax deducted -->
-            <div style="margin-bottom:20px;padding:12px 0;border-bottom:1px solid #e5e7eb">
-              <span style="font-size:12.5px;color:#374151;margin-right:16px">Tax deducted?</span>
-              <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-right:16px">
-                <input type="radio" v-model="recPay.tax_deducted" value="no"> No Tax deducted
-              </label>
-              <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
-                <input type="radio" v-model="recPay.tax_deducted" value="yes"> Yes, TDS (Income Tax)
-              </label>
-            </div>
-
-            <!-- Row 3: Payment Date + Payment Mode -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Payment Date*</label>
-                <input v-model="recPay.payment_date" type="date" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-              </div>
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Mode</label>
-                <select v-model="recPay.mode" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
-                  <option>Cash</option><option>Bank Transfer</option><option>UPI</option><option>NEFT</option><option>RTGS</option><option>Cheque</option><option>Credit Card</option><option>Debit Card</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Row 4: Payment Received On + Deposit To -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Received On</label>
-                <input v-model="recPay.received_on" type="date" placeholder="dd/MM/yyyy" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-              </div>
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Deposit To*</label>
-                <select v-model="recPay.deposit_to" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
-                  <option value="">— Select Account —</option>
-                  <option v-for="a in recPayAccounts" :key="a.name" :value="a.name">{{a.name}}</option>
-                </select>
-              </div>
-            </div>
-
-            <!-- Row 5: Reference# + Notes -->
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Reference#</label>
-                <input v-model="recPay.reference" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
-              </div>
-              <div>
-                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Notes</label>
-                <textarea v-model="recPay.notes" rows="3" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical"></textarea>
-              </div>
-            </div>
-
-            <!-- Attachments -->
-            <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-bottom:20px">
-              <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px">Attachments</div>
-              <button style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151">
-                ⬆ Upload File ▾
-              </button>
-              <div style="font-size:11px;color:#9ca3af;margin-top:6px">You can upload a maximum of 5 files, 5MB each</div>
-            </div>
-
-            <!-- Thank you note -->
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
-              <input type="checkbox" v-model="recPay.send_thankyou" style="width:14px;height:14px">
-              Send a "Thank you" note for this payment
-            </label>
-          </div>
-
-          <!-- Right sidebar: Customer details -->
-          <div>
-            <div style="background:#1e3a5f;border-radius:8px;overflow:hidden">
-              <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer">
-                <span style="color:#fff;font-size:13px;font-weight:600">{{inv?.customer_name||inv?.customer}}'s Details</span>
-                <span style="color:#fff;font-size:16px">›</span>
-              </div>
-            </div>
-            <div style="margin-top:16px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
-              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#9ca3af;margin-bottom:10px">Invoice Summary</div>
-              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
-                <span style="color:#6b7280">Invoice #</span>
-                <span style="font-weight:600;color:#2563EB">{{invName}}</span>
-              </div>
-              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
-                <span style="color:#6b7280">Grand Total</span>
-                <span style="font-weight:600">{{fmt(inv?.grand_total)}}</span>
-              </div>
-              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
-                <span style="color:#6b7280">Paid</span>
-                <span style="font-weight:600;color:#16a34a">{{fmt(paidAmt)}}</span>
-              </div>
-              <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px">
-                <span style="color:#6b7280">Balance Due</span>
-                <span style="font-weight:700;color:#dc2626">{{fmt(inv?.outstanding_amount)}}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Footer buttons -->
-        <div style="padding:16px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;align-items:center;gap:12px;position:sticky;bottom:0;z-index:10">
-          <button @click="saveRecPay(false)" :disabled="recPaySaving" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit">
-            {{recPaySaving?'Saving…':'Save as Draft'}}
-          </button>
-          <button @click="saveRecPay(true)" :disabled="recPaySaving" style="padding:9px 22px;border:none;border-radius:6px;background:#2563EB;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
-            {{recPaySaving?'Saving…':'Save as Paid'}}
-          </button>
-          <button @click="showRecPay=false" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:500;cursor:pointer;color:#6b7280;font-family:inherit">Cancel</button>
-        </div>
-      </div>
-    </template>
-    
-    <template v-else>
-      <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
-        <!-- Action bar -->
-        <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
+    <!-- Action bar -->
+    <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
       <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
         <span style="font-size:14px;font-weight:700;color:#1a1d23">{{inv.name}}</span>
         <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">
@@ -2067,7 +1844,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
           </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
-          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="openRecPay()">💳 Record Payment ▾</button>
+          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
           <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
             <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
             {{submitting?'Submitting…':'Submit'}}
@@ -2081,7 +1858,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     <div class="zb-banner no-print" v-if="inv&&!isDraft&&!editing">
       <span style="color:#f59e0b;font-size:15px">✦</span>
       <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Invoice has been sent. Record payment for it as soon as you receive payment. <a href="#" style="color:#2563EB;font-weight:600;text-decoration:none">Learn More</a></span>
-      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="openRecPay()">Record Payment</button>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0">Record Payment</button>
     </div>
     <div class="zb-banner zb-banner-upi no-print" v-if="inv&&!isDraft&&!editing">
       <span style="font-size:12px;color:#444">🖥 Get paid faster by <a href="#" style="color:#2563EB;text-decoration:none">setting up payment gateways</a> or <a href="#" style="color:#2563EB;text-decoration:none">display a UPI QR code</a>.</span>
@@ -2107,49 +1884,6 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
       <!-- PDF view or Edit form -->
       <div class="zb-pdf-wrap" v-if="!editing">
-
-        <!-- Sticky toolbar row with Customize button -->
-        <div style="width:100%;max-width:660px;display:flex;justify-content:flex-end;margin-bottom:10px;position:sticky;top:0;z-index:50">
-          <div @mouseleave="showCustMenu=false" style="position:relative">
-            <button @click="showCustMenu=!showCustMenu"
-              style="display:inline-flex;align-items:center;gap:6px;padding:7px 16px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,.35)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
-              Customize ▾
-            </button>
-            <div v-if="showCustMenu"
-              style="position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.13);min-width:210px;overflow:hidden;z-index:200">
-              <div style="padding:4px 0">
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-                  Standard Template
-                </button>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m10 0h3a2 2 0 0 0 2-2v-3"/></svg>
-                  Change Template
-                </button>
-                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
-                <button @click="showCustMenu=false;$router.push('/template-editor')" class="zb-cust-menu-item" style="color:#2563EB;font-weight:600">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                  Edit Template
-                </button>
-                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                  Update Logo &amp; Address
-                </button>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                  Manage Custom Fields
-                </button>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                  Terms &amp; Conditions
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <div class="zb-pdf-paper">
           <div class="zb-sent-ribbon" v-if="!isDraft">Sent</div>
           <div class="zb-draft-ribbon" v-else>Draft</div>
@@ -2220,13 +1954,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
             </div>
           </div>
           <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
-          <div class="zb-pdf-footer" style="display:flex;align-items:center;justify-content:space-between">
-            <span>PDF template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></span>
-            <button @click="$router.push('/template-editor')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;color:#2563EB;font-size:11px;font-weight:600;cursor:pointer">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              Edit Template
-            </button>
-          </div>
+          <div class="zb-pdf-footer">PDF template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></div>
         </div>
       </div>
 
@@ -2332,13 +2060,9 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
         </div>
       </div>
 
-      </div><!-- /right panel -->
-      </div><!-- /flex row -->
-    </template>
+    </div><!-- /flex row -->
   </div><!-- /detail area -->
-  
   <SendEmailModal :show="showSendEmail" :invoice-name="invName" :inv="inv" @close="showSendEmail=false" @sent="showSendEmail=false"/>
-
 </div>
 `});
 
@@ -2823,10 +2547,8 @@ const modalCSS=`
 .zb-ab-success:hover{background:#276835!important}
 .zb-banner{display:flex;align-items:center;gap:10px;padding:9px 16px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#92400e;flex-shrink:0}
 /* PDF wrap */
-.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;flex-direction:column;align-items:center;position:relative}
-.zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:visible}
-.zb-cust-menu-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 16px;background:transparent;border:none;font-size:13px;color:#374151;cursor:pointer;text-align:left;font-family:inherit;transition:background .1s}
-.zb-cust-menu-item:hover{background:#f5f7ff;color:#2563EB}
+.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;justify-content:center;align-items:flex-start}
+.zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:hidden}
 .zb-draft-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#6b7280;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
 .zb-sent-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#2563EB;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
 .zb-banner-upi{background:#f0f9ff;border-bottom-color:#bae6fd;padding:7px 16px}
@@ -3038,380 +2760,6 @@ if(!document.getElementById("books-modal-css")){
   document.head.appendChild(s);
 }
 
-/* ── Template Editor ── */
-const TemplateEditor=defineComponent({
-  name:"TemplateEditor",
-  setup(){
-    const router=useRouter();
-    const activeTab=ref("general");
-    const saving=ref(false);
-    const saveMsg=ref("");
-    const previewHtml=ref("");
-    const loadingPreview=ref(false);
-    const logoUrl=ref("");
-    const upiId=ref("");
-    const showUpiQr=ref(true);
-    const primaryColor=ref("#2563EB");
-    const fontFamily=ref("Inter");
-    const paperSize=ref("A4");
-    const orientation=ref("Portrait");
-    const margins=reactive({top:"0.7",bottom:"0.7",left:"0.55",right:"0.4"});
-    const templateName=ref("Tax Invoice");
-    const showLogo=ref(true);
-    const showSignature=ref(true);
-    const showTerms=ref(true);
-    const showNotes=ref(true);
-    const headerTitle=ref("TAX INVOICE");
-    const footerText=ref("Thanks for your business.");
-    const tableColumns=reactive({qty:true,rate:true,amount:true,hsn:true,discount:false,tax:false});
-
-    const tabs=[
-      {key:"general",   label:"General",            icon:"⚙"},
-      {key:"header",    label:"Header & Footer",     icon:"📋"},
-      {key:"transaction",label:"Transaction Details",icon:"📄"},
-      {key:"table",     label:"Table",               icon:"⊞"},
-      {key:"total",     label:"Total",               icon:"∑"},
-      {key:"other",     label:"Other Details",       icon:"⋯"},
-    ];
-
-    async function loadSettings(){
-      try{
-        const r=await fetch("/api/method/frappe.client.get?doctype=Print+Format&name=Tax+Invoice",{credentials:"same-origin"});
-        const d=await r.json();
-        const pf=d.message||{};
-        // parse stored meta if any
-        if(pf.custom_format_meta){
-          try{
-            const m=JSON.parse(pf.custom_format_meta);
-            if(m.primaryColor) primaryColor.value=m.primaryColor;
-            if(m.fontFamily)   fontFamily.value=m.fontFamily;
-            if(m.upiId)        upiId.value=m.upiId;
-            if(m.showUpiQr!=null) showUpiQr.value=m.showUpiQr;
-            if(m.showLogo!=null)  showLogo.value=m.showLogo;
-            if(m.headerTitle)  headerTitle.value=m.headerTitle;
-            if(m.footerText)   footerText.value=m.footerText;
-          }catch(e){}
-        }
-      }catch(e){}
-      refreshPreview();
-    }
-
-    async function refreshPreview(){
-      loadingPreview.value=true;
-      try{
-        // Render using a real invoice if available, else use mock
-        const r=await fetch("/api/method/frappe.client.get_list?doctype=Sales+Invoice&limit=1&fields=[%22name%22]",{credentials:"same-origin"});
-        const d=await r.json();
-        const invName=(d.message&&d.message[0])?d.message[0].name:null;
-        if(invName){
-          const pr=await fetch(`/api/method/frappe.www.printview.get_html_and_style?doc=${encodeURIComponent(invName)}&print_format=Tax+Invoice&_lang=en`,{credentials:"same-origin"});
-          if(pr.ok){
-            const pd=await pr.json();
-            previewHtml.value=(pd.message&&pd.message.html)||previewHtml.value;
-          }
-        }
-      }catch(e){}
-      loadingPreview.value=false;
-    }
-
-    async function saveTemplate(){
-      saving.value=true;
-      saveMsg.value="";
-      try{
-        const meta={primaryColor:primaryColor.value,fontFamily:fontFamily.value,upiId:upiId.value,showUpiQr:showUpiQr.value,showLogo:showLogo.value,headerTitle:headerTitle.value,footerText:footerText.value};
-        // Save meta to Print Format description field
-        const body=new FormData();
-        body.append("cmd","frappe.client.set_value");
-        body.append("doctype","Print Format");
-        body.append("name","Tax Invoice");
-        body.append("fieldname","description");
-        body.append("value",JSON.stringify(meta));
-        body.append("csrf_token",window.frappe?.csrf_token||"");
-        await fetch("/api/method/frappe.client.set_value",{method:"POST",credentials:"same-origin",body});
-        // Trigger server-side rebuild of HTML
-        const rb=new FormData();
-        rb.append("cmd","zoho_books_clone.books_setup.install.seed_print_formats");
-        rb.append("csrf_token",window.frappe?.csrf_token||"");
-        await fetch("/api/method/zoho_books_clone.books_setup.install.seed_print_formats",{method:"POST",credentials:"same-origin",body:rb});
-        saveMsg.value="✓ Saved";
-        setTimeout(()=>saveMsg.value="",3000);
-      }catch(e){saveMsg.value="Error saving";}
-      saving.value=false;
-    }
-
-    function close(){router.push("/invoices");}
-
-    onMounted(loadSettings);
-
-    return{activeTab,tabs,saving,saveMsg,previewHtml,loadingPreview,logoUrl,upiId,showUpiQr,primaryColor,fontFamily,paperSize,orientation,margins,templateName,showLogo,showSignature,showTerms,showNotes,headerTitle,footerText,tableColumns,saveTemplate,close,refreshPreview};
-  },
-  template:`
-<div style="display:flex;flex-direction:column;height:100vh;background:#f0f2f5;overflow:hidden">
-  <!-- Top Bar -->
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;background:#fff;border-bottom:1px solid #e5e7eb;flex-shrink:0">
-    <span style="font-size:15px;font-weight:600;color:#111">Edit Template</span>
-    <div style="display:flex;align-items:center;gap:10px">
-      <button @click="refreshPreview" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151;font-weight:500">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
-        Refresh Preview
-      </button>
-      <span v-if="saveMsg" style="font-size:12px;color:#16a34a;font-weight:600">{{saveMsg}}</span>
-      <button @click="saveTemplate" :disabled="saving" style="padding:6px 20px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer">
-        {{saving?'Saving…':'Save'}}
-      </button>
-      <button @click="close" style="width:30px;height:30px;border:none;background:transparent;cursor:pointer;font-size:18px;color:#6b7280;display:flex;align-items:center;justify-content:center">✕</button>
-    </div>
-  </div>
-
-  <!-- Body -->
-  <div style="display:flex;flex:1;overflow:hidden">
-
-    <!-- Left Panel -->
-    <div style="width:280px;flex-shrink:0;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;overflow:hidden">
-      <!-- Tab Icons -->
-      <div style="display:flex;flex-direction:column;width:64px;background:#f8fafc;border-right:1px solid #e5e7eb;flex-shrink:0;position:absolute;height:calc(100vh - 52px)">
-        <button v-for="t in tabs" :key="t.key" @click="activeTab=t.key"
-          :style="{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'14px 4px',border:'none',cursor:'pointer',background:activeTab===t.key?'#eff6ff':'transparent',color:activeTab===t.key?'#2563EB':'#6b7280',borderLeft:activeTab===t.key?'3px solid #2563EB':'3px solid transparent',gap:'4px',width:'100%'}">
-          <span style="font-size:16px">{{t.icon}}</span>
-          <span style="font-size:9px;font-weight:600;text-align:center;line-height:1.2;letter-spacing:.3px">{{t.label.split(' ')[0]}}</span>
-        </button>
-      </div>
-
-      <!-- Panel Content -->
-      <div style="margin-left:64px;flex:1;overflow-y:auto;padding:16px">
-
-        <!-- GENERAL -->
-        <template v-if="activeTab==='general'">
-          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Template Properties</div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Template Name *</label>
-            <input v-model="templateName" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;outline:none"/>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Paper Size</label>
-            <div style="display:flex;gap:12px">
-              <label v-for="s in ['A5','A4','Letter']" :key="s" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
-                <input type="radio" v-model="paperSize" :value="s"> {{s}}
-              </label>
-            </div>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Orientation</label>
-            <div style="display:flex;gap:12px">
-              <label v-for="o in ['Portrait','Landscape']" :key="o" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
-                <input type="radio" v-model="orientation" :value="o"> {{o}}
-              </label>
-            </div>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">Margins (in inches)</label>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <div v-for="m in ['top','bottom','left','right']" :key="m">
-                <label style="font-size:10px;color:#6b7280;text-transform:capitalize">{{m}}</label>
-                <input v-model="margins[m]" type="number" step="0.05" style="width:100%;padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;margin-top:2px"/>
-              </div>
-            </div>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Primary Color</label>
-            <div style="display:flex;align-items:center;gap:8px">
-              <input type="color" v-model="primaryColor" style="width:36px;height:32px;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;padding:2px"/>
-              <input v-model="primaryColor" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px"/>
-            </div>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Font Family</label>
-            <select v-model="fontFamily" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px">
-              <option>Inter</option><option>DM Sans</option><option>Poppins</option><option>Roboto</option><option>Arial</option>
-            </select>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151">
-              <input type="checkbox" v-model="showUpiQr" style="width:15px;height:15px">
-              Include Payment Stub (UPI QR)
-            </label>
-          </div>
-        </template>
-
-        <!-- HEADER & FOOTER -->
-        <template v-if="activeTab==='header'">
-          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Header & Footer</div>
-          <div style="margin-bottom:14px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151;margin-bottom:10px">
-              <input type="checkbox" v-model="showLogo" style="width:15px;height:15px">
-              Show Company Logo
-            </label>
-            <div v-if="showLogo" style="border:2px dashed #d1d5db;border-radius:8px;padding:20px;text-align:center;background:#f9fafb">
-              <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Upload your company logo</div>
-              <div style="font-size:10px;color:#9ca3af">Go to: Settings → Company → Upload Logo</div>
-              <div v-if="logoUrl" style="margin-top:8px"><img :src="logoUrl" style="max-height:50px;max-width:140px"/></div>
-              <div v-else style="margin-top:8px;font-size:10px;color:#2563EB">Logo will appear from Company settings</div>
-            </div>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Invoice Title</label>
-            <input v-model="headerTitle" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px"/>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Footer Text</label>
-            <textarea v-model="footerText" rows="3" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;resize:vertical"></textarea>
-          </div>
-          <div style="margin-bottom:14px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151">
-              <input type="checkbox" v-model="showSignature" style="width:15px;height:15px">
-              Show Authorized Signature line
-            </label>
-          </div>
-        </template>
-
-        <!-- TRANSACTION DETAILS -->
-        <template v-if="activeTab==='transaction'">
-          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Transaction Details</div>
-          <div style="background:#eff6ff;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:#1e40af">
-            These fields appear in the header info table on the invoice.
-          </div>
-          <div v-for="field in ['Invoice #','Invoice Date','Terms','Due Date','P.O. #']" :key="field" style="margin-bottom:10px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
-              <input type="checkbox" checked style="width:14px;height:14px"> {{field}}
-            </label>
-          </div>
-        </template>
-
-        <!-- TABLE -->
-        <template v-if="activeTab==='table'">
-          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Table Columns</div>
-          <div v-for="(val,key) in tableColumns" :key="key" style="margin-bottom:10px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151;text-transform:capitalize">
-              <input type="checkbox" v-model="tableColumns[key]" style="width:14px;height:14px"> {{key==='qty'?'Quantity':key==='hsn'?'HSN Code':key.charAt(0).toUpperCase()+key.slice(1)}}
-            </label>
-          </div>
-        </template>
-
-        <!-- TOTAL -->
-        <template v-if="activeTab==='total'">
-          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Total Section</div>
-          <div v-for="f in ['Sub Total','Tax Amount','Grand Total','Balance Due','Total in Words']" :key="f" style="margin-bottom:10px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
-              <input type="checkbox" checked style="width:14px;height:14px"> {{f}}
-            </label>
-          </div>
-          <div style="margin-top:16px;padding-top:14px;border-top:1px solid #e5e7eb">
-            <div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:10px">UPI QR Code</div>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151;margin-bottom:10px">
-              <input type="checkbox" v-model="showUpiQr" style="width:15px;height:15px"> Show UPI QR Code
-            </label>
-            <div v-if="showUpiQr">
-              <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">UPI ID</label>
-              <input v-model="upiId" placeholder="yourname@upi" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px"/>
-              <div style="font-size:10px;color:#6b7280;margin-top:4px">e.g. business@okicici, 9876543210@paytm</div>
-            </div>
-          </div>
-        </template>
-
-        <!-- OTHER -->
-        <template v-if="activeTab==='other'">
-          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Other Details</div>
-          <div v-for="f in ['Notes','Terms & Conditions','Ship To Address','GSTIN']" :key="f" style="margin-bottom:10px">
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
-              <input type="checkbox" checked style="width:14px;height:14px"> {{f}}
-            </label>
-          </div>
-          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
-            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Background Color</label>
-            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:6px">
-              <div v-for="c in ['#ffffff','#f8fafc','#f0f9ff','#f0fdf4','#fff7ed']" :key="c"
-                :style="{width:'100%',aspectRatio:'1',background:c,borderRadius:'6px',border:'2px solid #e5e7eb',cursor:'pointer'}">
-              </div>
-            </div>
-          </div>
-        </template>
-
-      </div>
-    </div>
-
-    <!-- Right Preview -->
-    <div style="flex:1;overflow-y:auto;background:#e5e7eb;padding:24px;display:flex;flex-direction:column;align-items:center">
-      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;text-transform:uppercase;letter-spacing:.8px;font-weight:600">Live Preview</div>
-      <div v-if="loadingPreview" style="display:flex;align-items:center;justify-content:center;height:200px;color:#6b7280;font-size:13px">
-        Loading preview…
-      </div>
-      <div v-else :style="{width:'100%',maxWidth:'794px',background:'#fff',borderRadius:'4px',boxShadow:'0 4px 24px rgba(0,0,0,.12)',minHeight:'1000px',overflow:'hidden',fontFamily:fontFamily}">
-        <div v-if="previewHtml" v-html="previewHtml" style="width:100%"></div>
-        <div v-else style="padding:48px 40px">
-          <!-- Static preview matching Zoho style -->
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px">
-            <div>
-              <div v-if="showLogo" style="width:140px;height:52px;border:2px dashed #d1d5db;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#9ca3af;margin-bottom:8px">Your Logo</div>
-              <div style="font-size:14px;font-weight:600;color:#111">{{$root?$root.companyName||'Company Name':'Company Name'}}</div>
-              <div style="font-size:11px;color:#6b7280;margin-top:2px">Tamil Nadu, India</div>
-            </div>
-            <div style="text-align:right">
-              <div style="font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#9ca3af;margin-bottom:4px">Tax Invoice</div>
-              <div :style="{fontSize:'22px',fontWeight:'700',color:primaryColor,marginBottom:'12px'}">{{headerTitle}}</div>
-              <table style="margin-left:auto;border-collapse:collapse">
-                <tr v-for="r in [['Invoice Date','18 Mar 2026'],['Due Date','18 Mar 2026'],['Terms','Due on Receipt']]" :key="r[0]">
-                  <td style="padding:2px 0 2px 16px;font-size:11.5px;color:#9ca3af">{{r[0]}}</td>
-                  <td style="padding:2px 0 2px 16px;font-size:11.5px;font-weight:500;color:#111">{{r[1]}}</td>
-                </tr>
-              </table>
-            </div>
-          </div>
-          <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
-          <div style="margin-bottom:20px">
-            <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9ca3af;margin-bottom:4px">Bill To</div>
-            <div style="font-size:14px;font-weight:600;color:#111">Customer Name</div>
-            <div style="font-size:12px;color:#6b7280">Chennai, Tamil Nadu</div>
-          </div>
-          <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
-            <thead>
-              <tr :style="{background:primaryColor}">
-                <th style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:left">#</th>
-                <th style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:left">Item &amp; Description</th>
-                <th v-if="tableColumns.qty" style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:right">Qty</th>
-                <th v-if="tableColumns.rate" style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:right">Rate</th>
-                <th v-if="tableColumns.amount" style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:right">Amount</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7">1</td>
-                <td style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7"><div style="font-weight:500">Sample Item</div><div style="font-size:11px;color:#9ca3af">Item description</div></td>
-                <td v-if="tableColumns.qty" style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7;text-align:right">1.00</td>
-                <td v-if="tableColumns.rate" style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7;text-align:right">₹5,000.00</td>
-                <td v-if="tableColumns.amount" style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7;text-align:right">₹5,000.00</td>
-              </tr>
-            </tbody>
-          </table>
-          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px">
-            <div v-if="showUpiQr" style="text-align:center;padding:12px 16px;background:#f8fafc;border-radius:8px;border:1px solid #e5e7eb;min-width:130px">
-              <div style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#9ca3af;margin-bottom:8px">Pay via UPI</div>
-              <div style="width:100px;height:100px;background:#e5e7eb;border-radius:4px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center">
-                <svg width="60" height="60" viewBox="0 0 60 60" fill="none"><rect x="2" y="2" width="20" height="20" rx="2" stroke="#374151" stroke-width="2"/><rect x="6" y="6" width="12" height="12" fill="#374151"/><rect x="38" y="2" width="20" height="20" rx="2" stroke="#374151" stroke-width="2"/><rect x="42" y="6" width="12" height="12" fill="#374151"/><rect x="2" y="38" width="20" height="20" rx="2" stroke="#374151" stroke-width="2"/><rect x="6" y="42" width="12" height="12" fill="#374151"/><rect x="28" y="28" width="4" height="4" fill="#374151"/><rect x="34" y="28" width="4" height="4" fill="#374151"/><rect x="40" y="28" width="4" height="4" fill="#374151"/><rect x="28" y="34" width="4" height="4" fill="#374151"/><rect x="40" y="34" width="4" height="4" fill="#374151"/><rect x="28" y="40" width="4" height="4" fill="#374151"/><rect x="34" y="40" width="4" height="4" fill="#374151"/><rect x="40" y="40" width="4" height="4" fill="#374151"/><rect x="46" y="34" width="4" height="4" fill="#374151"/><rect x="46" y="46" width="4" height="4" fill="#374151"/><rect x="34" y="46" width="4" height="4" fill="#374151"/></svg>
-              </div>
-              <div style="font-size:10px;color:#6b7280">{{upiId||'yourname@upi'}}</div>
-            </div>
-            <div style="flex:1;max-width:260px;margin-left:auto">
-              <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:13px;border-top:1px solid #e5e7eb"><span style="color:#6b7280">Sub Total</span><span>₹5,000.00</span></div>
-              <div style="display:flex;justify-content:space-between;padding:9px 0;font-size:15px;font-weight:700;border-top:2px solid #e5e7eb"><span>Total</span><span>₹5,000.00</span></div>
-              <div style="display:flex;justify-content:space-between;padding:8px;font-size:13px;font-weight:600;background:#fff5f5;border-radius:4px;margin-top:4px"><span style="color:#dc2626">Balance Due</span><span style="color:#dc2626">₹5,000.00</span></div>
-            </div>
-          </div>
-          <div v-if="showSignature" style="display:flex;justify-content:flex-end;margin-top:32px">
-            <div style="text-align:center">
-              <div style="width:160px;border-top:1px solid #d1d5db;padding-top:6px">
-                <div style="font-size:11px;color:#9ca3af">Authorized Signature</div>
-              </div>
-            </div>
-          </div>
-          <div style="text-align:center;margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;font-weight:600;color:#374151">{{footerText}}</div>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</div>`
-});
-
 /* ── Boot ── */
 const router=createRouter({
   history:createWebHashHistory(),
@@ -3419,7 +2767,6 @@ const router=createRouter({
     {path:"/",        component:Dashboard,     name:"dashboard"},
     {path:"/invoices",component:Invoices,      name:"invoices"},
     {path:"/invoices/:name",component:InvoiceDetail,name:"invoice-detail"},
-    {path:"/template-editor",component:TemplateEditor,name:"template-editor"},
     {path:"/purchases",component:Purchases,   name:"purchases"},
     {path:"/payments", component:Payments,    name:"payments"},
     {path:"/banking",  component:Banking,     name:"banking"},
