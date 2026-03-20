@@ -1188,11 +1188,13 @@
 
       async function loadDefaults() {
         const c = await resolveCompany(); form.company = c;
-        // Load Mode of Payment from standard Frappe doctype
+        // Load payment modes — try Books Payment Mode (custom), fallback to hardcoded
         try {
-          const modes = await apiList("Mode of Payment", { fields: ["name"], limit: 50, order: "name asc" });
-          if (modes.length) paymentModes.value = modes;
-        } catch {/* fallback to hardcoded defaults above */ }
+          const modes = await apiList("Books Payment Mode", { fields: ["name"], limit: 50, order: "name asc" });
+          if (modes && modes.length) paymentModes.value = modes;
+        } catch {
+          // keep hardcoded defaults: Bank Transfer, Cash, Cheque, NEFT, RTGS, UPI
+        }
         try {
           const bank = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Bank", "Cash"]], ["is_group", "=", 0]], limit: 50 });
           accounts_bank.value = bank;
@@ -1459,7 +1461,7 @@
         finally { loading.value = false; }
       }
       onMounted(load);
-      return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc };
+      return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc, flt };
     },
     template: `
 <div class="b-page">
