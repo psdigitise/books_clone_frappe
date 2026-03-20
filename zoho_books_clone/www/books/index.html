@@ -1,3 +1,4 @@
+{% raw %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -21,8 +22,6 @@ html,body{height:100%;width:100%;overflow:hidden;background:#f4f6fa}
 <script>
 window.frappe = window.frappe || { session: {}, boot: { sysdefaults: { company: "" } } };
 window.__booksCompany = "";
-
-// Bootstrap: fetch session via API (no Jinja — avoids "Illegal template" error)
 (function() {
   fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
     credentials: "same-origin",
@@ -30,29 +29,18 @@ window.__booksCompany = "";
   })
   .then(function(r) { return r.json(); })
   .then(function(d) {
-    if (!d || !d.message) {
-      window.location.href = "/login?redirect-to=/books";
-      return;
-    }
+    if (!d || !d.message) { window.location.href = "/login?redirect-to=/books"; return; }
     var m = d.message;
-    window.frappe.csrf_token             = m.csrf_token || "";
-    window.frappe.session.user           = m.user || "";
-    window.frappe.session.user_fullname  = m.fullname || m.user || "";
-    window.__booksCompany                = m.company || "";
+    window.frappe.csrf_token = m.csrf_token || "";
+    window.frappe.session.user = m.user || "";
+    window.frappe.session.user_fullname = m.fullname || m.user || "";
+    window.__booksCompany = m.company || "";
     window.frappe.boot.sysdefaults.company = window.__booksCompany;
-
-    // Inject csrf into meta tag so the app can read it
     var meta = document.querySelector("meta[name='csrf-token']");
-    if (!meta) {
-      meta = document.createElement("meta");
-      meta.name = "csrf-token";
-      document.head.appendChild(meta);
-    }
+    if (!meta) { meta = document.createElement("meta"); meta.name = "csrf-token"; document.head.appendChild(meta); }
     meta.setAttribute("content", window.frappe.csrf_token);
   })
-  .catch(function() {
-    window.location.href = "/login?redirect-to=/books";
-  });
+  .catch(function() { window.location.href = "/login?redirect-to=/books"; });
 })();
 </script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
@@ -60,3 +48,4 @@ window.__booksCompany = "";
 <script src="/assets/zoho_books_clone/js/books.js"></script>
 </body>
 </html>
+{% endraw %}
