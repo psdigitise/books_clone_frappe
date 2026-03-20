@@ -77,6 +77,15 @@
 
   /* Refresh CSRF token from session endpoint (GET — no CSRF needed) */
   async function refreshCsrfToken() {
+    // 1. Already have a valid token
+    if (window.frappe?.csrf_token && window.frappe.csrf_token !== "None" && window.frappe.csrf_token !== "{{ csrf_token }}") return;
+    // 2. Meta tag (Frappe injects this on every page load)
+    const meta = document.querySelector("meta[name='csrf-token']");
+    if (meta) { const t = meta.getAttribute("content"); if (t && t !== "None") { window.frappe.csrf_token = t; return; } }
+    // 3. Cookie
+    const ck = document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
+    if (ck) { const t = decodeURIComponent(ck.split("=").slice(1).join("=")); if (t && t !== "None") { window.frappe.csrf_token = t; return; } }
+    // 4. Session endpoint
     try {
       const r = await fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
         method: "GET", credentials: "same-origin", headers: { "Accept": "application/json" }
@@ -1529,7 +1538,7 @@
         list, loading, active, showNew, search, filters, counts, filtered,
         selected, allSelected, sortKey,
         loadList, goToInvoice, statusChipCls, statusLabel, pillCountCls,
-        toggleRow, toggleAll, sortBy, sortArrow,
+        toggleRow, toggleAll, sortBy, sortArrow, isOverdue,
         fmt, fmtDate, flt, icon
       };
     },
@@ -3562,18 +3571,41 @@
     return m ? decodeURIComponent(m.split("=").slice(1).join("=")) : "";
   }
 
+  function getCsrfFromMeta() {
+    // Frappe injects <meta name="csrf-token" content="..."> into every page
+    const meta = document.querySelector("meta[name='csrf-token']");
+    return meta ? meta.getAttribute("content") : "";
+  }
+
   async function bootstrapCsrf() {
     if (!window.frappe) window.frappe = { session: {}, boot: { sysdefaults: { company: "" } } };
 
-    // Step 1: Try GET /api/method/zoho_books_clone.api.session.get_books_session
-    // This is a GET so no CSRF needed — and it returns the token for future POSTs
+    // Step 1: Already set by Frappe's own JS (most reliable — Frappe sets window.frappe.csrf_token on page load)
+    if (window.frappe.csrf_token && window.frappe.csrf_token !== "None" && window.frappe.csrf_token !== "{{ csrf_token }}") {
+      return window.frappe.csrf_token;
+    }
+
+    // Step 2: Meta tag — Frappe injects this on every page
+    const fromMeta = getCsrfFromMeta();
+    if (fromMeta && fromMeta !== "None") {
+      window.frappe.csrf_token = fromMeta;
+      return fromMeta;
+    }
+
+    // Step 3: Cookie fallback
+    const fromCookie = getCsrfFromCookie();
+    if (fromCookie && fromCookie !== "None") {
+      window.frappe.csrf_token = fromCookie;
+      return fromCookie;
+    }
+
+    // Step 4: Fetch from our session endpoint (GET — no CSRF needed)
     try {
       const r = await fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
         method: "GET", credentials: "same-origin",
         headers: { "Accept": "application/json" }
       });
       if (!r.ok) {
-        // Not logged in — redirect to login
         window.location.href = "/login?redirect-to=/books";
         return "";
       }
@@ -3592,14 +3624,19 @@
       }
     } catch (e) { console.warn("[Books] Session fetch failed:", e.message); }
 
-    // Step 2: Cookie fallback
-    const fromCookie = getCsrfFromCookie();
-    if (fromCookie && fromCookie !== "None") {
-      window.frappe.csrf_token = fromCookie;
-      return fromCookie;
-    }
+    // Step 5: Try Frappe's built-in /api/method/frappe.auth.get_logged_user as a last resort
+    try {
+      const r2 = await fetch("/api/method/frappe.client.get_value?doctype=User&filters=%7B%22name%22%3A%22session%22%7D&fieldname=%5B%22name%22%5D", {
+        credentials: "same-origin", headers: { "Accept": "application/json" }
+      });
+      const hdr = r2.headers.get("X-Frappe-CSRF-Token");
+      if (hdr && hdr !== "None") {
+        window.frappe.csrf_token = hdr;
+        return hdr;
+      }
+    } catch {}
 
-    console.error("[Books] No CSRF token available — POSTs will fail");
+    console.warn("[Books] CSRF token not found — read operations will work but POSTs may fail");
     return "";
   }
 
