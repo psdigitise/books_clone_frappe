@@ -2837,6 +2837,7 @@
     name: "BooksApp",
     setup() {
       const route = useRoute();
+      const router = useRouter();
       const cname = computed(() => window.__booksCompany || "My Company");
       const initials = computed(() => { const n = window.frappe?.session?.user_fullname || "Admin"; return n.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase(); });
       const fullname = computed(() => window.frappe?.session?.user_fullname || "Administrator");
@@ -2844,13 +2845,156 @@
       const collapsed = ref(false);
       const mobileOpen = ref(false);
 
+      // ── Chatbot state ──
+      const chatOpen = ref(false);
+      const chatInput = ref("");
+      const chatLoading = ref(false);
+      const chatMessages = ref([
+        { role: "assistant", text: "Hi! I'm your Books AI assistant. I can answer questions about your invoices and also **create sales invoices** for you. Try asking:\n\n• \"Create an invoice for Prasath for ₹10,000\"\n• \"How many overdue invoices do I have?\"\n• \"Show me total revenue this month\"" }
+      ]);
+      const chatEndRef = ref(null);
+
+      // System prompt for the AI
+      const SYSTEM_PROMPT = `You are a helpful accounting assistant for a Frappe-based Books application (similar to Zoho Books).
+
+You can:
+1. Answer questions about invoices, payments, customers, and accounting concepts
+2. Help create sales invoices by extracting details from user messages
+
+When the user wants to CREATE an invoice, extract:
+- customer: customer name (required)
+- items: array of {item_name, qty, rate, amount}
+- due_date: if mentioned (YYYY-MM-DD format)
+- notes: any notes
+
+Respond in JSON when creating an invoice like:
+{"action": "create_invoice", "customer": "...", "items": [...], "due_date": "...", "notes": "..."}
+
+For all other questions, respond in plain conversational text. Be concise and helpful.
+Keep responses under 150 words unless creating an invoice.
+Current date: ${new Date().toLocaleDateString("en-IN")}`;
+
+      async function sendChat() {
+        const text = chatInput.value.trim();
+        if (!text || chatLoading.value) return;
+        chatInput.value = "";
+        chatMessages.value.push({ role: "user", text });
+        chatLoading.value = true;
+        await nextTick();
+        scrollChat();
+
+        try {
+          // Build message history for API (last 10 messages)
+          const history = chatMessages.value.slice(-10).map(m => ({
+            role: m.role === "assistant" ? "assistant" : "user",
+            content: m.text
+          }));
+          // Replace last user message (already added above)
+          history[history.length - 1].content = text;
+
+          const res = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 1000,
+              system: SYSTEM_PROMPT,
+              messages: history,
+            }),
+          });
+          const data = await res.json();
+          const rawText = data?.content?.[0]?.text || "Sorry, I couldn't get a response.";
+
+          // Check if it's a create_invoice action
+          let jsonMatch = rawText.match(/\{[\s\S]*"action"\s*:\s*"create_invoice"[\s\S]*\}/);
+          if (jsonMatch) {
+            try {
+              const parsed = JSON.parse(jsonMatch[0]);
+              chatMessages.value.push({ role: "assistant", text: rawText.replace(jsonMatch[0], "").trim() || "Sure! Creating that invoice now…", action: parsed });
+              await nextTick();
+              scrollChat();
+              await createInvoiceFromChat(parsed);
+              return;
+            } catch {}
+          }
+          chatMessages.value.push({ role: "assistant", text: rawText });
+        } catch (e) {
+          chatMessages.value.push({ role: "assistant", text: "⚠️ Error: " + (e.message || "Could not reach AI service.") });
+        } finally {
+          chatLoading.value = false;
+          await nextTick();
+          scrollChat();
+        }
+      }
+
+      async function createInvoiceFromChat(parsed) {
+        chatMessages.value.push({ role: "assistant", text: "⏳ Creating invoice…", pending: true });
+        await nextTick(); scrollChat();
+        try {
+          const company = window.__booksCompany || "";
+          const today = new Date().toISOString().slice(0, 10);
+          const items = (parsed.items || [{ item_name: "Service", qty: 1, rate: 0, amount: 0 }]).map(it => ({
+            doctype: "Sales Invoice Item",
+            item_name: it.item_name || "Service",
+            item_code: it.item_name || "Service",
+            description: it.item_name || "Service",
+            qty: parseFloat(it.qty) || 1,
+            rate: parseFloat(it.rate) || 0,
+            amount: parseFloat(it.amount) || parseFloat(it.rate) || 0,
+            uom: "Nos",
+          }));
+          const doc = {
+            doctype: "Sales Invoice",
+            customer: parsed.customer,
+            posting_date: today,
+            due_date: parsed.due_date || today,
+            company,
+            currency: "INR",
+            items,
+            notes: parsed.notes || "",
+          };
+          const saved = await apiGET("zoho_books_clone.api.books_data.save_doc", { doc: JSON.stringify(doc) });
+          // Remove pending message
+          chatMessages.value = chatMessages.value.filter(m => !m.pending);
+          chatMessages.value.push({
+            role: "assistant",
+            text: `✅ Invoice **${saved.name}** created for **${parsed.customer}**!`,
+            invoiceLink: saved.name
+          });
+          await nextTick(); scrollChat();
+        } catch (e) {
+          chatMessages.value = chatMessages.value.filter(m => !m.pending);
+          chatMessages.value.push({ role: "assistant", text: "❌ Failed to create invoice: " + (e.message || String(e)) });
+        }
+      }
+
+      function scrollChat() {
+        if (chatEndRef.value) chatEndRef.value.scrollIntoView({ behavior: "smooth" });
+      }
+
+      function openInvoice(name) {
+        router.push({ name: "invoice-detail", params: { name } });
+        chatOpen.value = false;
+      }
+
+      function onChatKey(e) { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); } }
+
+      function formatChatText(text) {
+        return text
+          .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
+          .replace(/\*(.*?)\*/g, "<em>$1</em>")
+          .replace(/\n/g, "<br>");
+      }
+
       function logout() {
         if (window.frappe && window.frappe.call) {
           window.frappe.call({ method: "logout", callback: () => { window.location.href = "/login"; } });
         } else { window.location.href = "/login"; }
       }
       function closeMobile() { mobileOpen.value = false; }
-      return { cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile };
+      return { cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
+               chatOpen, chatInput, chatLoading, chatMessages, chatEndRef,
+               sendChat, onChatKey, openInvoice, formatChatText };
     },
     template: `
 <div :class="{'books-root':true, collapsed:collapsed, 'mobile-open':mobileOpen}">
@@ -2875,6 +3019,15 @@
       </template>
     </nav>
     <div class="b-sidebar-footer">
+      <!-- AI Chatbot trigger button -->
+      <button class="b-ai-btn" @click="chatOpen=!chatOpen" :title="collapsed?'AI Assistant':''">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/>
+          <path d="M8 10h.01M12 10h.01M16 10h.01"/>
+        </svg>
+        <span class="b-nav-label">AI Assistant</span>
+        <span v-if="!collapsed" class="b-ai-badge">AI</span>
+      </button>
       <button class="b-collapse-btn" @click="collapsed=!collapsed" :title="collapsed?'Expand':'Collapse'">
         <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
         <span class="b-nav-label">Collapse</span>
@@ -2889,6 +3042,7 @@
       </button>
     </div>
   </aside>
+
   <div class="b-right">
     <header class="b-topbar">
       <div style="display:flex;align-items:center;gap:12px">
@@ -2904,6 +3058,76 @@
     </header>
     <main class="b-main"><router-view></router-view></main>
   </div>
+
+  <!-- ── AI Chatbot panel ── -->
+  <teleport to="body">
+    <transition name="chat-slide">
+      <div v-if="chatOpen" class="ai-chat-panel">
+        <!-- Header -->
+        <div class="ai-chat-header">
+          <div style="display:flex;align-items:center;gap:10px">
+            <div class="ai-chat-avatar">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+            </div>
+            <div>
+              <div style="font-size:13px;font-weight:700;color:#fff">Books AI</div>
+              <div style="font-size:10.5px;color:rgba(255,255,255,.65)">Powered by Claude</div>
+            </div>
+          </div>
+          <button class="ai-chat-close" @click="chatOpen=false">✕</button>
+        </div>
+
+        <!-- Messages -->
+        <div class="ai-chat-messages">
+          <div v-for="(msg, i) in chatMessages" :key="i"
+            :class="['ai-msg', msg.role === 'user' ? 'ai-msg-user' : 'ai-msg-bot']">
+            <div v-if="msg.role==='assistant'" class="ai-msg-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+            </div>
+            <div class="ai-msg-bubble">
+              <div v-html="formatChatText(msg.text)"></div>
+              <button v-if="msg.invoiceLink" class="ai-inv-link" @click="openInvoice(msg.invoiceLink)">
+                📄 Open {{ msg.invoiceLink }}
+              </button>
+            </div>
+          </div>
+          <!-- Typing indicator -->
+          <div v-if="chatLoading" class="ai-msg ai-msg-bot">
+            <div class="ai-msg-icon">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 1 10 10c0 5.52-4.48 10-10 10a10 10 0 0 1-10-10C2 6.48 6.48 2 12 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/></svg>
+            </div>
+            <div class="ai-msg-bubble ai-typing">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+          <div ref="chatEndRef"></div>
+        </div>
+
+        <!-- Quick suggestions -->
+        <div class="ai-suggestions">
+          <button class="ai-suggest-btn" @click="chatInput='Create an invoice for '; $refs.chatInputEl.focus()">+ New Invoice</button>
+          <button class="ai-suggest-btn" @click="chatInput='How many overdue invoices?'; sendChat()">Overdue?</button>
+          <button class="ai-suggest-btn" @click="chatInput='Total revenue this month?'; sendChat()">Revenue</button>
+        </div>
+
+        <!-- Input -->
+        <div class="ai-chat-input-wrap">
+          <textarea
+            ref="chatInputEl"
+            v-model="chatInput"
+            class="ai-chat-input"
+            placeholder="Ask anything or say 'Create invoice for Prasath ₹5000'…"
+            rows="2"
+            @keydown="onChatKey"
+          ></textarea>
+          <button class="ai-send-btn" @click="sendChat" :disabled="chatLoading || !chatInput.trim()">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
+      </div>
+    </transition>
+  </teleport>
+
 </div>`});
 
   /* ── CSS for modal inputs (injected once) ── */
@@ -2918,6 +3142,145 @@
 .mi-cell-input{border:none;outline:none;background:transparent;font-family:inherit;font-size:13.5px;
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
+
+/* ══ AI Chatbot Button ══ */
+.b-ai-btn{
+  display:flex;align-items:center;gap:10px;
+  width:100%;padding:9px 10px;border-radius:6px;
+  background:linear-gradient(135deg,rgba(99,102,241,.15),rgba(139,92,246,.15));
+  border:1px solid rgba(139,92,246,.25);cursor:pointer;
+  color:rgba(255,255,255,.85);font-size:13px;font-weight:600;
+  font-family:inherit;transition:all .15s;margin-bottom:6px;
+  white-space:nowrap;overflow:hidden;position:relative;
+}
+.b-ai-btn:hover{background:linear-gradient(135deg,rgba(99,102,241,.3),rgba(139,92,246,.3));color:#fff;border-color:rgba(139,92,246,.5);}
+.b-ai-badge{
+  margin-left:auto;background:linear-gradient(135deg,#6366f1,#8b5cf6);
+  color:#fff;font-size:9px;font-weight:800;padding:2px 6px;
+  border-radius:10px;letter-spacing:.05em;flex-shrink:0;
+}
+.books-root.collapsed .b-ai-btn{justify-content:center;padding:10px;}
+.books-root.collapsed .b-ai-badge{display:none;}
+
+/* ══ Chat Panel ══ */
+.ai-chat-panel{
+  position:fixed;
+  bottom:24px;
+  left:232px;
+  width:360px;
+  height:520px;
+  background:#1a1d2e;
+  border-radius:16px;
+  box-shadow:0 24px 64px rgba(0,0,0,.5),0 0 0 1px rgba(139,92,246,.2);
+  display:flex;flex-direction:column;
+  overflow:hidden;
+  z-index:9998;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+
+.chat-slide-enter-active,.chat-slide-leave-active{transition:all .25s cubic-bezier(.34,1.56,.64,1);}
+.chat-slide-enter-from,.chat-slide-leave-to{opacity:0;transform:translateY(16px) scale(.96);}
+
+.ai-chat-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;
+  background:linear-gradient(135deg,#4f46e5,#7c3aed);
+  flex-shrink:0;
+}
+.ai-chat-avatar{
+  width:32px;height:32px;border-radius:50%;
+  background:rgba(255,255,255,.2);
+  display:grid;place-items:center;color:#fff;
+  flex-shrink:0;
+}
+.ai-chat-close{
+  background:rgba(255,255,255,.15);border:none;cursor:pointer;
+  color:#fff;font-size:14px;width:26px;height:26px;
+  border-radius:50%;display:grid;place-items:center;
+  transition:.15s;
+}
+.ai-chat-close:hover{background:rgba(255,255,255,.3);}
+
+.ai-chat-messages{
+  flex:1;overflow-y:auto;padding:14px 12px;
+  display:flex;flex-direction:column;gap:10px;
+  scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.1) transparent;
+}
+.ai-chat-messages::-webkit-scrollbar{width:4px;}
+.ai-chat-messages::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:2px;}
+
+.ai-msg{display:flex;align-items:flex-start;gap:7px;}
+.ai-msg-user{flex-direction:row-reverse;}
+.ai-msg-icon{
+  width:24px;height:24px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,#4f46e5,#7c3aed);
+  display:grid;place-items:center;color:#fff;margin-top:2px;
+}
+.ai-msg-bubble{
+  max-width:82%;padding:9px 12px;border-radius:12px;
+  font-size:13px;line-height:1.55;word-wrap:break-word;
+}
+.ai-msg-bot .ai-msg-bubble{
+  background:#252840;color:#e2e8f0;border-radius:4px 12px 12px 12px;
+}
+.ai-msg-user .ai-msg-bubble{
+  background:linear-gradient(135deg,#4f46e5,#7c3aed);
+  color:#fff;border-radius:12px 4px 12px 12px;
+}
+.ai-inv-link{
+  display:inline-flex;align-items:center;gap:6px;
+  margin-top:8px;padding:6px 12px;
+  background:rgba(99,102,241,.2);border:1px solid rgba(99,102,241,.4);
+  border-radius:8px;color:#a5b4fc;font-size:12px;font-weight:600;
+  cursor:pointer;transition:.15s;width:100%;
+}
+.ai-inv-link:hover{background:rgba(99,102,241,.35);}
+
+/* Typing dots */
+.ai-typing{display:flex;align-items:center;gap:4px;padding:12px 14px !important;}
+.ai-typing span{width:6px;height:6px;border-radius:50%;background:#818cf8;animation:dot-bounce .9s ease-in-out infinite;}
+.ai-typing span:nth-child(2){animation-delay:.15s;}
+.ai-typing span:nth-child(3){animation-delay:.3s;}
+@keyframes dot-bounce{0%,80%,100%{transform:scale(1);opacity:.5}40%{transform:scale(1.3);opacity:1}}
+
+/* Suggestions */
+.ai-suggestions{
+  display:flex;gap:6px;padding:6px 12px;flex-wrap:nowrap;overflow-x:auto;
+  scrollbar-width:none;border-top:1px solid rgba(255,255,255,.06);flex-shrink:0;
+}
+.ai-suggestions::-webkit-scrollbar{display:none;}
+.ai-suggest-btn{
+  flex-shrink:0;padding:5px 11px;border-radius:20px;
+  background:rgba(99,102,241,.15);border:1px solid rgba(99,102,241,.25);
+  color:#a5b4fc;font-size:11.5px;font-weight:600;cursor:pointer;
+  font-family:inherit;transition:.15s;white-space:nowrap;
+}
+.ai-suggest-btn:hover{background:rgba(99,102,241,.3);color:#c7d2fe;}
+
+/* Input area */
+.ai-chat-input-wrap{
+  display:flex;align-items:flex-end;gap:8px;
+  padding:10px 12px;border-top:1px solid rgba(255,255,255,.07);
+  background:#141622;flex-shrink:0;
+}
+.ai-chat-input{
+  flex:1;background:#252840;border:1px solid rgba(255,255,255,.1);
+  border-radius:10px;padding:9px 12px;color:#e2e8f0;font-size:13px;
+  font-family:inherit;resize:none;outline:none;line-height:1.5;
+  transition:border-color .15s;
+  scrollbar-width:none;
+}
+.ai-chat-input:focus{border-color:rgba(99,102,241,.5);}
+.ai-chat-input::placeholder{color:rgba(255,255,255,.3);}
+.ai-chat-input::-webkit-scrollbar{display:none;}
+.ai-send-btn{
+  width:36px;height:36px;border-radius:10px;flex-shrink:0;
+  background:linear-gradient(135deg,#4f46e5,#7c3aed);border:none;
+  cursor:pointer;display:grid;place-items:center;color:#fff;
+  transition:.15s;
+}
+.ai-send-btn:hover:not(:disabled){filter:brightness(1.15);}
+.ai-send-btn:disabled{opacity:.4;cursor:not-allowed;}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
 /* ═══ Zoho Books Layout ═══ */
 /* Root container */
