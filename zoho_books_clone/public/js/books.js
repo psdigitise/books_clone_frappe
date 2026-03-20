@@ -615,23 +615,44 @@
       const sending = ref(false), loading = ref(false);
       const error = ref("");
       const fromEmail = ref("");
-      // "To" as tag chips
-      const toInput = ref(""), toTags = ref([]);
-      const ccInput = ref(""), ccTags = ref([]);
-      const bccInput = ref(""), bccTags = ref([]);
+      // Use different ref names from the template refs to avoid collision
+      const toVal = ref(""), toTags = ref([]);
+      const ccVal = ref(""), ccTags = ref([]);
+      const bccVal = ref(""), bccTags = ref([]);
       const showCc = ref(true), showBcc = ref(false);
       const subject = ref("");
       const editorRef = ref(null);
 
-      function addTag(input, tags) {
-        const val = input.value.trim().replace(/,$/, "");
-        if (val && !tags.value.includes(val)) { tags.value.push(val); }
-        input.value = "";
+      function addTagFromVal(val, tags) {
+        const v = (val || "").trim().replace(/,$/, "");
+        if (v && !tags.value.includes(v)) tags.value.push(v);
       }
       function removeTag(tags, i) { tags.value.splice(i, 1); }
-      function onToKey(e) { if (e.key === "," || e.key === "Enter" || e.key === " ") { e.preventDefault(); addTag(toInput, toTags); } }
-      function onCcKey(e) { if (e.key === "," || e.key === "Enter" || e.key === " ") { e.preventDefault(); addTag(ccInput, ccTags); } }
-      function onBccKey(e) { if (e.key === "," || e.key === "Enter" || e.key === " ") { e.preventDefault(); addTag(bccInput, bccTags); } }
+
+      function onToKey(e) {
+        if (e.key === "," || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          addTagFromVal(toVal.value, toTags);
+          toVal.value = "";
+        }
+      }
+      function onCcKey(e) {
+        if (e.key === "," || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          addTagFromVal(ccVal.value, ccTags);
+          ccVal.value = "";
+        }
+      }
+      function onBccKey(e) {
+        if (e.key === "," || e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          addTagFromVal(bccVal.value, bccTags);
+          bccVal.value = "";
+        }
+      }
+      function onToBlur()  { addTagFromVal(toVal.value,  toTags);  toVal.value  = ""; }
+      function onCcBlur()  { addTagFromVal(ccVal.value,  ccTags);  ccVal.value  = ""; }
+      function onBccBlur() { addTagFromVal(bccVal.value, bccTags); bccVal.value = ""; }
 
       // Rich text commands
       function execCmd(cmd, val) { document.execCommand(cmd, false, val || null); editorRef.value?.focus(); }
@@ -658,7 +679,7 @@
   </div>
   <div style="background:#fff;padding:28px 32px;border:1px solid #e8eaed;border-top:none;border-radius:0 0 8px 8px">
     <p style="font-size:15px;color:#1a1d23;margin:0 0 6px">Dear ${inv.customer_name || inv.customer || "Customer"},</p>
-    <p style="font-size:14px;color:#555;margin:0 0 20px;line-height:1.6">Thank you for your business. Your invoice can be viewed, printed and downloaded as PDF from the link below. You can also choose to pay it online.</p>
+    <p style="font-size:14px;color:#555;margin:0 0 20px;line-height:1.6">Thank you for your business. Please find your invoice details below.</p>
     <div style="background:#f8faff;border:1px solid #dbe4ff;border-radius:8px;padding:18px 24px;margin-bottom:24px">
       <div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:8px">INVOICE AMOUNT</div>
       <div style="font-size:28px;font-weight:800;color:#2563EB">${amt(inv.grand_total)}</div>
@@ -694,11 +715,11 @@
         if (!props.invoiceName) return;
         loading.value = true; error.value = "";
         try {
-          const d = await apiGET("zoho_books_clone.api.docs.get_invoice_email_defaults", { invoice_name: props.invoiceName });
+          const d = await apiGET("zoho_books_clone.api.books_data.get_invoice_email_defaults", { invoice_name: props.invoiceName });
           toTags.value = d.to ? [d.to] : [];
           subject.value = d.subject || "";
           fromEmail.value = d.from_email || frappe?.session?.user || "";
-          // Set editor content to beautiful HTML template
+          await nextTick();
           if (editorRef.value) {
             editorRef.value.innerHTML = buildInvoiceHtml(props.inv);
           }
@@ -708,23 +729,25 @@
 
       watch(() => props.show, async v => {
         if (v && props.invoiceName) {
+          toTags.value = []; ccTags.value = []; bccTags.value = [];
+          toVal.value = ""; ccVal.value = ""; bccVal.value = "";
+          error.value = "";
           await nextTick();
           loadDefaults();
         }
       });
-      // Also watch inv change to rebuild template
       watch(() => props.inv, v => {
         if (props.show && editorRef.value && v) editorRef.value.innerHTML = buildInvoiceHtml(v);
       });
 
       async function send() {
-        // Flush any pending tag input
-        if (toInput.value.trim()) addTag(toInput, toTags);
+        // Flush any pending input
+        if (toVal.value.trim()) { addTagFromVal(toVal.value, toTags); toVal.value = ""; }
         if (!toTags.value.length) { error.value = "Please enter at least one recipient email address."; return; }
         sending.value = true; error.value = "";
         const bodyHtml = editorRef.value ? editorRef.value.innerHTML : "";
         try {
-          await apiGET("zoho_books_clone.api.docs.send_invoice_email", {
+          await apiPOST("zoho_books_clone.api.books_data.send_invoice_email", {
             invoice_name: props.invoiceName,
             to: toTags.value.join(","),
             subject: subject.value,
@@ -739,9 +762,11 @@
       }
 
       return {
-        form: {}, sending, loading, error, fromEmail,
-        toInput, toTags, ccInput, ccTags, bccInput, bccTags, showCc, showBcc, subject, editorRef,
-        addTag, removeTag, onToKey, onCcKey, onBccKey, execCmd, send
+        sending, loading, error, fromEmail,
+        toVal, toTags, ccVal, ccTags, bccVal, bccTags, showCc, showBcc, subject, editorRef,
+        addTagFromVal, removeTag, onToKey, onCcKey, onBccKey,
+        onToBlur, onCcBlur, onBccBlur,
+        execCmd, send
       };
     },
     template: `
@@ -771,7 +796,7 @@
       <span class="sem-row-label">From</span>
       <div class="sem-row-value sem-from-val">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
-        <span style="font-size:13px;color:#444">{{fromEmail||'(configured outgoing account)'}}</span>
+        <span style="font-size:13px;color:#444">{{fromEmail||'Administrator'}}</span>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#aaa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left:4px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
       </div>
       <div class="sem-row-actions">
@@ -788,8 +813,8 @@
           <span>{{tag}}</span>
           <button @click="removeTag(toTags,i)" class="sem-chip-remove">✕</button>
         </div>
-        <input ref="toInput" v-model="toInput" class="sem-chip-input" placeholder="Enter email and press Enter or comma"
-          @keydown="onToKey" @blur="()=>{if(toInput.value.trim())addTag(toInput,toTags);}"/>
+        <input v-model="toVal" class="sem-chip-input" placeholder="Enter email and press Enter or comma"
+          @keydown="onToKey" @blur="onToBlur"/>
       </div>
     </div>
 
@@ -802,8 +827,8 @@
           <span>{{tag}}</span>
           <button @click="removeTag(ccTags,i)" class="sem-chip-remove">✕</button>
         </div>
-        <input v-model="ccInput" class="sem-chip-input" placeholder="Add CC recipients"
-          @keydown="onCcKey" @blur="()=>{if(ccInput.value.trim())addTag(ccInput,ccTags);}"/>
+        <input v-model="ccVal" class="sem-chip-input" placeholder="Add CC recipients"
+          @keydown="onCcKey" @blur="onCcBlur"/>
       </div>
     </div>
 
@@ -816,8 +841,8 @@
           <span>{{tag}}</span>
           <button @click="removeTag(bccTags,i)" class="sem-chip-remove">✕</button>
         </div>
-        <input v-model="bccInput" class="sem-chip-input" placeholder="Add BCC recipients"
-          @keydown="onBccKey" @blur="()=>{if(bccInput.value.trim())addTag(bccInput,bccTags);}"/>
+        <input v-model="bccVal" class="sem-chip-input" placeholder="Add BCC recipients"
+          @keydown="onBccKey" @blur="onBccBlur"/>
       </div>
     </div>
 
