@@ -2998,10 +2998,13 @@
           return;
         }
 
-        // Fallback — unknown action
-        aiResult.status = "info";
-        aiResult.type = "text";
-        aiResult.message = parsed.message || "Try: \"Create invoice for [customer] ₹[amount]\" or \"Show overdue invoices\"";
+        // ── Reply / conversational message ──
+        if (action === "reply" || action === "unknown") {
+          aiResult.status = "info";
+          aiResult.type = "reply";
+          aiResult.message = parsed.message || "";
+          return;
+        }
       }
 
       function aiIcon(name) {
@@ -3198,6 +3201,12 @@
             <div class="ai-card-title" style="white-space:pre-wrap">{{aiResult.message}}</div>
           </div>
 
+          <!-- Conversational reply -->
+          <div v-else-if="aiResult.type==='reply'" class="ai-reply-card">
+            <div class="ai-reply-bar"></div>
+            <div class="ai-reply-text" style="white-space:pre-wrap">{{aiResult.message}}</div>
+          </div>
+
           <!-- Invoice List -->
           <div v-if="aiResult.type==='invoice_list' && aiResult.data">
             <div class="ai-list-header">
@@ -3377,6 +3386,20 @@
 
 .ai-reset-btn{display:inline-flex;align-items:center;gap:5px;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.3);font-size:11.5px;font-family:inherit;padding:0;transition:.15s;}
 .ai-reset-btn:hover{color:rgba(255,255,255,.6);}
+
+/* Conversational reply card */
+.ai-reply-card{
+  display:flex;gap:10px;padding:12px 0 4px;
+}
+.ai-reply-bar{
+  width:3px;border-radius:2px;flex-shrink:0;
+  background:linear-gradient(180deg,#6366f1,#8b5cf6);
+  min-height:20px;
+}
+.ai-reply-text{
+  font-size:13px;color:#c4c9d4;line-height:1.65;
+  flex:1;
+}
 .b-quick-actions{display:flex;gap:10px;margin-bottom:16px}
 /* ═══ Zoho Books Layout ═══ */
 /* Root container */

@@ -361,8 +361,32 @@ def ai_chat(messages, system=None):
     if any(w in cmd for w in ["all invoices", "list invoices", "show invoices", "show all"]):
         return {"text": json.dumps({"action": "show_overdue"})}
 
+    # ── GREETINGS ────────────────────────────────────────────────────────────
+    greetings = ["hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+                 "howdy", "hola", "namaste", "vanakkam", "sup", "yo", "greetings"]
+    if cmd.strip() in greetings or any(cmd.strip().startswith(g) for g in greetings):
+        user_name = frappe.session.user.split("@")[0].title() if frappe.session.user else ""
+        return {"text": json.dumps({
+            "action": "reply",
+            "message": f"Hello{', ' + user_name if user_name and user_name != 'Administrator' else ''}! How can I help you today?\n\nHere's what I can do:\n• Create a sales invoice\n• Show overdue invoices\n• Find invoices by customer\n• Show total outstanding amount"
+        })}
+
+    # ── HELP ─────────────────────────────────────────────────────────────────
+    if any(w in cmd for w in ["help", "what can you do", "commands", "options", "how to", "?"]):
+        return {"text": json.dumps({
+            "action": "reply",
+            "message": "Here's what I can do:\n\n• Create invoice for [customer] ₹[amount]\n• Create invoice for [customer] [item] ₹[rate]\n• Show overdue invoices\n• Find invoices for [customer]\n• Show total outstanding\n\nJust type naturally — I'll understand!"
+        })}
+
+    # ── HOW ARE YOU / THANKS ─────────────────────────────────────────────────
+    if any(w in cmd for w in ["how are you", "how r u", "what's up", "whats up", "thank", "thanks", "ok", "okay", "great", "nice", "cool", "good", "awesome"]):
+        return {"text": json.dumps({
+            "action": "reply",
+            "message": "All good! Ready to help. What would you like to do?\n\nTry: \"Create invoice for Prasath ₹50,000\" or \"Show overdue invoices\""
+        })}
+
     # ── UNKNOWN ──────────────────────────────────────────────────────────────
     return {"text": json.dumps({
-        "action": "unknown",
-        "message": f"I didn't understand \"{user_msg[:60]}\". Try: \"Create invoice for [customer] ₹[amount]\" or \"Show overdue invoices\"."
+        "action": "reply",
+        "message": f"I can help with invoicing tasks. Here's what I understand:\n\n• \"Create invoice for [customer] ₹[amount]\"\n• \"Show overdue invoices\"\n• \"Find invoices for [customer]\"\n• \"Show total outstanding\"\n\nTry one of these!"
     })}
