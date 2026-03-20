@@ -1510,6 +1510,7 @@
         const s = row.status || "Draft";
         if (s === "Submitted") return "UNPAID";
         if (s === "Partly Paid") return "PARTIALLY PAID";
+        if (s === "Paid") return "PAID";
         return s.toUpperCase();
       }
 
@@ -1533,95 +1534,143 @@
       };
     },
     template: `
-<div class="zb-root no-sidebar-pad" style="background:#fff;min-height:100vh">
+<div class="zb-root no-sidebar-pad" style="background:#fff;min-height:100vh;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
   <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
 
-  <!-- TOOLBAR -->
-  <div class="zb-toolbar no-print" style="display:flex;align-items:center;justify-content:space-between;padding:14px 24px 12px;border-bottom:1px solid #e8ecf0">
-    <div style="display:flex;align-items:center;gap:6px">
-      <span style="font-size:16px;font-weight:700;color:#1a1a2e">All Invoices</span>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+  <!-- ── TOOLBAR: "All Invoices ▼"  ···  [+ New ▼] [···] ── -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 20px;background:#fff;border-bottom:1px solid #e8ecf0">
+    <div style="display:flex;align-items:center;gap:6px;cursor:pointer">
+      <span style="font-size:15px;font-weight:700;color:#1a1d23;letter-spacing:-.01em">All Invoices</span>
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true" style="display:inline-flex;align-items:center;gap:6px;background:#1a6ef7;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New
+    <div style="display:flex;align-items:center;gap:0">
+      <!-- Split "New" button — primary part + dropdown arrow -->
+      <button @click="showNew=true" style="display:inline-flex;align-items:center;gap:6px;background:#2563EB;color:#fff;border:none;border-radius:6px 0 0 6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer;height:34px;font-family:inherit">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New
       </button>
-      <button class="zb-tb-btn" @click="loadList" style="background:#fff;border:1px solid #e8ecf0;border-radius:6px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;color:#6b7280" title="Refresh">
-        <span v-html="icon('refresh',13)"></span>
+      <button style="display:inline-flex;align-items:center;background:#2563EB;color:#fff;border:none;border-left:1px solid rgba(255,255,255,.3);border-radius:0 6px 6px 0;padding:0 9px;cursor:pointer;height:34px;font-size:11px">
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
       </button>
-      <button class="zb-tb-btn" style="background:#fff;border:1px solid #e8ecf0;border-radius:6px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;color:#6b7280" title="More">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      <!-- Refresh icon -->
+      <button @click="loadList" title="Refresh" style="background:none;border:none;cursor:pointer;color:#6b7280;padding:5px 8px;margin-left:6px;border-radius:5px;display:inline-flex;align-items:center">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+      </button>
+      <!-- Three-dot menu -->
+      <button style="background:none;border:none;cursor:pointer;color:#6b7280;padding:5px 8px;border-radius:5px;display:inline-flex;align-items:center">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
       </button>
     </div>
   </div>
 
-  <!-- FILTER PILLS -->
-  <div style="display:flex;gap:8px;padding:12px 24px;border-bottom:1px solid #e8ecf0;flex-wrap:wrap">
+  <!-- ── FILTER TABS: All Invoices | Draft 5 | Unpaid 4 | Overdue 10 | Paid 1 ── -->
+  <div style="display:flex;align-items:center;gap:4px;padding:0 20px;border-bottom:1px solid #e8ecf0;background:#fff;overflow-x:auto">
     <button v-for="f in filters" :key="f.k"
-      :class="['zb-inv-pill', active===f.k ? 'zb-inv-pill-active' : '']"
-      @click="active=f.k">
+      @click="active=f.k"
+      :style="{
+        display:'inline-flex',alignItems:'center',gap:'6px',
+        padding:'10px 14px',background:'none',border:'none',
+        borderBottom: active===f.k ? '2px solid #2563EB' : '2px solid transparent',
+        color: active===f.k ? '#2563EB' : '#5f6368',
+        fontSize:'13px',fontWeight: active===f.k ? '600':'500',
+        cursor:'pointer',whiteSpace:'nowrap',fontFamily:'inherit',
+        marginBottom:'-1px',transition:'color .15s'
+      }">
       {{f.lbl}}
-      <span v-if="f.k!=='all'" :class="['zb-pill-cnt', pillCountCls(f.k)]">{{counts[f.k]}}</span>
+      <span v-if="f.k!=='all'" :style="{
+        display:'inline-flex',alignItems:'center',justifyContent:'center',
+        minWidth:'18px',height:'18px',padding:'0 5px',
+        borderRadius:'10px',fontSize:'11px',fontWeight:'700',
+        background: active===f.k
+          ? (f.k==='Overdue'?'#fee2e2':f.k==='Paid'?'#d1fae5':f.k==='Unpaid'?'#fef3c7':'#e5e7eb')
+          : '#f1f3f5',
+        color: active===f.k
+          ? (f.k==='Overdue'?'#dc2626':f.k==='Paid'?'#059669':f.k==='Unpaid'?'#d97706':'#6b7280')
+          : '#6b7280'
+      }">{{counts[f.k]}}</span>
     </button>
-    <div style="flex:1"></div>
-    <div style="position:relative;display:flex;align-items:center">
-      <svg style="position:absolute;left:9px;color:#9ca3af" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input v-model="search" placeholder="Search invoices…" style="padding:6px 12px 6px 30px;border:1px solid #e8ecf0;border-radius:20px;font-size:12.5px;outline:none;width:200px"/>
-    </div>
   </div>
 
-  <!-- TABLE -->
+  <!-- ── TABLE ── -->
   <div style="overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px">
       <thead>
-        <tr>
-          <th style="padding:10px 16px 10px 20px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;width:40px">
-            <input type="checkbox" :checked="allSelected" @change="toggleAll"/>
+        <tr style="background:#fff">
+          <!-- filter icon + checkbox column -->
+          <th style="width:20px;padding:10px 4px 10px 16px;border-bottom:1px solid #e8ecf0;text-align:left;vertical-align:middle">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#888" stroke-width="2" style="display:block"><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></svg>
           </th>
-          <th @click="sortBy('posting_date')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">DATE{{sortArrow('posting_date')}}</th>
-          <th @click="sortBy('name')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">INVOICE#{{sortArrow('name')}}</th>
-          <th style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff">ORDER NUMBER</th>
-          <th @click="sortBy('customer_name')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">CUSTOMER NAME{{sortArrow('customer_name')}}</th>
-          <th @click="sortBy('status')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">STATUS{{sortArrow('status')}}</th>
-          <th @click="sortBy('due_date')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">DUE DATE{{sortArrow('due_date')}}</th>
-          <th @click="sortBy('grand_total')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:right;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">AMOUNT{{sortArrow('grand_total')}}</th>
-          <th @click="sortBy('outstanding_amount')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:right;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">BALANCE DUE{{sortArrow('outstanding_amount')}}</th>
+          <th style="width:36px;padding:10px 8px;border-bottom:1px solid #e8ecf0;text-align:left;vertical-align:middle">
+            <input type="checkbox" :checked="allSelected" @change="toggleAll" style="width:14px;height:14px;cursor:pointer"/>
+          </th>
+          <th @click="sortBy('posting_date')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:left;white-space:nowrap;cursor:pointer;user-select:none">
+            DATE<span style="color:#2563EB;margin-left:3px">{{sortArrow('posting_date')||'↓'}}</span>
+          </th>
+          <th @click="sortBy('name')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:left;white-space:nowrap;cursor:pointer;user-select:none">INVOICE#{{sortArrow('name')}}</th>
+          <th style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:left;white-space:nowrap">ORDER NUMBER</th>
+          <th @click="sortBy('customer_name')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:left;white-space:nowrap;cursor:pointer;user-select:none">CUSTOMER NAME{{sortArrow('customer_name')}}</th>
+          <th @click="sortBy('status')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:left;white-space:nowrap;cursor:pointer;user-select:none">STATUS{{sortArrow('status')}}</th>
+          <th @click="sortBy('due_date')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:left;white-space:nowrap;cursor:pointer;user-select:none">DUE DATE{{sortArrow('due_date')}}</th>
+          <th @click="sortBy('grand_total')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:right;white-space:nowrap;cursor:pointer;user-select:none">AMOUNT{{sortArrow('grand_total')}}</th>
+          <th @click="sortBy('outstanding_amount')" style="padding:10px 16px;border-bottom:1px solid #e8ecf0;font-size:11.5px;font-weight:700;letter-spacing:.06em;color:#5f6368;text-align:right;white-space:nowrap;cursor:pointer;user-select:none">BALANCE DUE{{sortArrow('outstanding_amount')}}</th>
         </tr>
       </thead>
       <tbody>
+        <!-- shimmer -->
         <template v-if="loading">
           <tr v-for="n in 6" :key="n">
-            <td colspan="9" style="padding:14px 16px"><div class="b-shimmer" style="height:13px;border-radius:3px"></div></td>
+            <td colspan="10" style="padding:13px 16px;border-bottom:1px solid #f3f4f6"><div class="b-shimmer" style="height:12px;border-radius:3px"></div></td>
           </tr>
         </template>
         <template v-else>
           <tr v-if="!filtered.length">
-            <td colspan="9" style="padding:48px;text-align:center;color:#9ca3af;font-size:13px">No invoices found</td>
+            <td colspan="10" style="padding:60px 0;text-align:center;color:#9ca3af;font-size:13.5px;border-bottom:1px solid #f3f4f6">No invoices found</td>
           </tr>
           <tr v-else v-for="row in filtered" :key="row.name"
-            :style="{background: selected.has(row.name) ? '#eaf1ff' : 'transparent', cursor:'pointer'}"
-            @mouseenter="e=>e.currentTarget.style.background=selected.has(row.name)?'#eaf1ff':'#f8faff'"
-            @mouseleave="e=>e.currentTarget.style.background=selected.has(row.name)?'#eaf1ff':'transparent'"
+            style="cursor:pointer;transition:background .1s"
+            :style="{background: selected.has(row.name) ? '#eff6ff' : ''}"
+            @mouseenter="e=>{ if(!selected.has(row.name)) e.currentTarget.style.background='#f9fafb' }"
+            @mouseleave="e=>{ e.currentTarget.style.background=selected.has(row.name)?'#eff6ff':'' }"
             @click="goToInvoice(row.name)">
-            <td style="padding:13px 16px 13px 20px;border-bottom:1px solid #f0f2f5;vertical-align:middle" @click.stop>
-              <input type="checkbox" :checked="selected.has(row.name)" @change="toggleRow(row.name)"/>
+            <!-- filter icon placeholder -->
+            <td style="padding:12px 4px 12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:middle;width:20px"></td>
+            <!-- checkbox -->
+            <td style="padding:12px 8px;border-bottom:1px solid #f3f4f6;vertical-align:middle;width:36px" @click.stop>
+              <input type="checkbox" :checked="selected.has(row.name)" @change="toggleRow(row.name)" style="width:14px;height:14px;cursor:pointer"/>
             </td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#374151;vertical-align:middle">{{fmtDate(row.posting_date)}}</td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
-              <span style="color:#1a6ef7;font-weight:600;font-size:13px">{{row.name}}</span>
+            <!-- DATE -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;color:#1a1d23;vertical-align:middle;white-space:nowrap">{{fmtDate(row.posting_date)}}</td>
+            <!-- INVOICE# with optional email icon -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:middle;white-space:nowrap">
+              <span style="color:#2563EB;font-weight:500">{{row.name}}</span>
+              <span v-if="row.status==='Submitted'||row.status==='Paid'" style="display:inline-flex;align-items:center;margin-left:5px;color:#9ca3af" title="Email sent">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+              </span>
             </td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#9ca3af;vertical-align:middle">{{row.invoice_number||'—'}}</td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;font-weight:600;color:#1a1a2e;vertical-align:middle">{{row.customer_name||row.customer}}</td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
-              <span :class="['zb-status-chip', statusChipCls(row)]">{{statusLabel(row)}}</span>
+            <!-- ORDER NUMBER -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;color:#1a1d23;vertical-align:middle">{{row.invoice_number||''}}</td>
+            <!-- CUSTOMER NAME -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;color:#1a1d23;vertical-align:middle">{{row.customer_name||row.customer}}</td>
+            <!-- STATUS -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:middle;white-space:nowrap">
+              <span :style="{
+                fontSize:'12.5px', fontWeight:'600',
+                color: isOverdue(row) ? '#e67e00'
+                     : row.status==='Paid' ? '#059669'
+                     : row.status==='Draft' ? '#9ca3af'
+                     : '#d97706'
+              }">{{statusLabel(row)}}</span>
             </td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle"
-              :style="{color: flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date() ? '#dc2626' : '#9ca3af'}">
+            <!-- DUE DATE -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;vertical-align:middle;white-space:nowrap"
+              :style="{color: flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date() ? '#e03131' : '#1a1d23'}">
               {{fmtDate(row.due_date)}}
             </td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;text-align:right;font-family:monospace;font-size:12.5px;vertical-align:middle">{{fmt(row.grand_total)}}</td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;text-align:right;font-family:monospace;font-size:12.5px;vertical-align:middle"
-              :style="{color: flt(row.outstanding_amount)>0 ? '#dc2626' : '#059669'}">
+            <!-- AMOUNT -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;text-align:right;color:#1a1d23;font-size:13.5px;vertical-align:middle;white-space:nowrap">{{fmt(row.grand_total)}}</td>
+            <!-- BALANCE DUE -->
+            <td style="padding:12px 16px;border-bottom:1px solid #f3f4f6;text-align:right;font-size:13.5px;vertical-align:middle;white-space:nowrap"
+              :style="{color: flt(row.outstanding_amount)>0 ? '#1a1d23' : '#059669'}">
               {{fmt(row.outstanding_amount)}}
             </td>
           </tr>
