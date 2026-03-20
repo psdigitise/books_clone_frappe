@@ -4,7 +4,6 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>Books — Accounting</title>
-<meta name="csrf-token" content="{{ frappe.session.csrf_token }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -13,23 +12,48 @@
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;width:100%;overflow:hidden;background:#f4f6fa}
 #books-app{height:100vh;width:100vw;display:flex}
-/* Hide Frappe's own navbar/sidebar on this page */
-.navbar,.page-head,.layout-side-section,.page-container>.container{display:none!important}
-.page-content{padding:0!important;margin:0!important;height:100vh!important}
+.navbar,.page-head,.layout-side-section,.web-footer{display:none!important}
+.page-content,.page-content>.container{padding:0!important;margin:0!important;max-width:none!important;height:100vh!important}
 </style>
 </head>
 <body>
 <div id="books-app"></div>
 <script>
-// Bootstrap session data from Jinja context — no extra fetch needed
-window.frappe = window.frappe || {};
-window.frappe.csrf_token   = "{{ frappe.session.csrf_token }}";
-window.frappe.session       = window.frappe.session || {};
-window.frappe.session.user  = "{{ frappe.session.user }}";
-window.frappe.session.user_fullname = "{{ frappe.utils.get_fullname(frappe.session.user) }}";
-window.frappe.boot          = { sysdefaults: { company: "" } };
-window.__booksCompany       = "{{ frappe.db.get_single_value('Books Settings', 'default_company') or '' }}";
-window.frappe.boot.sysdefaults.company = window.__booksCompany;
+window.frappe = window.frappe || { session: {}, boot: { sysdefaults: { company: "" } } };
+window.__booksCompany = "";
+
+// Bootstrap: fetch session via API (no Jinja — avoids "Illegal template" error)
+(function() {
+  fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
+    credentials: "same-origin",
+    headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(d) {
+    if (!d || !d.message) {
+      window.location.href = "/login?redirect-to=/books";
+      return;
+    }
+    var m = d.message;
+    window.frappe.csrf_token             = m.csrf_token || "";
+    window.frappe.session.user           = m.user || "";
+    window.frappe.session.user_fullname  = m.fullname || m.user || "";
+    window.__booksCompany                = m.company || "";
+    window.frappe.boot.sysdefaults.company = window.__booksCompany;
+
+    // Inject csrf into meta tag so the app can read it
+    var meta = document.querySelector("meta[name='csrf-token']");
+    if (!meta) {
+      meta = document.createElement("meta");
+      meta.name = "csrf-token";
+      document.head.appendChild(meta);
+    }
+    meta.setAttribute("content", window.frappe.csrf_token);
+  })
+  .catch(function() {
+    window.location.href = "/login?redirect-to=/books";
+  });
+})();
 </script>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://unpkg.com/vue-router@4/dist/vue-router.global.prod.js"></script>
