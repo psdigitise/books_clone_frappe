@@ -1477,7 +1477,7 @@
         loading.value = true;
         try {
           list.value = await apiList("Sales Invoice", {
-            fields: ["name","customer","customer_name","po_no","posting_date","due_date","grand_total","outstanding_amount","status","docstatus"],
+            fields: ["name","customer","customer_name","invoice_number","posting_date","due_date","grand_total","outstanding_amount","status","currency","docstatus"],
             order: "posting_date desc",
             limit: 100
           });
@@ -1610,7 +1610,7 @@
             <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
               <span style="color:#1a6ef7;font-weight:600;font-size:13px">{{row.name}}</span>
             </td>
-            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#9ca3af;vertical-align:middle">{{row.po_no||'—'}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#9ca3af;vertical-align:middle">{{row.invoice_number||'—'}}</td>
             <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;font-weight:600;color:#1a1a2e;vertical-align:middle">{{row.customer_name||row.customer}}</td>
             <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
               <span :class="['zb-status-chip', statusChipCls(row)]">{{statusLabel(row)}}</span>
