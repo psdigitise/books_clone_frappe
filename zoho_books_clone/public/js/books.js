@@ -2278,7 +2278,10 @@
           </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
-          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="openRecPay()">💳 Record Payment ▾</button>
+          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="openRecPay()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+            Record Payment ▾
+          </button>
           <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
             <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
             {{submitting?'Submitting…':'Submit'}}
@@ -2845,120 +2848,6 @@
       const collapsed = ref(false);
       const mobileOpen = ref(false);
 
-      // ── Chatbot state ──
-      const chatOpen = ref(false);
-      const chatInput = ref("");
-      const chatLoading = ref(false);
-      const chatMessages = ref([
-        { role: "assistant", text: "Hi! I'm your Books AI assistant. I can answer questions about your invoices and also **create sales invoices** for you. Try asking:\n\n• \"Create an invoice for Prasath for ₹10,000\"\n• \"How many overdue invoices do I have?\"\n• \"Show me total revenue this month\"" }
-      ]);
-      const chatEndRef = ref(null);
-
-      // System prompt is defined server-side in books_data.py ai_chat()
-
-      async function sendChat() {
-        const text = chatInput.value.trim();
-        if (!text || chatLoading.value) return;
-        chatInput.value = "";
-        chatMessages.value.push({ role: "user", text });
-        chatLoading.value = true;
-        await nextTick();
-        scrollChat();
-
-        try {
-          // Build message history (last 10 messages)
-          const history = chatMessages.value.slice(-10).map(m => ({
-            role: m.role === "assistant" ? "assistant" : "user",
-            content: m.text
-          }));
-          // Make sure last message is the user's current message
-          history[history.length - 1].content = text;
-
-          // Call through Frappe backend to avoid CORS
-          const res = await apiPOST("zoho_books_clone.api.books_data.ai_chat", {
-            messages: JSON.stringify(history),
-          });
-
-          const rawText = res?.text || "Sorry, I couldn't get a response.";
-
-          // Check if it's a create_invoice action
-          let jsonMatch = rawText.match(/\{[\s\S]*"action"\s*:\s*"create_invoice"[\s\S]*\}/);
-          if (jsonMatch) {
-            try {
-              const parsed = JSON.parse(jsonMatch[0]);
-              const friendlyText = rawText.replace(jsonMatch[0], "").trim() || "Sure! Creating that invoice now…";
-              chatMessages.value.push({ role: "assistant", text: friendlyText, action: parsed });
-              await nextTick();
-              scrollChat();
-              await createInvoiceFromChat(parsed);
-              return;
-            } catch {}
-          }
-          chatMessages.value.push({ role: "assistant", text: rawText });
-        } catch (e) {
-          const errMsg = e?.message || String(e) || "Could not reach AI service.";
-          if (errMsg.includes("API key not configured") || errMsg.includes("anthropic_api_key")) {
-            chatMessages.value.push({ role: "assistant", text: "⚙️ **API key not set.** Please go to:\n\n**Frappe Desk → Books Settings → AI Assistant → Anthropic API Key**\n\nGet your key from https://console.anthropic.com" });
-          } else {
-            chatMessages.value.push({ role: "assistant", text: "⚠️ Error: " + errMsg });
-          }
-        } finally {
-          chatLoading.value = false;
-          await nextTick();
-          scrollChat();
-        }
-      }
-
-      async function createInvoiceFromChat(parsed) {
-        chatMessages.value.push({ role: "assistant", text: "⏳ Creating invoice…", pending: true });
-        await nextTick(); scrollChat();
-        try {
-          const company = window.__booksCompany || "";
-          const today = new Date().toISOString().slice(0, 10);
-          const items = (parsed.items || [{ item_name: "Service", qty: 1, rate: 0, amount: 0 }]).map(it => ({
-            doctype: "Sales Invoice Item",
-            item_name: it.item_name || "Service",
-            item_code: it.item_name || "Service",
-            description: it.item_name || "Service",
-            qty: parseFloat(it.qty) || 1,
-            rate: parseFloat(it.rate) || 0,
-            amount: parseFloat(it.amount) || parseFloat(it.rate) || 0,
-            uom: "Nos",
-          }));
-          const doc = {
-            doctype: "Sales Invoice",
-            customer: parsed.customer,
-            posting_date: today,
-            due_date: parsed.due_date || today,
-            company,
-            currency: "INR",
-            items,
-            notes: parsed.notes || "",
-          };
-          const saved = await apiGET("zoho_books_clone.api.books_data.save_doc", { doc: JSON.stringify(doc) });
-          // Remove pending message
-          chatMessages.value = chatMessages.value.filter(m => !m.pending);
-          chatMessages.value.push({
-            role: "assistant",
-            text: `✅ Invoice **${saved.name}** created for **${parsed.customer}**!`,
-            invoiceLink: saved.name
-          });
-          await nextTick(); scrollChat();
-        } catch (e) {
-          chatMessages.value = chatMessages.value.filter(m => !m.pending);
-          chatMessages.value.push({ role: "assistant", text: "❌ Failed to create invoice: " + (e.message || String(e)) });
-        }
-      }
-
-      function scrollChat() {
-        if (chatEndRef.value) chatEndRef.value.scrollIntoView({ behavior: "smooth" });
-      }
-
-      function openInvoice(name) {
-        router.push({ name: "invoice-detail", params: { name } });
-        chatOpen.value = false;
-      }
-
       // ── AI Workflow Automator ──
       const aiOpen = ref(false);
       const aiInput = ref("");
@@ -2966,12 +2855,12 @@
       const aiResult = reactive({ status: "", message: "", type: "", actions: [], data: null });
 
       const COMMANDS = [
-        { icon: "📄", label: "Create invoice for [customer] ₹[amount]",   hint: "e.g. Create invoice for Prasath ₹80,000" },
-        { icon: "📋", label: "Create invoice for [customer] [item] ₹[rate]", hint: "e.g. Create invoice for hari laptop ₹50,000" },
-        { icon: "💳", label: "Record payment for [invoice]",                hint: "e.g. Record payment for INV-2026-00005" },
-        { icon: "📊", label: "Show overdue invoices",                       hint: "Lists all overdue invoices" },
-        { icon: "🔍", label: "Find invoices for [customer]",                hint: "e.g. Find invoices for hari" },
-        { icon: "💰", label: "Show total outstanding",                      hint: "Total unpaid amount across all invoices" },
+        { icon: "file",    label: "Create invoice for [customer] ₹[amount]",    hint: "Create invoice for Prasath ₹80,000" },
+        { icon: "fileplus",label: "Create invoice for [customer] [item] ₹[rate]",hint: "Create invoice for hari laptop ₹50,000" },
+        { icon: "payment", label: "Record payment for [invoice]",                hint: "Record payment for INV-2026-00005" },
+        { icon: "alert",   label: "Show overdue invoices",                       hint: "Show overdue invoices" },
+        { icon: "search",  label: "Find invoices for [customer]",                hint: "Find invoices for hari" },
+        { icon: "rupee",   label: "Show total outstanding",                      hint: "Show total outstanding" },
       ];
 
       const filteredCommands = computed(() => {
@@ -3115,6 +3004,18 @@
         aiResult.message = parsed.message || "Try: \"Create invoice for [customer] ₹[amount]\" or \"Show overdue invoices\"";
       }
 
+      function aiIcon(name) {
+        const icons = {
+          file:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+          fileplus: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>',
+          payment:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
+          alert:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+          search:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+          rupee:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+        };
+        return icons[name] || icons.file;
+      }
+
       function onAIKey(e) { if (e.key === "Enter") { e.preventDefault(); runAI(); } }
 
       function logout() {
@@ -3125,7 +3026,7 @@
       function closeMobile() { mobileOpen.value = false; }
 
       return { cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
-               aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, fmtDate, fmt };
+               aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt };
     },
     template: `
 <div :class="{'books-root':true, collapsed:collapsed, 'mobile-open':mobileOpen}">
@@ -3149,12 +3050,7 @@
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <!-- AI Automator button -->
-      <button class="b-ai-btn" @click="aiOpen=!aiOpen" :title="collapsed?'AI Automator':''">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-        <span class="b-nav-label">AI Automator</span>
-        <span v-if="!collapsed" class="b-ai-badge">AI</span>
-      </button>
+      <!-- AI Automator button removed from sidebar — now a floating FAB -->
       <button class="b-collapse-btn" @click="collapsed=!collapsed" :title="collapsed?'Expand':'Collapse'">
         <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
         <span class="b-nav-label">Collapse</span>
@@ -3186,8 +3082,17 @@
     <main class="b-main"><router-view></router-view></main>
   </div>
 
-  <!-- ── AI Automator Panel ── -->
+  <!-- ── AI Automator Floating Button + Panel ── -->
   <teleport to="body">
+    <!-- Floating trigger button -->
+    <button class="ai-fab" @click="aiOpen=!aiOpen" :title="'AI Automator'">
+      <transition name="ai-fab-icon" mode="out-in">
+        <svg v-if="!aiOpen" key="open" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+        <svg v-else key="close" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </transition>
+      <span class="ai-fab-label">AI</span>
+    </button>
+
     <transition name="ai-slide">
       <div v-if="aiOpen" class="ai-panel">
 
@@ -3230,7 +3135,7 @@
           <div class="ai-commands-label">What can I do for you?</div>
           <div v-for="cmd in filteredCommands" :key="cmd.label"
             class="ai-command-item" @click="fillCommand(cmd)">
-            <span class="ai-command-icon">{{cmd.icon}}</span>
+            <span class="ai-command-icon" v-html="aiIcon(cmd.icon)"></span>
             <div>
               <div class="ai-command-title">{{cmd.hint}}</div>
             </div>
@@ -3249,7 +3154,9 @@
 
           <!-- Error -->
           <div v-else-if="aiResult.status==='error'" class="ai-result-card ai-card-error">
-            <div class="ai-card-icon">⚠️</div>
+            <div class="ai-card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f87171" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
             <div>
               <div class="ai-card-title">Something went wrong</div>
               <div class="ai-card-sub">{{aiResult.message}}</div>
@@ -3258,7 +3165,9 @@
 
           <!-- Invoice Created -->
           <div v-else-if="aiResult.type==='invoice_created'" class="ai-result-card ai-card-success">
-            <div class="ai-card-icon">✅</div>
+            <div class="ai-card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#34d399" stroke-width="2.5" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            </div>
             <div style="flex:1">
               <div class="ai-card-title">{{aiResult.message}}</div>
               <div class="ai-card-meta">
@@ -3271,7 +3180,9 @@
 
           <!-- Summary Card (outstanding total) -->
           <div v-else-if="aiResult.type==='summary'" class="ai-result-card ai-card-info">
-            <div class="ai-card-icon">💰</div>
+            <div class="ai-card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
             <div>
               <div class="ai-card-title">{{aiResult.message}}</div>
               <div style="font-size:22px;font-weight:800;color:#fff;margin-top:4px">₹{{Number(aiResult.data?.amount||0).toLocaleString("en-IN")}}</div>
@@ -3281,7 +3192,9 @@
 
           <!-- Plain text info -->
           <div v-else-if="aiResult.type==='text'" class="ai-result-card ai-card-info">
-            <div class="ai-card-icon">💬</div>
+            <div class="ai-card-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#818cf8" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            </div>
             <div class="ai-card-title" style="white-space:pre-wrap">{{aiResult.message}}</div>
           </div>
 
@@ -3345,25 +3258,32 @@
   color:#1A1D23;width:100%;padding:3px 6px;border-radius:4px;transition:.12s}
 .mi-cell-input:focus{background:#EEF2FF;box-shadow:0 0 0 2px rgba(59,91,219,.2)}
 
-/* ══ AI Automator Button ══ */
-.b-ai-btn{
-  display:flex;align-items:center;gap:10px;width:100%;
-  padding:9px 10px;border-radius:6px;
-  background:linear-gradient(135deg,rgba(99,102,241,.18),rgba(139,92,246,.18));
-  border:1px solid rgba(139,92,246,.3);cursor:pointer;
-  color:rgba(255,255,255,.9);font-size:13px;font-weight:600;
-  font-family:inherit;transition:all .15s;margin-bottom:6px;
-  white-space:nowrap;overflow:hidden;
+/* ══ AI Automator FAB (floating action button) ══ */
+.ai-fab{
+  position:fixed;bottom:24px;right:24px;
+  display:flex;align-items:center;gap:8px;
+  height:46px;padding:0 18px;
+  background:linear-gradient(135deg,#4f46e5,#7c3aed);
+  color:#fff;border:none;border-radius:23px;
+  box-shadow:0 4px 20px rgba(99,102,241,.5),0 2px 8px rgba(0,0,0,.3);
+  cursor:pointer;z-index:9997;
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:13px;font-weight:700;letter-spacing:.02em;
+  transition:transform .15s,box-shadow .15s,background .15s;
 }
-.b-ai-btn:hover{background:linear-gradient(135deg,rgba(99,102,241,.32),rgba(139,92,246,.32));color:#fff;}
-.b-ai-badge{margin-left:auto;background:linear-gradient(135deg,#6366f1,#8b5cf6);color:#fff;font-size:9px;font-weight:800;padding:2px 6px;border-radius:10px;letter-spacing:.05em;flex-shrink:0;}
-.books-root.collapsed .b-ai-btn{justify-content:center;padding:10px;}
-.books-root.collapsed .b-ai-badge{display:none;}
+.ai-fab:hover{
+  transform:translateY(-2px);
+  box-shadow:0 8px 28px rgba(99,102,241,.6),0 2px 8px rgba(0,0,0,.3);
+  background:linear-gradient(135deg,#6366f1,#8b5cf6);
+}
+.ai-fab:active{transform:translateY(0);}
+.ai-fab-label{font-size:12px;font-weight:800;letter-spacing:.06em;}
+.ai-fab-icon-enter-active,.ai-fab-icon-leave-active{transition:all .15s ease;}
+.ai-fab-icon-enter-from,.ai-fab-icon-leave-to{opacity:0;transform:rotate(90deg) scale(.7);}
 
-/* ══ AI Panel ══ */
+/* panel now slides above FAB */
 .ai-panel{
-  position:fixed;bottom:20px;left:228px;
-  width:340px;
+  position:fixed;bottom:82px;right:24px;
   background:#0f1117;
   border:1px solid rgba(99,102,241,.25);
   border-radius:14px;
@@ -3411,7 +3331,7 @@
   display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;transition:background .12s;
 }
 .ai-command-item:hover{background:rgba(99,102,241,.12);}
-.ai-command-icon{font-size:16px;width:20px;text-align:center;flex-shrink:0;}
+.ai-command-icon{width:28px;height:28px;border-radius:7px;background:rgba(99,102,241,.15);display:grid;place-items:center;color:#818cf8;flex-shrink:0;}
 .ai-command-title{font-size:12.5px;color:#c4c9d4;line-height:1.4;}
 .ai-command-arrow{color:rgba(255,255,255,.2);margin-left:auto;flex-shrink:0;}
 .ai-command-item:hover .ai-command-arrow{color:#818cf8;}
@@ -3430,7 +3350,7 @@
 .ai-card-success{background:rgba(16,185,129,.1);border:1px solid rgba(16,185,129,.2);}
 .ai-card-error  {background:rgba(239,68,68,.1); border:1px solid rgba(239,68,68,.2);}
 .ai-card-info   {background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.2);}
-.ai-card-icon{font-size:20px;line-height:1;flex-shrink:0;margin-top:1px;}
+.ai-card-icon{width:28px;height:28px;border-radius:8px;background:rgba(255,255,255,.08);display:grid;place-items:center;flex-shrink:0;}
 .ai-card-title{font-size:13px;font-weight:600;color:#e2e8f0;line-height:1.4;}
 .ai-card-sub{font-size:11.5px;color:rgba(255,255,255,.4);margin-top:3px;}
 .ai-card-meta{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px;}
