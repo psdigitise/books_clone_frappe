@@ -2027,8 +2027,8 @@
     <div class="zb-list-header">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices</span>
-          <span style="font-size:11px;color:var(--text-3)">▾</span>
+          <span style="font-size:13px;font-weight:700;color:#111827">All Invoices</span>
+          <span style="font-size:11px;color:#9ca3af">▾</span>
         </div>
         <div style="display:flex;gap:4px">
           <button class="zb-icon-btn" @click="$router.push('/invoices')" title="Back to list">
@@ -2040,7 +2040,7 @@
         </div>
       </div>
       <div class="zb-list-search">
-        <span v-html="icon('search',12)" style="color:#aaa;flex-shrink:0"></span>
+        <span v-html="icon('search',12)" style="color:#9ca3af;flex-shrink:0"></span>
         <input v-model="search" placeholder="Search invoices…" class="zb-list-search-input"/>
       </div>
       <div class="zb-list-pills">
@@ -3568,6 +3568,33 @@
 /* List pane */
 .zb-list-pane{width:300px;flex-shrink:0;border-right:1px solid #e4e8f0;background:#fff;display:flex;flex-direction:column;overflow:hidden}
 .zb-list-header{padding:12px 12px 0;flex-shrink:0}
+.zb-icon-btn{
+  width:28px;height:28px;border-radius:6px;
+  background:none;border:1.5px solid #e4e8f0;
+  cursor:pointer;display:grid;place-items:center;
+  color:#6b7280;transition:all .15s;
+}
+.zb-icon-btn:hover{background:#f5f8ff;border-color:#2563eb;color:#2563eb}
+.zb-list-search{display:flex;align-items:center;gap:7px;background:#f8f9fc;border:1px solid #e4e8f0;border-radius:20px;padding:6px 12px;margin-bottom:10px}
+.zb-list-search-input{border:none;outline:none;background:none;font-size:12.5px;font-family:inherit;color:#111827;width:100%;caret-color:#2563eb}
+.zb-list-search-input::placeholder{color:#9ca3af}
+.zb-list-pills{display:flex;gap:5px;flex-wrap:wrap;padding-bottom:10px;border-bottom:1px solid #f1f3f7}
+.zb-list-pill{
+  padding:4px 11px;border-radius:20px;font-size:11.5px;font-weight:600;
+  cursor:pointer;border:1.5px solid #e4e8f0;background:#fff;
+  color:#6b7280;font-family:inherit;
+  display:inline-flex;align-items:center;gap:5px;
+  transition:all .15s;white-space:nowrap;
+}
+.zb-list-pill:hover{border-color:#2563eb;color:#2563eb;background:#f5f8ff}
+.zb-list-pill.active{background:#2563eb;color:#fff;border-color:#2563eb;box-shadow:0 2px 6px rgba(37,99,235,.3)}
+.zb-pill-count{
+  font-size:10px;font-weight:700;
+  padding:1px 5px;border-radius:10px;
+  background:rgba(255,255,255,.25);
+  min-width:16px;text-align:center;
+}
+.zb-list-pill:not(.active) .zb-pill-count{background:#f1f3f7;color:#6b7280}
 .zb-list-items{flex:1;overflow-y:auto}
 .zb-list-item{padding:10px 12px;border-bottom:1px solid #f1f3f7;cursor:pointer;transition:.1s}
 .zb-list-item:hover{background:#f8f9fc}
