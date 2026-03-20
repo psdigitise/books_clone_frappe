@@ -1485,8 +1485,9 @@
         finally { loading.value = false; }
       }
       onMounted(load);
+      const router = useRouter();
       return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc, flt,
-               onInvoiceSaved: (name) => { useRouter().push({ name: "invoice-detail", params: { name } }); } };
+               onInvoiceSaved: (name) => { router.push({ name: "invoice-detail", params: { name } }); } };
     },
     template: `
 <div class="b-page">
@@ -1650,7 +1651,6 @@
       }
       const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(i => selected.value.has(i.name)));
 
-      const router = useRouter();
       function onInvoiceSaved(name) { showNew.value = false; loadList(); router.push({ name: "invoice-detail", params: { name } }); }
       onMounted(loadList);
       return {
