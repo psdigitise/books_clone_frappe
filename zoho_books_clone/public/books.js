@@ -1436,34 +1436,50 @@
       const router = useRouter();
       const list = ref([]), loading = ref(true), active = ref("all"), showNew = ref(false);
       const search = ref("");
+      const selected = ref(new Set());
+      const sortKey = ref("posting_date"), sortDir = ref(-1);
 
       const filters = [
-        { k: "all", lbl: "All Invoices 1" },
-        { k: "Draft", lbl: "Draft" },
-        { k: "Submitted", lbl: "Unpaid" },
+        { k: "all",     lbl: "All Invoices" },
+        { k: "Draft",   lbl: "Draft" },
+        { k: "Unpaid",  lbl: "Unpaid" },
         { k: "Overdue", lbl: "Overdue" },
-        { k: "Paid", lbl: "Paid" }
+        { k: "Paid",    lbl: "Paid" }
       ];
+
       const counts = computed(() => ({
-        Draft: list.value.filter(i => i.status === "Draft").length,
-        Submitted: list.value.filter(i => ["Submitted", "Partly Paid"].includes(i.status)).length,
+        Draft:   list.value.filter(i => i.status === "Draft").length,
+        Unpaid:  list.value.filter(i => !isOverdue(i) && ["Submitted","Unpaid","Partly Paid"].includes(i.status)).length,
         Overdue: list.value.filter(isOverdue).length,
-        Paid: list.value.filter(i => i.status === "Paid").length,
+        Paid:    list.value.filter(i => i.status === "Paid").length,
       }));
+
       const filtered = computed(() => {
         let r = list.value;
         if (active.value === "Overdue") r = r.filter(isOverdue);
+        else if (active.value === "Unpaid") r = r.filter(i => !isOverdue(i) && ["Submitted","Unpaid","Partly Paid"].includes(i.status));
         else if (active.value !== "all") r = r.filter(i => i.status === active.value);
-        if (search.value) r = r.filter(i => (i.name + (i.customer || "")).toLowerCase().includes(search.value.toLowerCase()));
-        return r;
+        if (search.value) {
+          const q = search.value.toLowerCase();
+          r = r.filter(i => (i.name + (i.customer_name || "") + (i.customer || "")).toLowerCase().includes(q));
+        }
+        return [...r].sort((a, b) => {
+          const va = a[sortKey.value] ?? "", vb = b[sortKey.value] ?? "";
+          return va < vb ? -sortDir.value : va > vb ? sortDir.value : 0;
+        });
       });
+
+      function pillCountCls(k) {
+        return { Draft:"zb-pc-muted", Unpaid:"zb-pc-amber", Overdue:"zb-pc-red", Paid:"zb-pc-green" }[k] || "zb-pc-muted";
+      }
 
       async function loadList() {
         loading.value = true;
         try {
           list.value = await apiList("Sales Invoice", {
-            fields: ["name", "customer", "customer_name", "invoice_number", "posting_date", "due_date", "grand_total", "outstanding_amount", "status"],
-            order: "posting_date desc"
+            fields: ["name","customer","customer_name","po_no","posting_date","due_date","grand_total","outstanding_amount","status","docstatus"],
+            order: "posting_date desc",
+            limit: 100
           });
         } catch (e) { toast("Failed to load invoices: " + e.message, "error"); }
         finally { loading.value = false; }
@@ -1471,111 +1487,141 @@
 
       function goToInvoice(name) { router.push({ name: "invoice-detail", params: { name } }); }
 
+      function sortBy(k) {
+        if (sortKey.value === k) sortDir.value *= -1;
+        else { sortKey.value = k; sortDir.value = -1; }
+      }
+      function sortArrow(k) { return sortKey.value === k ? (sortDir.value === 1 ? " ↑" : " ↓") : ""; }
+
+      function overdueLabel(row) {
+        const days = Math.floor((new Date() - new Date(row.due_date)) / 86400000);
+        return "OVERDUE BY " + days + " DAY" + (days !== 1 ? "S" : "");
+      }
       function statusChipCls(row) {
+        if (isOverdue(row)) return "zb-chip-overdue";
         const s = row.status || "Draft";
-        const over = flt(row.outstanding_amount) > 0 && row.due_date && new Date(row.due_date) < new Date();
-        if (over) return "zb-chip-overdue";
         if (s === "Paid") return "zb-chip-paid";
         if (s === "Draft") return "zb-chip-draft";
-        if (s === "Submitted" || s === "Partly Paid") return "zb-chip-partpaid";
+        if (["Submitted","Unpaid","Partly Paid"].includes(s)) return "zb-chip-partpaid";
         return "zb-chip-draft";
       }
       function statusLabel(row) {
+        if (isOverdue(row)) return overdueLabel(row);
         const s = row.status || "Draft";
-        const over = flt(row.outstanding_amount) > 0 && row.due_date && new Date(row.due_date) <= new Date();
-        if (over && s !== "Draft") return "DUE TODAY";
-        if (s === "Submitted") return "SENT";
+        if (s === "Submitted") return "UNPAID";
         if (s === "Partly Paid") return "PARTIALLY PAID";
         return s.toUpperCase();
       }
 
+      function toggleRow(name) {
+        const s = new Set(selected.value);
+        s.has(name) ? s.delete(name) : s.add(name);
+        selected.value = s;
+      }
+      function toggleAll(e) {
+        selected.value = e.target.checked ? new Set(filtered.value.map(i => i.name)) : new Set();
+      }
+      const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(i => selected.value.has(i.name)));
+
       onMounted(loadList);
       return {
         list, loading, active, showNew, search, filters, counts, filtered,
-        loadList, goToInvoice, statusChipCls, statusLabel, fmt, fmtDate, flt, icon
+        selected, allSelected, sortKey,
+        loadList, goToInvoice, statusChipCls, statusLabel, pillCountCls,
+        toggleRow, toggleAll, sortBy, sortArrow,
+        fmt, fmtDate, flt, icon
       };
     },
     template: `
-<div class="zb-root no-sidebar-pad">
+<div class="zb-root no-sidebar-pad" style="background:#fff;min-height:100vh">
   <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
 
   <!-- TOOLBAR -->
-  <div class="zb-toolbar no-print">
-    <div class="zb-toolbar-left">
-      <span class="zb-toolbar-title">All Invoices 2</span>
-      <span class="zb-toolbar-caret">&#9660;</span>
+  <div class="zb-toolbar no-print" style="display:flex;align-items:center;justify-content:space-between;padding:14px 24px 12px;border-bottom:1px solid #e8ecf0">
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:16px;font-weight:700;color:#1a1a2e">All Invoices</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
-    <div class="zb-toolbar-right">
-      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true">
-        <span v-html="icon('plus',12)"></span> New
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true" style="display:inline-flex;align-items:center;gap:6px;background:#1a6ef7;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New
       </button>
-      <button class="zb-tb-btn" @click="()=>{}">▾</button>
-      <button class="zb-tb-btn" style="padding:5px 8px" @click="loadList" title="Refresh">
+      <button class="zb-tb-btn" @click="loadList" style="background:#fff;border:1px solid #e8ecf0;border-radius:6px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;color:#6b7280" title="Refresh">
         <span v-html="icon('refresh',13)"></span>
       </button>
-      <button class="zb-tb-btn" style="padding:5px 8px" title="More">•••</button>
+      <button class="zb-tb-btn" style="background:#fff;border:1px solid #e8ecf0;border-radius:6px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;color:#6b7280" title="More">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      </button>
     </div>
   </div>
 
-  <!-- FILTER BAR -->
-  <div class="zb-table-filter-bar no-print">
+  <!-- FILTER PILLS -->
+  <div style="display:flex;gap:8px;padding:12px 24px;border-bottom:1px solid #e8ecf0;flex-wrap:wrap">
     <button v-for="f in filters" :key="f.k"
-      class="zb-tf-pill" :class="{active:active===f.k}"
+      :class="['zb-inv-pill', active===f.k ? 'zb-inv-pill-active' : '']"
       @click="active=f.k">
       {{f.lbl}}
-      <span v-if="f.k!=='all'" class="zb-tf-cnt">{{counts[f.k]}}</span>
+      <span v-if="f.k!=='all'" :class="['zb-pill-cnt', pillCountCls(f.k)]">{{counts[f.k]}}</span>
     </button>
     <div style="flex:1"></div>
-    <div class="zb-tf-search">
-      <span v-html="icon('search',12)" style="color:#aaa"></span>
-      <input v-model="search" placeholder="Search invoices..." class="zb-tf-search-input"/>
+    <div style="position:relative;display:flex;align-items:center">
+      <svg style="position:absolute;left:9px;color:#9ca3af" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input v-model="search" placeholder="Search invoices…" style="padding:6px 12px 6px 30px;border:1px solid #e8ecf0;border-radius:20px;font-size:12.5px;outline:none;width:200px"/>
     </div>
   </div>
 
   <!-- TABLE -->
-  <div class="zb-table-wrap">
-    <table class="zb-inv-table">
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead>
         <tr>
-          <th class="zb-th zb-th-check"><input type="checkbox"/></th>
-          <th class="zb-th">DATE</th>
-          <th class="zb-th">INVOICE#</th>
-          <th class="zb-th">ORDER NUMBER</th>
-          <th class="zb-th">CUSTOMER NAME</th>
-          <th class="zb-th">STATUS</th>
-          <th class="zb-th">DUE DATE</th>
-          <th class="zb-th ta-r">AMOUNT</th>
-          <th class="zb-th ta-r">BALANCE DUE</th>
+          <th style="padding:10px 16px 10px 20px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;width:40px">
+            <input type="checkbox" :checked="allSelected" @change="toggleAll"/>
+          </th>
+          <th @click="sortBy('posting_date')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">DATE{{sortArrow('posting_date')}}</th>
+          <th @click="sortBy('name')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">INVOICE#{{sortArrow('name')}}</th>
+          <th style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff">ORDER NUMBER</th>
+          <th @click="sortBy('customer_name')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">CUSTOMER NAME{{sortArrow('customer_name')}}</th>
+          <th @click="sortBy('status')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">STATUS{{sortArrow('status')}}</th>
+          <th @click="sortBy('due_date')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">DUE DATE{{sortArrow('due_date')}}</th>
+          <th @click="sortBy('grand_total')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:right;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">AMOUNT{{sortArrow('grand_total')}}</th>
+          <th @click="sortBy('outstanding_amount')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:right;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">BALANCE DUE{{sortArrow('outstanding_amount')}}</th>
         </tr>
       </thead>
       <tbody>
         <template v-if="loading">
-          <tr v-for="n in 5" :key="n">
+          <tr v-for="n in 6" :key="n">
             <td colspan="9" style="padding:14px 16px"><div class="b-shimmer" style="height:13px;border-radius:3px"></div></td>
           </tr>
         </template>
         <template v-else>
           <tr v-if="!filtered.length">
-            <td colspan="9" class="zb-table-empty">No invoices found</td>
+            <td colspan="9" style="padding:48px;text-align:center;color:#9ca3af;font-size:13px">No invoices found</td>
           </tr>
           <tr v-else v-for="row in filtered" :key="row.name"
-            class="zb-inv-row"
+            :style="{background: selected.has(row.name) ? '#eaf1ff' : 'transparent', cursor:'pointer'}"
+            @mouseenter="e=>e.currentTarget.style.background=selected.has(row.name)?'#eaf1ff':'#f8faff'"
+            @mouseleave="e=>e.currentTarget.style.background=selected.has(row.name)?'#eaf1ff':'transparent'"
             @click="goToInvoice(row.name)">
-            <td class="zb-td zb-td-check" @click.stop><input type="checkbox"/></td>
-            <td class="zb-td zb-td-date">{{fmtDate(row.posting_date)}}</td>
-            <td class="zb-td">
-              <span class="zb-inv-link" @click.stop="goToInvoice(row.name)">{{row.name}}</span>
+            <td style="padding:13px 16px 13px 20px;border-bottom:1px solid #f0f2f5;vertical-align:middle" @click.stop>
+              <input type="checkbox" :checked="selected.has(row.name)" @change="toggleRow(row.name)"/>
             </td>
-            <td class="zb-td zb-td-muted">{{row.invoice_number||'—'}}</td>
-            <td class="zb-td zb-td-customer">{{row.customer_name||row.customer}}</td>
-            <td class="zb-td">
-              <span class="zb-status-chip" :class="statusChipCls(row)">{{statusLabel(row)}}</span>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#374151;vertical-align:middle">{{fmtDate(row.posting_date)}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
+              <span style="color:#1a6ef7;font-weight:600;font-size:13px">{{row.name}}</span>
             </td>
-            <td class="zb-td zb-td-date" :style="{color:flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date()?'#e03131':'inherit'}">
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#9ca3af;vertical-align:middle">{{row.po_no||'—'}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;font-weight:600;color:#1a1a2e;vertical-align:middle">{{row.customer_name||row.customer}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
+              <span :class="['zb-status-chip', statusChipCls(row)]">{{statusLabel(row)}}</span>
+            </td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle"
+              :style="{color: flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date() ? '#dc2626' : '#9ca3af'}">
               {{fmtDate(row.due_date)}}
             </td>
-            <td class="zb-td ta-r zb-td-mono">{{fmt(row.grand_total)}}</td>
-            <td class="zb-td ta-r zb-td-mono" :style="{color:flt(row.outstanding_amount)>0?'#1a1d23':'#2f9e44'}">
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;text-align:right;font-family:monospace;font-size:12.5px;vertical-align:middle">{{fmt(row.grand_total)}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;text-align:right;font-family:monospace;font-size:12.5px;vertical-align:middle"
+              :style="{color: flt(row.outstanding_amount)>0 ? '#dc2626' : '#059669'}">
               {{fmt(row.outstanding_amount)}}
             </td>
           </tr>
@@ -1600,7 +1646,7 @@
       // ── List (sidebar) ──────────────────────────────────────────
       const list = ref([]), listLoading = ref(true), active = ref("all"), search = ref("");
       const filters = [
-        { k: "all", lbl: "All Invoices 3" },
+        { k: "all", lbl: "All Invoices" },
         { k: "Draft", lbl: "Draft" },
         { k: "Submitted", lbl: "Unpaid" },
         { k: "Overdue", lbl: "Overdue" },
@@ -1790,17 +1836,19 @@
         if (!recPay.deposit_to) { toast("Please select a Deposit To account", "error"); return; }
         recPaySaving.value = true;
         try {
-          const result = await apiGET("zoho_books_clone.api.docs.record_payment", {
+          const result = await apiPOST("zoho_books_clone.api.books_data.record_payment", {
             invoice_name: inv.value?.name,
-            amount: recPay.amount,
+            amount_received: recPay.amount,
             deposit_to: recPay.deposit_to,
-            mode_of_payment: recPay.mode || "Cash",
+            payment_mode: recPay.mode || "Cash",
             payment_date: recPay.payment_date,
             reference_no: recPay.reference || recPay.ref_no || "",
             notes: recPay.notes || "",
-            submit: submit ? 1 : 0,
+            bank_charges: recPay.bank_charges || 0,
+            tds_deducted: recPay.tax_deducted === "yes" ? 1 : 0,
+            save_as_draft: submit ? 0 : 1,
           });
-          toast("Payment " + result.name + " " + (submit ? "recorded!" : "saved as draft!"));
+          toast("Payment " + (result.payment_entry || result.name) + " " + (submit ? "recorded!" : "saved as draft!"));
           showRecPay.value = false;
           await loadDetail(invName.value);
           loadList();
@@ -1829,7 +1877,7 @@
     <div class="zb-list-header">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:6px">
-          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices 4</span>
+          <span style="font-size:13px;font-weight:700;color:var(--text)">All Invoices</span>
           <span style="font-size:11px;color:var(--text-3)">▾</span>
         </div>
         <div style="display:flex;gap:4px">
@@ -2764,11 +2812,21 @@
 .zb-inv-link{color:#2563EB;font-weight:700;font-size:12.5px}
 .zb-table-empty{text-align:center;padding:48px;color:#aaa;font-size:13px}
 /* Status chips */
-.zb-status-chip{display:inline-block;padding:2px 10px;border-radius:3px;font-size:11px;font-weight:700;letter-spacing:.03em}
+.zb-status-chip{display:inline-block;padding:2px 10px;border-radius:3px;font-size:11px;font-weight:700;letter-spacing:.03em;white-space:nowrap}
 .zb-chip-draft{background:#f3f4f6;color:#6b7280}
 .zb-chip-due{background:#fef3c7;color:#92400e}
-.zb-chip-overdue{background:#fee2e2;color:#991b1b}
+.zb-chip-overdue{background:transparent;color:#dc2626}
 .zb-chip-paid{background:#d1fae5;color:#065f46}
+.zb-chip-partpaid{background:#fef3c7;color:#d97706}
+/* Invoice list pills */
+.zb-inv-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:20px;font-size:12.5px;font-weight:600;border:1.5px solid #e8ecf0;background:#fff;color:#6b7280;cursor:pointer;transition:all .15s;font-family:inherit}
+.zb-inv-pill:hover{border-color:#1a6ef7;color:#1a6ef7}
+.zb-inv-pill-active{background:#eaf1ff;border-color:#1a6ef7;color:#1a6ef7}
+.zb-pill-cnt{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:12px}
+.zb-pc-muted{background:#e5e7eb;color:#6b7280}
+.zb-pc-amber{background:#fef3c7;color:#d97706}
+.zb-pc-red{background:#fee2e2;color:#dc2626}
+.zb-pc-green{background:#d1fae5;color:#059669}
 /* Split list (narrow, when detail open) */
 .zb-split-list{width:300px;flex-shrink:0;border-right:1px solid #e0e2e7;background:#fff;display:flex;flex-direction:column;overflow:hidden}
 .zb-split-header{padding:12px 12px 0;flex-shrink:0;border-bottom:1px solid #f0f0f0}

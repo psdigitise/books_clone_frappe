@@ -1,366 +1,371 @@
-(function(){
-"use strict";
-if(!document.getElementById("books-app"))return;
-if(typeof Vue==="undefined"||typeof VueRouter==="undefined"){
-  console.error("[Books] Vue/VueRouter not loaded");return;
-}
-
-const{createApp,ref,computed,onMounted,reactive,watch,defineComponent,nextTick}=Vue;
-const{createRouter,createWebHashHistory,useRoute,useRouter}=VueRouter;
-
-/* Expose URL helpers globally immediately so templates can use them */
-window.docUrl=function(dt,name){return"/app/"+dt.toLowerCase().replace(/ /g,"-")+"/"+encodeURIComponent(name);};
-window.newDocUrl=function(dt){return"/app/"+dt.toLowerCase().replace(/ /g,"-")+"/new";};
-window.flt=function(v){return parseFloat(v)||0;};
-
-/* ─── Config ─────────────────────────────────────────────────── */
-// Frappe v15 new-doc URL pattern
-function newDocUrl(doctype){
-  return "/app/"+doctype.toLowerCase().replace(/ /g,"-")+"/new";
-}
-function docUrl(doctype,name){
-  return "/app/"+doctype.toLowerCase().replace(/ /g,"-")+"/"+encodeURIComponent(name);
-}
-function openDoc(doctype,name){window.open(docUrl(doctype,name),"_blank");}
-function openNew(doctype){window.open(newDocUrl(doctype),"_blank");}
-
-/* ─── Helpers ────────────────────────────────────────────────── */
-function fmt(v,c){
-  if(v==null||v==="")return"—";
-  try{return new Intl.NumberFormat("en-IN",{style:"currency",currency:c||"INR",maximumFractionDigits:2}).format(v);}
-  catch{return"₹"+Number(v).toLocaleString("en-IN");}
-}
-function fmtDate(v){
-  if(!v)return"—";
-  try{return new Date(v).toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"numeric"});}
-  catch{return v;}
-}
-function fmtShort(v){
-  if(!v)return"—";
-  try{return new Date(v).toLocaleDateString("en-IN",{day:"2-digit",month:"short"});}
-  catch{return v;}
-}
-function isOverdue(inv){return flt(inv.outstanding_amount)>0&&inv.due_date&&new Date(inv.due_date)<new Date();}
-function csrf(){return window.frappe?.csrf_token||"";}
-function co(){return window.__booksCompany||window.frappe?.boot?.sysdefaults?.company||"";}
-function flt(v){return parseFloat(v)||0;}
-function today(){return new Date().toISOString().slice(0,10);}
-
-/* ─── API ────────────────────────────────────────────────────── */
-/* ─── API helpers ─────────────────────────────────────────────
-   GET  → read operations  (no CSRF needed in Frappe)
-   POST → write operations (CSRF required)
-──────────────────────────────────────────────────────────── */
-
-function _parseResponse(json,status){
-  if(json.exc||json.exc_type){
-    const match=(json.exc||"").match(/frappe\.exceptions\.\w+: (.+)/);
-    throw new Error(match?match[1]:(json.exc_type||json.message||"Server error "+status));
+(function () {
+  "use strict";
+  if (!document.getElementById("books-app")) return;
+  if (typeof Vue === "undefined" || typeof VueRouter === "undefined") {
+    console.error("[Books] Vue/VueRouter not loaded"); return;
   }
-  return json.message;
-}
 
-/* GET — safe for all read-only Frappe methods, no CSRF required */
-async function apiGET(method,params){
-  const qs=new URLSearchParams();
-  for(const[k,v]of Object.entries(params||{})){
-    qs.append(k,typeof v==="string"?v:JSON.stringify(v));
+  const { createApp, ref, computed, onMounted, reactive, watch, defineComponent, nextTick } = Vue;
+  const { createRouter, createWebHashHistory, useRoute, useRouter } = VueRouter;
+
+  /* Expose URL helpers globally immediately so templates can use them */
+  window.docUrl = function (dt, name) { return "/app/" + dt.toLowerCase().replace(/ /g, "-") + "/" + encodeURIComponent(name); };
+  window.newDocUrl = function (dt) { return "/app/" + dt.toLowerCase().replace(/ /g, "-") + "/new"; };
+  window.flt = function (v) { return parseFloat(v) || 0; };
+
+  /* ─── Config ─────────────────────────────────────────────────── */
+  // Frappe v15 new-doc URL pattern
+  function newDocUrl(doctype) {
+    return "/app/" + doctype.toLowerCase().replace(/ /g, "-") + "/new";
   }
-  const r=await fetch("/api/method/"+method+"?"+qs.toString(),{
-    method:"GET",credentials:"same-origin",
-    headers:{"Accept":"application/json"}
-  });
-  let json;
-  try{json=await r.json();}catch{throw new Error("Non-JSON response ("+r.status+")");}
-  return _parseResponse(json,r.status);
-}
+  function docUrl(doctype, name) {
+    return "/app/" + doctype.toLowerCase().replace(/ /g, "-") + "/" + encodeURIComponent(name);
+  }
+  function openDoc(doctype, name) { window.open(docUrl(doctype, name), "_blank"); }
+  function openNew(doctype) { window.open(newDocUrl(doctype), "_blank"); }
 
-/* Refresh CSRF token from session endpoint (GET — no CSRF needed) */
-async function refreshCsrfToken(){
-  try{
-    const r=await fetch("/api/method/zoho_books_clone.api.session.get_books_session",{
-      method:"GET",credentials:"same-origin",headers:{"Accept":"application/json"}
+  /* ─── Helpers ────────────────────────────────────────────────── */
+  function fmt(v, c) {
+    if (v == null || v === "") return "—";
+    try { return new Intl.NumberFormat("en-IN", { style: "currency", currency: c || "INR", maximumFractionDigits: 2 }).format(v); }
+    catch { return "₹" + Number(v).toLocaleString("en-IN"); }
+  }
+  function fmtDate(v) {
+    if (!v) return "—";
+    try { return new Date(v).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }); }
+    catch { return v; }
+  }
+  function fmtShort(v) {
+    if (!v) return "—";
+    try { return new Date(v).toLocaleDateString("en-IN", { day: "2-digit", month: "short" }); }
+    catch { return v; }
+  }
+  function isOverdue(inv) { return flt(inv.outstanding_amount) > 0 && inv.due_date && new Date(inv.due_date) < new Date(); }
+  function csrf() { return window.frappe?.csrf_token || ""; }
+  function co() { return window.__booksCompany || window.frappe?.boot?.sysdefaults?.company || ""; }
+  function flt(v) { return parseFloat(v) || 0; }
+  function today() { return new Date().toISOString().slice(0, 10); }
+
+  /* ─── API ────────────────────────────────────────────────────── */
+  /* ─── API helpers ─────────────────────────────────────────────
+     GET  → read operations  (no CSRF needed in Frappe)
+     POST → write operations (CSRF required)
+  ──────────────────────────────────────────────────────────── */
+
+  function _parseResponse(json, status) {
+    if (json.exc || json.exc_type) {
+      const match = (json.exc || "").match(/frappe\.exceptions\.\w+: (.+)/);
+      throw new Error(match ? match[1] : (json.exc_type || json.message || "Server error " + status));
+    }
+    return json.message;
+  }
+
+  /* GET — safe for all read-only Frappe methods, no CSRF required */
+  async function apiGET(method, params) {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params || {})) {
+      qs.append(k, typeof v === "string" ? v : JSON.stringify(v));
+    }
+    const r = await fetch("/api/method/" + method + "?" + qs.toString(), {
+      method: "GET", credentials: "same-origin",
+      headers: { "Accept": "application/json" }
     });
-    const data=await r.json();
-    const token=data?.message?.csrf_token;
-    if(token&&token!=="None")window.frappe.csrf_token=token;
-  }catch{}
-}
-
-/* POST — for write operations; always re-fetches CSRF token first */
-async function apiPOST(method,args){
-  // Always refresh the token before posting — prevents stale token errors
-  await refreshCsrfToken();
-  const csrfToken=window.frappe?.csrf_token||getCsrfFromCookie()||"";
-  const body=new URLSearchParams();
-  if(csrfToken)body.append("csrf_token",csrfToken);
-  for(const[k,v]of Object.entries(args||{})){
-    body.append(k,typeof v==="string"?v:JSON.stringify(v));
+    let json;
+    try { json = await r.json(); } catch { throw new Error("Non-JSON response (" + r.status + ")"); }
+    return _parseResponse(json, r.status);
   }
-  const r=await fetch("/api/method/"+method,{
-    method:"POST",credentials:"same-origin",
-    headers:{
-      "Content-Type":"application/x-www-form-urlencoded",
-      "X-Frappe-CSRF-Token":csrfToken||"",
-      "Accept":"application/json"
-    },
-    body:body.toString()
-  });
-  let json;
-  try{json=await r.json();}catch{throw new Error("Non-JSON response ("+r.status+")");}
-  return _parseResponse(json,r.status);
-}
 
-/* Legacy alias — kept so any direct api() calls still work (uses GET) */
-async function api(method,args){return await apiGET(method,args);}
+  /* Refresh CSRF token from session endpoint (GET — no CSRF needed) */
+  async function refreshCsrfToken() {
+    try {
+      const r = await fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
+        method: "GET", credentials: "same-origin", headers: { "Accept": "application/json" }
+      });
+      const data = await r.json();
+      const token = data?.message?.csrf_token;
+      if (token && token !== "None") window.frappe.csrf_token = token;
+    } catch { }
+  }
 
-/* ── Public helpers ── */
-async function apiGet(doctype,name){
-  return await apiGET("frappe.client.get",{doctype,name});
-}
-
-async function apiSave(doc){
-  // Use our custom GET endpoint — no CSRF token needed
-  return await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
-}
-
-async function apiSubmit(doctype,name){
-  // Use our custom GET endpoint — no CSRF token needed
-  return await apiGET("zoho_books_clone.api.docs.submit_doc",{doctype,name});
-}
-
-async function apiList(dt,opts){
-  return await apiGET("frappe.client.get_list",{
-    doctype:dt,
-    fields:JSON.stringify(opts.fields||["name"]),
-    filters:JSON.stringify(opts.filters||[]),
-    order_by:opts.order||"modified desc",
-    limit_page_length:opts.limit||50
-  })||[];
-}
-
-async function apiLinkValues(doctype,txt,filters){
-  const f=filters?[...filters,["name","like","%"+txt+"%"]]:[["name","like","%"+txt+"%"]];
-  return await apiGET("frappe.client.get_list",{
-    doctype,fields:JSON.stringify(["name"]),
-    filters:JSON.stringify(f),
-    limit_page_length:10
-  })||[];
-}
-
-async function resolveCompany(){
-  if(window.__booksCompany)return window.__booksCompany;
-  try{
-    const r=await apiGET("frappe.client.get_value",{
-      doctype:"Books Settings",
-      filters:JSON.stringify({name:"Books Settings"}),
-      fieldname:JSON.stringify(["default_company"])
+  /* POST — for write operations; always re-fetches CSRF token first */
+  async function apiPOST(method, args) {
+    // Always refresh the token before posting — prevents stale token errors
+    await refreshCsrfToken();
+    const csrfToken = window.frappe?.csrf_token || getCsrfFromCookie() || "";
+    const body = new URLSearchParams();
+    if (csrfToken) body.append("csrf_token", csrfToken);
+    for (const [k, v] of Object.entries(args || {})) {
+      body.append(k, typeof v === "string" ? v : JSON.stringify(v));
+    }
+    const r = await fetch("/api/method/" + method, {
+      method: "POST", credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "X-Frappe-CSRF-Token": csrfToken || "",
+        "Accept": "application/json"
+      },
+      body: body.toString()
     });
-    const c=r?.default_company||"";
-    window.__booksCompany=c;
-    if(window.frappe?.boot?.sysdefaults)window.frappe.boot.sysdefaults.company=c;
-    return c;
-  }catch{return window.__booksCompany||"";}
-}
+    let json;
+    try { json = await r.json(); } catch { throw new Error("Non-JSON response (" + r.status + ")"); }
+    return _parseResponse(json, r.status);
+  }
 
-/* ─── Toast ──────────────────────────────────────────────────── */
-function toast(msg,type="success"){
-  const el=document.createElement("div");
-  const bg=type==="error"?"#C92A2A":type==="warning"?"#E67700":"#2F9E44";
-  el.style.cssText=`position:fixed;top:20px;right:20px;z-index:99999;
+  /* Legacy alias — kept so any direct api() calls still work (uses GET) */
+  async function api(method, args) { return await apiGET(method, args); }
+
+  /* ── Public helpers ── */
+  async function apiGet(doctype, name) {
+    return await apiGET("frappe.client.get", { doctype, name });
+  }
+
+  async function apiSave(doc) {
+    // Use our custom GET endpoint — no CSRF token needed
+    return await apiGET("zoho_books_clone.api.docs.save_doc", { doc: JSON.stringify(doc) });
+  }
+
+  async function apiSubmit(doctype, name) {
+    // Use our custom GET endpoint — no CSRF token needed
+    return await apiGET("zoho_books_clone.api.docs.submit_doc", { doctype, name });
+  }
+
+  async function apiList(dt, opts) {
+    return await apiGET("frappe.client.get_list", {
+      doctype: dt,
+      fields: JSON.stringify(opts.fields || ["name"]),
+      filters: JSON.stringify(opts.filters || []),
+      order_by: opts.order || "modified desc",
+      limit_page_length: opts.limit || 50
+    }) || [];
+  }
+
+  async function apiLinkValues(doctype, txt, filters) {
+    const f = filters ? [...filters, ["name", "like", "%" + txt + "%"]] : [["name", "like", "%" + txt + "%"]];
+    return await apiGET("frappe.client.get_list", {
+      doctype, fields: JSON.stringify(["name"]),
+      filters: JSON.stringify(f),
+      limit_page_length: 10
+    }) || [];
+  }
+
+  async function resolveCompany() {
+    if (window.__booksCompany) return window.__booksCompany;
+    try {
+      const r = await apiGET("frappe.client.get_value", {
+        doctype: "Books Settings",
+        filters: JSON.stringify({ name: "Books Settings" }),
+        fieldname: JSON.stringify(["default_company"])
+      });
+      const c = r?.default_company || "";
+      window.__booksCompany = c;
+      if (window.frappe?.boot?.sysdefaults) window.frappe.boot.sysdefaults.company = c;
+      return c;
+    } catch { return window.__booksCompany || ""; }
+  }
+
+  /* ─── Toast ──────────────────────────────────────────────────── */
+  function toast(msg, type = "success") {
+    const el = document.createElement("div");
+    const bg = type === "error" ? "#C92A2A" : type === "warning" ? "#E67700" : "#2F9E44";
+    el.style.cssText = `position:fixed;top:20px;right:20px;z-index:99999;
     background:${bg};color:#fff;padding:12px 20px;border-radius:8px;
     font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif;
     box-shadow:0 4px 20px rgba(0,0,0,.2);max-width:360px;line-height:1.4;
     animation:toastIn .2s ease`;
-  el.textContent=msg;
-  const style=document.createElement("style");
-  style.textContent="@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}";
-  document.head.appendChild(style);
-  document.body.appendChild(el);
-  setTimeout(()=>el.remove(),3500);
-}
+    el.textContent = msg;
+    const style = document.createElement("style");
+    style.textContent = "@keyframes toastIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}";
+    document.head.appendChild(style);
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 3500);
+  }
 
-/* ─── SVG Icons ──────────────────────────────────────────────── */
-const IC={
-  grid:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
-  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
-  pay:'<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
-  bank:'<path d="M3 22h18M6 18v-7m4 7v-7m4 7v-7m4 7v-7M3 7l9-5 9 5H3z"/>',
-  accts:'<path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM12 14v-4M8 14v-2M16 14v-3"/>',
-  chart:'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
-  trend:'<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
-  purchase:'<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>',
-  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
-  plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
-  refresh:'<polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
-  trash:'<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>',
-  check:'<polyline points="20 6 9 17 4 12"/>',
-  x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
-  edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
-  print:'<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
-  check:'<polyline points="20 6 9 17 4 12"/>',
-  'arrow-left':'<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>',
-  ext:'<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
-  send:'<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
-  share:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
-};
-function icon(k,s){s=s||16;return`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k]||""}</svg>`;}
+  /* ─── SVG Icons ──────────────────────────────────────────────── */
+  const IC = {
+    grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+    file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+    pay: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
+    bank: '<path d="M3 22h18M6 18v-7m4 7v-7m4 7v-7m4 7v-7M3 7l9-5 9 5H3z"/>',
+    accts: '<path d="M20 7H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2zM12 14v-4M8 14v-2M16 14v-3"/>',
+    chart: '<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+    trend: '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
+    purchase: '<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
+    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    refresh: '<polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+    trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+    edit: '<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
+    print: '<polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    'arrow-left': '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>',
+    ext: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+    share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
+  };
+  function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
-function statusBadge(s){
-  return{Paid:"b-badge-green","Partly Paid":"b-badge-amber",Submitted:"b-badge-amber",
-    Draft:"b-badge-muted",Cancelled:"b-badge-red",Overdue:"b-badge-red",
-    Receive:"b-badge-green",Pay:"b-badge-red",Unreconciled:"b-badge-amber",
-    Reconciled:"b-badge-green"}[s]||"b-badge-muted";
-}
+  function statusBadge(s) {
+    return {
+      Paid: "b-badge-green", "Partly Paid": "b-badge-amber", Submitted: "b-badge-amber",
+      Draft: "b-badge-muted", Cancelled: "b-badge-red", Overdue: "b-badge-red",
+      Receive: "b-badge-green", Pay: "b-badge-red", Unreconciled: "b-badge-amber",
+      Reconciled: "b-badge-green"
+    }[s] || "b-badge-muted";
+  }
 
-/* ═══════════════════════════════════════════════════════════════
-   INLINE NEW INVOICE MODAL
-   Opens a fully functional form inside the Books UI.
-   Saves to Frappe via API then redirects to the saved doc.
-═══════════════════════════════════════════════════════════════ */
-const InvoiceModal=defineComponent({name:"InvoiceModal",
-  props:{show:Boolean,doctype:{type:String,default:"Sales Invoice"}},
-  emits:["close","saved"],
-  setup(props,{emit}){
-    const saving=ref(false);
-    const company=ref(co());
-    const customers=ref([]);
-    const accounts_ar=ref([]);
-    const accounts_income=ref([]);
-    const taxTemplates=ref([]);
+  /* ═══════════════════════════════════════════════════════════════
+     INLINE NEW INVOICE MODAL
+     Opens a fully functional form inside the Books UI.
+     Saves to Frappe via API then redirects to the saved doc.
+  ═══════════════════════════════════════════════════════════════ */
+  const InvoiceModal = defineComponent({
+    name: "InvoiceModal",
+    props: { show: Boolean, doctype: { type: String, default: "Sales Invoice" } },
+    emits: ["close", "saved"],
+    setup(props, { emit }) {
+      const saving = ref(false);
+      const company = ref(co());
+      const customers = ref([]);
+      const accounts_ar = ref([]);
+      const accounts_income = ref([]);
+      const taxTemplates = ref([]);
 
-    const form=reactive({
-      naming_series:"INV-.YYYY.-.#####",
-      customer:"",customer_name:"",
-      posting_date:today(),due_date:today(),
-      company:co(),currency:"INR",
-      debit_to:"",income_account:"",
-      items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
-      taxes:[],
-      notes:"",
-      net_total:0,total_tax:0,grand_total:0,
-    });
+      const form = reactive({
+        naming_series: "INV-.YYYY.-.#####",
+        customer: "", customer_name: "",
+        posting_date: today(), due_date: today(),
+        company: co(), currency: "INR",
+        debit_to: "", income_account: "",
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+        taxes: [],
+        notes: "",
+        net_total: 0, total_tax: 0, grand_total: 0,
+      });
 
-    const isSI=computed(()=>props.doctype==="Sales Invoice");
+      const isSI = computed(() => props.doctype === "Sales Invoice");
 
-    // Recalculate totals whenever items or taxes change
-    function recalc(){
-      form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
-      const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
-      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
-      const tax=form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0);
-      form.net_total=Math.round(net*100)/100;
-      form.total_tax=Math.round(tax*100)/100;
-      form.grand_total=Math.round((net+tax)*100)/100;
-    }
+      // Recalculate totals whenever items or taxes change
+      function recalc() {
+        form.items.forEach(i => { i.amount = Math.round(flt(i.qty) * flt(i.rate) * 100) / 100; });
+        const net = form.items.reduce((s, i) => s + flt(i.amount), 0);
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(net * flt(t.rate) / 100 * 100) / 100 : 0; });
+        const tax = form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0);
+        form.net_total = Math.round(net * 100) / 100;
+        form.total_tax = Math.round(tax * 100) / 100;
+        form.grand_total = Math.round((net + tax) * 100) / 100;
+      }
 
-    function addItem(){form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0});}
-    function removeItem(i){if(form.items.length>1){form.items.splice(i,1);recalc();}}
-    function addTax(){form.taxes.push({tax_type:"CGST",description:"CGST",rate:9,tax_amount:0,account_head:""});}
-    function removeTax(i){form.taxes.splice(i,1);recalc();}
+      function addItem() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeItem(i) { if (form.items.length > 1) { form.items.splice(i, 1); recalc(); } }
+      function addTax() { form.taxes.push({ tax_type: "CGST", description: "CGST", rate: 9, tax_amount: 0, account_head: "" }); }
+      function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
 
-    // When customer is selected, fetch their name
-    async function onCustomer(){
-      if(!form.customer)return;
-      try{
-        const r=await apiGET("frappe.client.get_value",{
-          doctype:"Customer",filters:{name:form.customer},
-          fieldname:["default_currency"]
-        });
-        form.customer_name=form.customer; // name IS the display name for custom Customer
-        if(r?.default_currency)form.currency=r.default_currency;
-      }catch{}
-    }
+      // When customer is selected, fetch their name
+      async function onCustomer() {
+        if (!form.customer) return;
+        try {
+          const r = await apiGET("frappe.client.get_value", {
+            doctype: "Customer", filters: { name: form.customer },
+            fieldname: ["default_currency"]
+          });
+          form.customer_name = form.customer; // name IS the display name for custom Customer
+          if (r?.default_currency) form.currency = r.default_currency;
+        } catch { }
+      }
 
-    async function loadDefaults(){
-      const c=await resolveCompany();
-      form.company=c;
-      // Query AR accounts exactly like Frappe desk does: account_type=Receivable, is_group=0
-      try{
-        const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});
-        accounts_ar.value=ar;
-        if(ar.length&&!form.debit_to)form.debit_to=ar[0].name;
-      }catch(e){console.warn("AR accounts failed:",e.message);}
-      // Income accounts
-      try{
-        const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});
-        accounts_income.value=inc;
-        if(inc.length&&!form.income_account)form.income_account=inc[0].name;
-      }catch(e){console.warn("Income accounts failed:",e.message);}
-      // Load customers
-      try{
-        customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});
-      }catch{}
-    }
+      async function loadDefaults() {
+        const c = await resolveCompany();
+        form.company = c;
+        // Query AR accounts exactly like Frappe desk does: account_type=Receivable, is_group=0
+        try {
+          const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 });
+          accounts_ar.value = ar;
+          if (ar.length && !form.debit_to) form.debit_to = ar[0].name;
+        } catch (e) { console.warn("AR accounts failed:", e.message); }
+        // Income accounts
+        try {
+          const inc = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Income Account", "Income"]], ["is_group", "=", 0]], limit: 50 });
+          accounts_income.value = inc;
+          if (inc.length && !form.income_account) form.income_account = inc[0].name;
+        } catch (e) { console.warn("Income accounts failed:", e.message); }
+        // Load customers
+        try {
+          customers.value = await apiList("Customer", { fields: ["name"], limit: 50, order: "name asc" });
+        } catch { }
+      }
 
-    onMounted(loadDefaults);
-    watch(()=>props.show,v=>{if(v)loadDefaults();});
+      onMounted(loadDefaults);
+      watch(() => props.show, v => { if (v) loadDefaults(); });
 
-    async function applyTaxTemplate(tplName){}  // Tax templates not available
+      async function applyTaxTemplate(tplName) { }  // Tax templates not available
 
-    async function save(andSubmit){
-      if(!form.customer){toast("Please select a Customer","error");return;}
-      if(!form.items[0].item_name&&!form.items[0].rate){toast("Please add at least one item","error");return;}
-      if(!form.debit_to){toast("Please set the Accounts Receivable (Debit To) account","error");return;}
-      if(!form.income_account){toast("Please set the Income Account","error");return;}
+      async function save(andSubmit) {
+        if (!form.customer) { toast("Please select a Customer", "error"); return; }
+        if (!form.items[0].item_name && !form.items[0].rate) { toast("Please add at least one item", "error"); return; }
+        if (!form.debit_to) { toast("Please set the Accounts Receivable (Debit To) account", "error"); return; }
+        if (!form.income_account) { toast("Please set the Income Account", "error"); return; }
 
-      recalc();
-      saving.value=true;
+        recalc();
+        saving.value = true;
 
-      const doc={
-        doctype:props.doctype,
-        naming_series:form.naming_series,
-        customer:form.customer,
-        posting_date:form.posting_date,
-        due_date:form.due_date||form.posting_date,
-        company:form.company,
-        currency:form.currency||"INR",
-        debit_to:form.debit_to,
-        income_account:form.income_account,
-        notes:form.notes,
-        items:form.items.filter(i=>i.item_name||flt(i.rate)).map((i,idx)=>({
-          doctype:"Sales Invoice Item",
-          item_name:i.item_name||"Item "+(idx+1),
-          description:i.description||i.item_name,
-          qty:flt(i.qty)||1,
-          rate:flt(i.rate),
-          amount:flt(i.amount),
-        })),
-        taxes:form.taxes.map(t=>({
-          doctype:"Tax Line",
-          tax_type:t.tax_type,
-          description:t.description||t.tax_type,
-          rate:flt(t.rate),
-          tax_amount:flt(t.tax_amount),
-          account_head:t.account_head||"",
-        })),
+        const doc = {
+          doctype: props.doctype,
+          naming_series: form.naming_series,
+          customer: form.customer,
+          posting_date: form.posting_date,
+          due_date: form.due_date || form.posting_date,
+          company: form.company,
+          currency: form.currency || "INR",
+          debit_to: form.debit_to,
+          income_account: form.income_account,
+          notes: form.notes,
+          items: form.items.filter(i => i.item_name || flt(i.rate)).map((i, idx) => ({
+            doctype: "Sales Invoice Item",
+            item_name: i.item_name || "Item " + (idx + 1),
+            description: i.description || i.item_name,
+            qty: flt(i.qty) || 1,
+            rate: flt(i.rate),
+            amount: flt(i.amount),
+          })),
+          taxes: form.taxes.map(t => ({
+            doctype: "Tax Line",
+            tax_type: t.tax_type,
+            description: t.description || t.tax_type,
+            rate: flt(t.rate),
+            tax_amount: flt(t.tax_amount),
+            account_head: t.account_head || "",
+          })),
+        };
+
+        try {
+          const saved = await apiSave(doc);
+          if (andSubmit) {
+            await apiSubmit(props.doctype, saved.name);
+            toast("Invoice " + saved.name + " submitted!");
+          } else {
+            toast("Invoice " + saved.name + " saved as Draft");
+          }
+          emit("saved", saved.name);
+          emit("close");
+          // Navigate to the saved doc in Frappe desk
+          setTimeout(() => window.open(docUrl(props.doctype, saved.name), "_blank"), 300);
+        } catch (e) {
+          toast(e.message || "Could not save invoice", "error");
+        } finally { saving.value = false; }
+      }
+
+      function onPostingDateChange() {
+        if (!form.due_date || form.due_date < form.posting_date)
+          form.due_date = form.posting_date;
+      }
+      return {
+        form, saving, customers, accounts_ar, accounts_income, taxTemplates, isSI,
+        recalc, addItem, removeItem, addTax, removeTax, onCustomer, applyTaxTemplate, save, fmt, flt, icon, toast, onPostingDateChange
       };
-
-      try{
-        const saved=await apiSave(doc);
-        if(andSubmit){
-          await apiSubmit(props.doctype,saved.name);
-          toast("Invoice "+saved.name+" submitted!");
-        } else {
-          toast("Invoice "+saved.name+" saved as Draft");
-        }
-        emit("saved",saved.name);
-        emit("close");
-        // Navigate to the saved doc in Frappe desk
-        setTimeout(()=>window.open(docUrl(props.doctype,saved.name),"_blank"),300);
-      }catch(e){
-        toast(e.message||"Could not save invoice","error");
-      }finally{saving.value=false;}
-    }
-
-    function onPostingDateChange(){
-      if(!form.due_date||form.due_date<form.posting_date)
-        form.due_date=form.posting_date;
-    }
-    return{form,saving,customers,accounts_ar,accounts_income,taxTemplates,isSI,
-           recalc,addItem,removeItem,addTax,removeTax,onCustomer,applyTaxTemplate,save,fmt,flt,icon,toast,onPostingDateChange};
-  },
-  template:`
+    },
+    template: `
 <teleport to="body">
 <div v-if="show" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:flex-start;justify-content:center;
      background:rgba(0,0,0,.45);padding:32px 16px;overflow-y:auto" @click.self="$emit('close')">
@@ -590,64 +595,65 @@ const InvoiceModal=defineComponent({name:"InvoiceModal",
 </teleport>
 `});
 
-/* ═══════════════════════════════════════════════════════════════
-   SEND EMAIL PAGE — full Zoho Books style
-═══════════════════════════════════════════════════════════════ */
-const SendEmailModal=defineComponent({name:"SendEmailModal",
-  props:{show:Boolean,invoiceName:{type:String,default:""},inv:{type:Object,default:null}},
-  emits:["close","sent"],
-  setup(props,{emit}){
-    const sending=ref(false),loading=ref(false);
-    const error=ref("");
-    const fromEmail=ref("");
-    // "To" as tag chips
-    const toInput=ref(""),toTags=ref([]);
-    const ccInput=ref(""),ccTags=ref([]);
-    const bccInput=ref(""),bccTags=ref([]);
-    const showCc=ref(true),showBcc=ref(false);
-    const subject=ref("");
-    const editorRef=ref(null);
+  /* ═══════════════════════════════════════════════════════════════
+     SEND EMAIL PAGE — full Zoho Books style
+  ═══════════════════════════════════════════════════════════════ */
+  const SendEmailModal = defineComponent({
+    name: "SendEmailModal",
+    props: { show: Boolean, invoiceName: { type: String, default: "" }, inv: { type: Object, default: null } },
+    emits: ["close", "sent"],
+    setup(props, { emit }) {
+      const sending = ref(false), loading = ref(false);
+      const error = ref("");
+      const fromEmail = ref("");
+      // "To" as tag chips
+      const toInput = ref(""), toTags = ref([]);
+      const ccInput = ref(""), ccTags = ref([]);
+      const bccInput = ref(""), bccTags = ref([]);
+      const showCc = ref(true), showBcc = ref(false);
+      const subject = ref("");
+      const editorRef = ref(null);
 
-    function addTag(input,tags){
-      const val=input.value.trim().replace(/,$/,"");
-      if(val&&!tags.value.includes(val)){tags.value.push(val);}
-      input.value="";
-    }
-    function removeTag(tags,i){tags.value.splice(i,1);}
-    function onToKey(e){if(e.key===","||e.key==="Enter"||e.key===" "){e.preventDefault();addTag(toInput,toTags);}}
-    function onCcKey(e){if(e.key===","||e.key==="Enter"||e.key===" "){e.preventDefault();addTag(ccInput,ccTags);}}
-    function onBccKey(e){if(e.key===","||e.key==="Enter"||e.key===" "){e.preventDefault();addTag(bccInput,bccTags);}}
+      function addTag(input, tags) {
+        const val = input.value.trim().replace(/,$/, "");
+        if (val && !tags.value.includes(val)) { tags.value.push(val); }
+        input.value = "";
+      }
+      function removeTag(tags, i) { tags.value.splice(i, 1); }
+      function onToKey(e) { if (e.key === "," || e.key === "Enter" || e.key === " ") { e.preventDefault(); addTag(toInput, toTags); } }
+      function onCcKey(e) { if (e.key === "," || e.key === "Enter" || e.key === " ") { e.preventDefault(); addTag(ccInput, ccTags); } }
+      function onBccKey(e) { if (e.key === "," || e.key === "Enter" || e.key === " ") { e.preventDefault(); addTag(bccInput, bccTags); } }
 
-    // Rich text commands
-    function execCmd(cmd,val){document.execCommand(cmd,false,val||null);editorRef.value?.focus();}
+      // Rich text commands
+      function execCmd(cmd, val) { document.execCommand(cmd, false, val || null); editorRef.value?.focus(); }
 
-    function buildInvoiceHtml(inv){
-      if(!inv)return"";
-      const amt=n=>new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR"}).format(n||0);
-      const rows=(inv.items||[]).map((it,i)=>`
+      function buildInvoiceHtml(inv) {
+        if (!inv) return "";
+        const amt = n => new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(n || 0);
+        const rows = (inv.items || []).map((it, i) => `
         <tr>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#555">${i+1}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#1a1d23;font-weight:600">${it.item_name||it.item_code||""}</td>
-          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${(it.qty||0).toFixed(2)}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#555">${i + 1}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;color:#1a1d23;font-weight:600">${it.item_name || it.item_code || ""}</td>
+          <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${(it.qty || 0).toFixed(2)}</td>
           <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right">${amt(it.rate)}</td>
           <td style="padding:10px 12px;border-bottom:1px solid #f0f0f0;font-size:13px;text-align:right;font-weight:700">${amt(it.amount)}</td>
         </tr>`).join("");
-      const taxes=(inv.taxes||[]).map(t=>`
+        const taxes = (inv.taxes || []).map(t => `
         <tr><td style="padding:4px 12px;font-size:12px;color:#666" colspan="3"></td>
-          <td style="padding:4px 12px;font-size:12px;color:#666;text-align:right">${t.tax_type||""} (${t.rate||0}%)</td>
+          <td style="padding:4px 12px;font-size:12px;color:#666;text-align:right">${t.tax_type || ""} (${t.rate || 0}%)</td>
           <td style="padding:4px 12px;font-size:12px;text-align:right">${amt(t.tax_amount)}</td></tr>`).join("");
-      return `
+        return `
 <div style="font-family:Arial,sans-serif;max-width:680px;margin:0 auto">
   <div style="background:#2563EB;padding:24px 32px;text-align:center;border-radius:8px 8px 0 0">
     <h2 style="color:#fff;margin:0;font-size:20px;letter-spacing:.5px">Invoice #${inv.name}</h2>
   </div>
   <div style="background:#fff;padding:28px 32px;border:1px solid #e8eaed;border-top:none;border-radius:0 0 8px 8px">
-    <p style="font-size:15px;color:#1a1d23;margin:0 0 6px">Dear ${inv.customer_name||inv.customer||"Customer"},</p>
+    <p style="font-size:15px;color:#1a1d23;margin:0 0 6px">Dear ${inv.customer_name || inv.customer || "Customer"},</p>
     <p style="font-size:14px;color:#555;margin:0 0 20px;line-height:1.6">Thank you for your business. Your invoice can be viewed, printed and downloaded as PDF from the link below. You can also choose to pay it online.</p>
     <div style="background:#f8faff;border:1px solid #dbe4ff;border-radius:8px;padding:18px 24px;margin-bottom:24px">
       <div style="font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#888;margin-bottom:8px">INVOICE AMOUNT</div>
       <div style="font-size:28px;font-weight:800;color:#2563EB">${amt(inv.grand_total)}</div>
-      <div style="font-size:12px;color:#888;margin-top:4px">Due: ${inv.due_date||"—"}</div>
+      <div style="font-size:12px;color:#888;margin-top:4px">Due: ${inv.due_date || "—"}</div>
     </div>
     <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
       <thead>
@@ -673,61 +679,63 @@ const SendEmailModal=defineComponent({name:"SendEmailModal",
     <p style="font-size:13px;color:#888;margin:0">If you have any questions, please reply to this email.</p>
   </div>
 </div>`;
-    }
-
-    async function loadDefaults(){
-      if(!props.invoiceName)return;
-      loading.value=true; error.value="";
-      try{
-        const d=await apiGET("zoho_books_clone.api.docs.get_invoice_email_defaults",{invoice_name:props.invoiceName});
-        toTags.value=d.to?[d.to]:[];
-        subject.value=d.subject||"";
-        fromEmail.value=d.from_email||frappe?.session?.user||"";
-        // Set editor content to beautiful HTML template
-        if(editorRef.value){
-          editorRef.value.innerHTML=buildInvoiceHtml(props.inv);
-        }
-      }catch(e){error.value="Could not load defaults: "+e.message;}
-      finally{loading.value=false;}
-    }
-
-    watch(()=>props.show,async v=>{
-      if(v&&props.invoiceName){
-        await nextTick();
-        loadDefaults();
       }
-    });
-    // Also watch inv change to rebuild template
-    watch(()=>props.inv,v=>{
-      if(props.show&&editorRef.value&&v)editorRef.value.innerHTML=buildInvoiceHtml(v);
-    });
 
-    async function send(){
-      // Flush any pending tag input
-      if(toInput.value.trim())addTag(toInput,toTags);
-      if(!toTags.value.length){error.value="Please enter at least one recipient email address.";return;}
-      sending.value=true; error.value="";
-      const bodyHtml=editorRef.value?editorRef.value.innerHTML:"";
-      try{
-        await apiGET("zoho_books_clone.api.docs.send_invoice_email",{
-          invoice_name:props.invoiceName,
-          to:toTags.value.join(","),
-          subject:subject.value,
-          body:bodyHtml,
-          cc:ccTags.value.join(",")
-        });
-        toast("Invoice emailed to "+toTags.value.join(", "),"success");
-        emit("sent");
-        emit("close");
-      }catch(e){error.value=e.message||"Failed to send email.";}
-      finally{sending.value=false;}
-    }
+      async function loadDefaults() {
+        if (!props.invoiceName) return;
+        loading.value = true; error.value = "";
+        try {
+          const d = await apiGET("zoho_books_clone.api.docs.get_invoice_email_defaults", { invoice_name: props.invoiceName });
+          toTags.value = d.to ? [d.to] : [];
+          subject.value = d.subject || "";
+          fromEmail.value = d.from_email || frappe?.session?.user || "";
+          // Set editor content to beautiful HTML template
+          if (editorRef.value) {
+            editorRef.value.innerHTML = buildInvoiceHtml(props.inv);
+          }
+        } catch (e) { error.value = "Could not load defaults: " + e.message; }
+        finally { loading.value = false; }
+      }
 
-    return{form:{},sending,loading,error,fromEmail,
-      toInput,toTags,ccInput,ccTags,bccInput,bccTags,showCc,showBcc,subject,editorRef,
-      addTag,removeTag,onToKey,onCcKey,onBccKey,execCmd,send};
-  },
-  template:`
+      watch(() => props.show, async v => {
+        if (v && props.invoiceName) {
+          await nextTick();
+          loadDefaults();
+        }
+      });
+      // Also watch inv change to rebuild template
+      watch(() => props.inv, v => {
+        if (props.show && editorRef.value && v) editorRef.value.innerHTML = buildInvoiceHtml(v);
+      });
+
+      async function send() {
+        // Flush any pending tag input
+        if (toInput.value.trim()) addTag(toInput, toTags);
+        if (!toTags.value.length) { error.value = "Please enter at least one recipient email address."; return; }
+        sending.value = true; error.value = "";
+        const bodyHtml = editorRef.value ? editorRef.value.innerHTML : "";
+        try {
+          await apiGET("zoho_books_clone.api.docs.send_invoice_email", {
+            invoice_name: props.invoiceName,
+            to: toTags.value.join(","),
+            subject: subject.value,
+            body: bodyHtml,
+            cc: ccTags.value.join(",")
+          });
+          toast("Invoice emailed to " + toTags.value.join(", "), "success");
+          emit("sent");
+          emit("close");
+        } catch (e) { error.value = e.message || "Failed to send email."; }
+        finally { sending.value = false; }
+      }
+
+      return {
+        form: {}, sending, loading, error, fromEmail,
+        toInput, toTags, ccInput, ccTags, bccInput, bccTags, showCc, showBcc, subject, editorRef,
+        addTag, removeTag, onToKey, onCcKey, onBccKey, execCmd, send
+      };
+    },
+    template: `
 <teleport to="body">
 <div v-if="show" class="sem-page">
   <!-- Page header -->
@@ -868,102 +876,103 @@ const SendEmailModal=defineComponent({name:"SendEmailModal",
 </teleport>
 `});
 
-/* ═══════════════════════════════════════════════════════════════
-   PURCHASE BILL MODAL — same structure, different fields
-═══════════════════════════════════════════════════════════════ */
-const PurchaseModal=defineComponent({name:"PurchaseModal",
-  props:{show:Boolean},
-  emits:["close","saved"],
-  setup(props,{emit}){
-    const saving=ref(false);
-    const suppliers=ref([]),accounts_ap=ref([]),accounts_exp=ref([]);
+  /* ═══════════════════════════════════════════════════════════════
+     PURCHASE BILL MODAL — same structure, different fields
+  ═══════════════════════════════════════════════════════════════ */
+  const PurchaseModal = defineComponent({
+    name: "PurchaseModal",
+    props: { show: Boolean },
+    emits: ["close", "saved"],
+    setup(props, { emit }) {
+      const saving = ref(false);
+      const suppliers = ref([]), accounts_ap = ref([]), accounts_exp = ref([]);
 
-    const form=reactive({
-      naming_series:"PINV-.YYYY.-.#####",
-      supplier:"",supplier_name:"",
-      posting_date:today(),due_date:today(),
-      bill_no:"",
-      company:co(),currency:"INR",
-      credit_to:"",expense_account:"",
-      items:[{item_name:"",qty:1,rate:0,amount:0}],
-      taxes:[],
-      net_total:0,total_tax:0,grand_total:0,
-    });
+      const form = reactive({
+        naming_series: "PINV-.YYYY.-.#####",
+        supplier: "", supplier_name: "",
+        posting_date: today(), due_date: today(),
+        bill_no: "",
+        company: co(), currency: "INR",
+        credit_to: "", expense_account: "",
+        items: [{ item_name: "", qty: 1, rate: 0, amount: 0 }],
+        taxes: [],
+        net_total: 0, total_tax: 0, grand_total: 0,
+      });
 
-    function recalc(){
-      form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
-      const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
-      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
-      const tax=form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0);
-      form.net_total=Math.round(net*100)/100;
-      form.total_tax=Math.round(tax*100)/100;
-      form.grand_total=Math.round((net+tax)*100)/100;
-    }
+      function recalc() {
+        form.items.forEach(i => { i.amount = Math.round(flt(i.qty) * flt(i.rate) * 100) / 100; });
+        const net = form.items.reduce((s, i) => s + flt(i.amount), 0);
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(net * flt(t.rate) / 100 * 100) / 100 : 0; });
+        const tax = form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0);
+        form.net_total = Math.round(net * 100) / 100;
+        form.total_tax = Math.round(tax * 100) / 100;
+        form.grand_total = Math.round((net + tax) * 100) / 100;
+      }
 
-    function addItem(){form.items.push({item_name:"",qty:1,rate:0,amount:0});}
-    function removeItem(i){if(form.items.length>1){form.items.splice(i,1);recalc();}}
+      function addItem() { form.items.push({ item_name: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeItem(i) { if (form.items.length > 1) { form.items.splice(i, 1); recalc(); } }
 
-    async function loadDefaults(){
-      const c=await resolveCompany();form.company=c;
-      try{
-        const ap=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["is_group","=",0]],limit:50});
-        accounts_ap.value=ap;
-        if(ap.length&&!form.credit_to)form.credit_to=ap[0].name;
-      }catch(e){console.warn("AP accounts failed:",e.message);}
-      try{
-        const exp=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Expense Account","Expense","Cost of Goods Sold"]],["is_group","=",0]],limit:50});
-        accounts_exp.value=exp;
-        if(exp.length&&!form.expense_account)form.expense_account=exp[0].name;
-      }catch(e){console.warn("Expense accounts failed:",e.message);}
-      try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
-    }
+      async function loadDefaults() {
+        const c = await resolveCompany(); form.company = c;
+        try {
+          const ap = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Payable"], ["is_group", "=", 0]], limit: 50 });
+          accounts_ap.value = ap;
+          if (ap.length && !form.credit_to) form.credit_to = ap[0].name;
+        } catch (e) { console.warn("AP accounts failed:", e.message); }
+        try {
+          const exp = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Expense Account", "Expense", "Cost of Goods Sold"]], ["is_group", "=", 0]], limit: 50 });
+          accounts_exp.value = exp;
+          if (exp.length && !form.expense_account) form.expense_account = exp[0].name;
+        } catch (e) { console.warn("Expense accounts failed:", e.message); }
+        try { suppliers.value = await apiList("Supplier", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
+      }
 
-    onMounted(loadDefaults);
-    watch(()=>props.show,v=>{if(v)loadDefaults();});
+      onMounted(loadDefaults);
+      watch(() => props.show, v => { if (v) loadDefaults(); });
 
-    async function onSupplier(){
-      if(!form.supplier)return;
-      try{
-        const r=await apiGET("frappe.client.get_value",{doctype:"Supplier",filters:JSON.stringify({name:form.supplier}),fieldname:JSON.stringify(["default_currency"])});
-        form.supplier_name=form.supplier;
-        if(r.default_currency)form.currency=r.default_currency;
-      }catch{}
-    }
+      async function onSupplier() {
+        if (!form.supplier) return;
+        try {
+          const r = await apiGET("frappe.client.get_value", { doctype: "Supplier", filters: JSON.stringify({ name: form.supplier }), fieldname: JSON.stringify(["default_currency"]) });
+          form.supplier_name = form.supplier;
+          if (r.default_currency) form.currency = r.default_currency;
+        } catch { }
+      }
 
-    async function save(andSubmit){
-      if(!form.supplier){toast("Please select a Supplier","error");return;}
-      if(!form.items[0].item_name&&!form.items[0].rate){toast("Please add at least one item","error");return;}
-      if(!form.credit_to){toast("Please set the Accounts Payable (Credit To) account","error");return;}
-      if(!form.expense_account){toast("Please set the Expense Account","error");return;}
-      recalc();saving.value=true;
-      const doc={
-        doctype:"Purchase Invoice",
-        naming_series:form.naming_series,
-        supplier:form.supplier,
-        posting_date:form.posting_date,due_date:form.due_date||form.posting_date,
-        bill_no:form.bill_no,
-        company:form.company,currency:form.currency||"INR",
-        credit_to:form.credit_to,expense_account:form.expense_account,
-        items:form.items.filter(i=>i.item_name||flt(i.rate)).map((i,idx)=>({
-          doctype:"Purchase Invoice Item",
-          item_name:i.item_name||"Item "+(idx+1),
-          qty:flt(i.qty)||1,rate:flt(i.rate),amount:flt(i.amount),
-        })),
-        taxes:form.taxes.map(t=>({doctype:"Tax Line",tax_type:t.tax_type,description:t.description||t.tax_type,rate:flt(t.rate),tax_amount:flt(t.tax_amount),account_head:t.account_head||""})),
-      };
-      try{
-        const saved=await apiSave(doc);
-        if(andSubmit){await apiSubmit("Purchase Invoice",saved.name);toast("Bill "+saved.name+" submitted!");}
-        else{toast("Bill "+saved.name+" saved as Draft");}
-        emit("saved",saved.name);emit("close");
-        setTimeout(()=>window.open(docUrl("Purchase Invoice",saved.name),"_blank"),300);
-      }catch(e){toast(e.message||"Could not save bill","error");}
-      finally{saving.value=false;}
-    }
+      async function save(andSubmit) {
+        if (!form.supplier) { toast("Please select a Supplier", "error"); return; }
+        if (!form.items[0].item_name && !form.items[0].rate) { toast("Please add at least one item", "error"); return; }
+        if (!form.credit_to) { toast("Please set the Accounts Payable (Credit To) account", "error"); return; }
+        if (!form.expense_account) { toast("Please set the Expense Account", "error"); return; }
+        recalc(); saving.value = true;
+        const doc = {
+          doctype: "Purchase Invoice",
+          naming_series: form.naming_series,
+          supplier: form.supplier,
+          posting_date: form.posting_date, due_date: form.due_date || form.posting_date,
+          bill_no: form.bill_no,
+          company: form.company, currency: form.currency || "INR",
+          credit_to: form.credit_to, expense_account: form.expense_account,
+          items: form.items.filter(i => i.item_name || flt(i.rate)).map((i, idx) => ({
+            doctype: "Purchase Invoice Item",
+            item_name: i.item_name || "Item " + (idx + 1),
+            qty: flt(i.qty) || 1, rate: flt(i.rate), amount: flt(i.amount),
+          })),
+          taxes: form.taxes.map(t => ({ doctype: "Tax Line", tax_type: t.tax_type, description: t.description || t.tax_type, rate: flt(t.rate), tax_amount: flt(t.tax_amount), account_head: t.account_head || "" })),
+        };
+        try {
+          const saved = await apiSave(doc);
+          if (andSubmit) { await apiSubmit("Purchase Invoice", saved.name); toast("Bill " + saved.name + " submitted!"); }
+          else { toast("Bill " + saved.name + " saved as Draft"); }
+          emit("saved", saved.name); emit("close");
+          setTimeout(() => window.open(docUrl("Purchase Invoice", saved.name), "_blank"), 300);
+        } catch (e) { toast(e.message || "Could not save bill", "error"); }
+        finally { saving.value = false; }
+      }
 
-    return{form,saving,suppliers,accounts_ap,accounts_exp,recalc,addItem,removeItem,onSupplier,save,fmt,flt,icon};
-  },
-  template:`
+      return { form, saving, suppliers, accounts_ap, accounts_exp, recalc, addItem, removeItem, onSupplier, save, fmt, flt, icon };
+    },
+    template: `
 <teleport to="body">
 <div v-if="show" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:flex-start;
      justify-content:center;background:rgba(0,0,0,.45);padding:32px 16px;overflow-y:auto" @click.self="$emit('close')">
@@ -1054,143 +1063,144 @@ const PurchaseModal=defineComponent({name:"PurchaseModal",
 </teleport>
 `});
 
-/* ═══════════════════════════════════════════════════════════════
-   PAYMENT MODAL
-═══════════════════════════════════════════════════════════════ */
-const PaymentModal=defineComponent({name:"PaymentModal",
-  props:{show:Boolean},
-  emits:["close","saved"],
-  setup(props,{emit}){
-    const saving=ref(false);
-    const accounts_bank=ref([]),accounts_ar=ref([]),accounts_ap=ref([]);
-    const invoices=ref([]);
+  /* ═══════════════════════════════════════════════════════════════
+     PAYMENT MODAL
+  ═══════════════════════════════════════════════════════════════ */
+  const PaymentModal = defineComponent({
+    name: "PaymentModal",
+    props: { show: Boolean },
+    emits: ["close", "saved"],
+    setup(props, { emit }) {
+      const saving = ref(false);
+      const accounts_bank = ref([]), accounts_ar = ref([]), accounts_ap = ref([]);
+      const invoices = ref([]);
 
-    const form=reactive({
-      naming_series:"PAY-.YYYY.-.#####",
-      payment_type:"Receive",party_type:"Customer",party:"",party_name:"",
-      payment_date:today(),paid_amount:0,currency:"INR",
-      mode_of_payment:"Bank Transfer",reference_no:"",
-      paid_from:"",paid_to:"",company:co(),
-      remarks:"",
-    });
+      const form = reactive({
+        naming_series: "PAY-.YYYY.-.#####",
+        payment_type: "Receive", party_type: "Customer", party: "", party_name: "",
+        payment_date: today(), paid_amount: 0, currency: "INR",
+        mode_of_payment: "Bank Transfer", reference_no: "",
+        paid_from: "", paid_to: "", company: co(),
+        remarks: "",
+      });
 
-    const customers=ref([]),suppliers=ref([]);
-    const paymentModes=ref([{name:"Bank Transfer"},{name:"Cash"},{name:"Cheque"},{name:"NEFT"},{name:"RTGS"},{name:"UPI"}]);
+      const customers = ref([]), suppliers = ref([]);
+      const paymentModes = ref([{ name: "Bank Transfer" }, { name: "Cash" }, { name: "Cheque" }, { name: "NEFT" }, { name: "RTGS" }, { name: "UPI" }]);
 
-    async function loadDefaults(){
-      const c=await resolveCompany();form.company=c;
-      // Load Mode of Payment from standard Frappe doctype
-      try{
-        const modes=await apiList("Mode of Payment",{fields:["name"],limit:50,order:"name asc"});
-        if(modes.length)paymentModes.value=modes;
-      }catch{/* fallback to hardcoded defaults above */}
-      try{
-        const bank=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Bank","Cash"]],["is_group","=",0]],limit:50});
-        accounts_bank.value=bank;
-      }catch(e){console.warn("Bank accounts failed:",e.message);}
-      try{
-        const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});
-        accounts_ar.value=ar;
-      }catch(e){console.warn("AR accounts failed:",e.message);}
-      try{
-        const ap=await apiList("Account",{fields:["name"],filters:[["account_type","=","Payable"],["is_group","=",0]],limit:50});
-        accounts_ap.value=ap;
-      }catch(e){console.warn("AP accounts failed:",e.message);}
-      try{customers.value=await apiList("Customer",{fields:["name"],limit:50,order:"name asc"});}catch{}
-      try{suppliers.value=await apiList("Supplier",{fields:["name"],limit:50,order:"name asc"});}catch{}
-      _autoFillAccounts();
-    }
-
-    function _autoFillAccounts(){
-      if(form.payment_type==="Receive"){
-        if(accounts_ar.value.length&&!form.paid_from)form.paid_from=accounts_ar.value[0].name;
-        if(accounts_bank.value.length&&!form.paid_to)form.paid_to=accounts_bank.value[0].name;
-      }else{
-        if(accounts_bank.value.length&&!form.paid_from)form.paid_from=accounts_bank.value[0].name;
-        if(accounts_ap.value.length&&!form.paid_to)form.paid_to=accounts_ap.value[0].name;
+      async function loadDefaults() {
+        const c = await resolveCompany(); form.company = c;
+        // Load Mode of Payment from standard Frappe doctype
+        try {
+          const modes = await apiList("Mode of Payment", { fields: ["name"], limit: 50, order: "name asc" });
+          if (modes.length) paymentModes.value = modes;
+        } catch {/* fallback to hardcoded defaults above */ }
+        try {
+          const bank = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Bank", "Cash"]], ["is_group", "=", 0]], limit: 50 });
+          accounts_bank.value = bank;
+        } catch (e) { console.warn("Bank accounts failed:", e.message); }
+        try {
+          const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 });
+          accounts_ar.value = ar;
+        } catch (e) { console.warn("AR accounts failed:", e.message); }
+        try {
+          const ap = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Payable"], ["is_group", "=", 0]], limit: 50 });
+          accounts_ap.value = ap;
+        } catch (e) { console.warn("AP accounts failed:", e.message); }
+        try { customers.value = await apiList("Customer", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
+        try { suppliers.value = await apiList("Supplier", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
+        _autoFillAccounts();
       }
-    }
 
-    watch(()=>form.payment_type,()=>{
-      form.party_type=form.payment_type==="Receive"?"Customer":"Supplier";
-      form.party="";form.party_name="";
-      form.paid_from="";form.paid_to="";
-      invoices.value=[];
-      _autoFillAccounts();
-    });
-    watch(()=>props.show,v=>{if(v)loadDefaults();});
-    onMounted(loadDefaults);
-
-    const partyList=computed(()=>form.party_type==="Customer"?customers.value:suppliers.value);
-
-    async function onParty(){
-      if(!form.party)return;
-      try{
-        const nameField="name"; // custom doctypes use name as display name
-        const r=await apiGET("frappe.client.get_value",{doctype:form.party_type,filters:JSON.stringify({name:form.party}),fieldname:JSON.stringify([nameField])});
-        form.party_name=form.party; // name is display name
-      }catch{}
-      // Load outstanding invoices
-      try{
-        invoices.value=await apiGET("zoho_books_clone.payments.utils.get_outstanding_invoices",{party_type:form.party_type,party:form.party});
-        if(invoices.value.length){
-          form.paid_amount=invoices.value.reduce((s,i)=>s+flt(i.outstanding_amount),0);
-          form.remarks="Payment against "+(invoices.value.length===1?invoices.value[0].name:invoices.value.length+" invoices");
+      function _autoFillAccounts() {
+        if (form.payment_type === "Receive") {
+          if (accounts_ar.value.length && !form.paid_from) form.paid_from = accounts_ar.value[0].name;
+          if (accounts_bank.value.length && !form.paid_to) form.paid_to = accounts_bank.value[0].name;
+        } else {
+          if (accounts_bank.value.length && !form.paid_from) form.paid_from = accounts_bank.value[0].name;
+          if (accounts_ap.value.length && !form.paid_to) form.paid_to = accounts_ap.value[0].name;
         }
-      }catch{}
-    }
+      }
 
-    async function save(){
-      if(!form.party){toast("Please select a party","error");return;}
-      if(!flt(form.paid_amount)){toast("Please enter payment amount","error");return;}
-      if(!form.paid_from){toast("Please select the Paid From account","error");return;}
-      if(!form.paid_to){toast("Please select the Paid To account","error");return;}
-      saving.value=true;
-      try{
-        let peName;
-        if(invoices.value.length){
-          // Use backend utility which handles GL + invoice outstanding update
-          const method=form.payment_type==="Receive"?"zoho_books_clone.payments.utils.make_payment_entry_from_invoice":"zoho_books_clone.payments.utils.make_payment_entry_from_purchase_invoice";
-          peName=await apiGET(method,{
-            source_name:invoices.value[0].name,
-            paid_amount:form.paid_amount,
-            payment_date:form.payment_date,
-            mode_of_payment:form.mode_of_payment,
-            reference_no:form.reference_no,
-            paid_to:form.payment_type==="Receive"?form.paid_to:undefined,
-            paid_from:form.payment_type==="Pay"?form.paid_from:undefined,
-          });
-        }else{
-          // Standalone payment without invoice link
-          const doc={
-            doctype:"Payment Entry",
-            naming_series:form.naming_series,
-            payment_type:form.payment_type,
-            payment_date:form.payment_date,
-            party_type:form.party_type,
-            party:form.party,party_name:form.party_name,
-            paid_from:form.paid_from,paid_to:form.paid_to,
-            paid_amount:flt(form.paid_amount),
-            currency:form.currency,
-            mode_of_payment:form.mode_of_payment,
-            reference_no:form.reference_no,
-            company:form.company,
-            remarks:form.remarks,
-          };
-          const saved=await apiSave(doc);
-          await apiSubmit("Payment Entry",saved.name);
-          peName=saved.name;
-        }
-        toast("Payment "+peName+" recorded!");
-        emit("saved",peName);emit("close");
-        setTimeout(()=>window.open(docUrl("Payment Entry",peName),"_blank"),300);
-      }catch(e){toast(e.message||"Could not save payment","error");}
-      finally{saving.value=false;}
-    }
+      watch(() => form.payment_type, () => {
+        form.party_type = form.payment_type === "Receive" ? "Customer" : "Supplier";
+        form.party = ""; form.party_name = "";
+        form.paid_from = ""; form.paid_to = "";
+        invoices.value = [];
+        _autoFillAccounts();
+      });
+      watch(() => props.show, v => { if (v) loadDefaults(); });
+      onMounted(loadDefaults);
 
-    return{form,saving,customers,suppliers,accounts_bank,accounts_ar,accounts_ap,invoices,partyList,onParty,save,fmt,flt,icon,paymentModes};
-  },
-  template:`
+      const partyList = computed(() => form.party_type === "Customer" ? customers.value : suppliers.value);
+
+      async function onParty() {
+        if (!form.party) return;
+        try {
+          const nameField = "name"; // custom doctypes use name as display name
+          const r = await apiGET("frappe.client.get_value", { doctype: form.party_type, filters: JSON.stringify({ name: form.party }), fieldname: JSON.stringify([nameField]) });
+          form.party_name = form.party; // name is display name
+        } catch { }
+        // Load outstanding invoices
+        try {
+          invoices.value = await apiGET("zoho_books_clone.payments.utils.get_outstanding_invoices", { party_type: form.party_type, party: form.party });
+          if (invoices.value.length) {
+            form.paid_amount = invoices.value.reduce((s, i) => s + flt(i.outstanding_amount), 0);
+            form.remarks = "Payment against " + (invoices.value.length === 1 ? invoices.value[0].name : invoices.value.length + " invoices");
+          }
+        } catch { }
+      }
+
+      async function save() {
+        if (!form.party) { toast("Please select a party", "error"); return; }
+        if (!flt(form.paid_amount)) { toast("Please enter payment amount", "error"); return; }
+        if (!form.paid_from) { toast("Please select the Paid From account", "error"); return; }
+        if (!form.paid_to) { toast("Please select the Paid To account", "error"); return; }
+        saving.value = true;
+        try {
+          let peName;
+          if (invoices.value.length) {
+            // Use backend utility which handles GL + invoice outstanding update
+            const method = form.payment_type === "Receive" ? "zoho_books_clone.payments.utils.make_payment_entry_from_invoice" : "zoho_books_clone.payments.utils.make_payment_entry_from_purchase_invoice";
+            peName = await apiGET(method, {
+              source_name: invoices.value[0].name,
+              paid_amount: form.paid_amount,
+              payment_date: form.payment_date,
+              mode_of_payment: form.mode_of_payment,
+              reference_no: form.reference_no,
+              paid_to: form.payment_type === "Receive" ? form.paid_to : undefined,
+              paid_from: form.payment_type === "Pay" ? form.paid_from : undefined,
+            });
+          } else {
+            // Standalone payment without invoice link
+            const doc = {
+              doctype: "Payment Entry",
+              naming_series: form.naming_series,
+              payment_type: form.payment_type,
+              payment_date: form.payment_date,
+              party_type: form.party_type,
+              party: form.party, party_name: form.party_name,
+              paid_from: form.paid_from, paid_to: form.paid_to,
+              paid_amount: flt(form.paid_amount),
+              currency: form.currency,
+              mode_of_payment: form.mode_of_payment,
+              reference_no: form.reference_no,
+              company: form.company,
+              remarks: form.remarks,
+            };
+            const saved = await apiSave(doc);
+            await apiSubmit("Payment Entry", saved.name);
+            peName = saved.name;
+          }
+          toast("Payment " + peName + " recorded!");
+          emit("saved", peName); emit("close");
+          setTimeout(() => window.open(docUrl("Payment Entry", peName), "_blank"), 300);
+        } catch (e) { toast(e.message || "Could not save payment", "error"); }
+        finally { saving.value = false; }
+      }
+
+      return { form, saving, customers, suppliers, accounts_bank, accounts_ar, accounts_ap, invoices, partyList, onParty, save, fmt, flt, icon, paymentModes };
+    },
+    template: `
 <teleport to="body">
 <div v-if="show" style="position:fixed;inset:0;z-index:9000;display:flex;align-items:flex-start;
      justify-content:center;background:rgba(0,0,0,.45);padding:32px 16px;overflow-y:auto" @click.self="$emit('close')">
@@ -1279,79 +1289,80 @@ const PaymentModal=defineComponent({name:"PaymentModal",
 </teleport>
 `});
 
-/* ═══════════════════════════════════════════════════════════════
-   PAGE COMPONENTS (Dashboard, Invoices, Payments, etc.)
-   Using the modal components above for New actions
-═══════════════════════════════════════════════════════════════ */
+  /* ═══════════════════════════════════════════════════════════════
+     PAGE COMPONENTS (Dashboard, Invoices, Payments, etc.)
+     Using the modal components above for New actions
+  ═══════════════════════════════════════════════════════════════ */
 
 
-/* ─── Invoice Detail Component ───────────────────────────────── */
+  /* ─── Invoice Detail Component ───────────────────────────────── */
 
 
 
-const Dashboard=defineComponent({name:"Dashboard",
-  components:{InvoiceModal,PurchaseModal,PaymentModal},
-  setup(){
-    const kpis=ref(null),dash=ref(null),aging=ref({});
-    const loading=ref(true),showSI=ref(false),showPI=ref(false),showPay=ref(false);
-    const agingRows=[{k:"current",lbl:"Current",color:"#2F9E44"},{k:"1_30",lbl:"1–30 days",color:"#E67700"},{k:"31_60",lbl:"31–60 days",color:"#F08C00"},{k:"61_90",lbl:"61–90 days",color:"#E8590C"},{k:"over_90",lbl:"90+ days",color:"#C92A2A"}];
-    const agingMax=computed(()=>Math.max(1,...agingRows.map(r=>flt(aging.value[r.k]))));
-    const kpiDefs=computed(()=>[
-      {lbl:"Monthly Revenue",val:fmt(kpis.value?.month_revenue),trend:`${kpis.value?.overdue_count||0} overdue`,up:true,icon:"trend",bg:"#eff6ff",ic:"#2563eb"},
-      {lbl:"Collected",val:fmt(kpis.value?.month_collected),trend:"this month",up:true,icon:"pay",bg:"#f0fdf4",ic:"#16a34a"},
-      {lbl:"Outstanding",val:fmt(kpis.value?.month_outstanding),trend:kpis.value?.overdue_count+" overdue",up:false,icon:"accts",bg:"#fef2f2",ic:"#dc2626"},
-      {lbl:"Net Profit (MTD)",val:fmt(kpis.value?.net_profit_mtd),trend:"month to date",up:true,icon:"chart",bg:"#f5f3ff",ic:"#7c3aed"},
-    ]);
-    // Static demo data shown when API returns empty / fails
-    const DEMO={
-      month_revenue:125000,month_collected:98500,month_outstanding:26500,net_profit_mtd:41200,
-      total_assets:340000,overdue_count:4,
-      top_customers:[
-        {customer:"Prasath Enterprises",invoice_count:5,total_revenue:52000},
-        {customer:"Hari Industries",invoice_count:3,total_revenue:31500},
-        {customer:"Digitise Pvt Ltd",invoice_count:2,total_revenue:18000},
-        {customer:"Alpha Solutions",invoice_count:2,total_revenue:12750},
-        {customer:"Beta Corp",invoice_count:1,total_revenue:10750},
-      ],
-      overdue_invoices:[
-        {name:"INV-2026-00002",customer:"hari",customer_name:"hari",due_date:"2026-03-18",grand_total:15000,outstanding_amount:15000},
-        {name:"INV-2026-00008",customer:"hari",customer_name:"hari",due_date:"2026-03-18",grand_total:500,outstanding_amount:500},
-        {name:"INV-2026-00011",customer:"hari",customer_name:"hari",due_date:"2026-03-18",grand_total:545,outstanding_amount:545},
-        {name:"INV-2026-00012",customer:"Prasath",customer_name:"Prasath",due_date:"2026-03-18",grand_total:100000,outstanding_amount:100000},
-      ],
-      aging_buckets:{current:26500,"1_30":18000,"31_60":8200,"61_90":3100,over_90:1450},
-    };
+  const Dashboard = defineComponent({
+    name: "Dashboard",
+    components: { InvoiceModal, PurchaseModal, PaymentModal },
+    setup() {
+      const kpis = ref(null), dash = ref(null), aging = ref({});
+      const loading = ref(true), showSI = ref(false), showPI = ref(false), showPay = ref(false);
+      const agingRows = [{ k: "current", lbl: "Current", color: "#2F9E44" }, { k: "1_30", lbl: "1–30 days", color: "#E67700" }, { k: "31_60", lbl: "31–60 days", color: "#F08C00" }, { k: "61_90", lbl: "61–90 days", color: "#E8590C" }, { k: "over_90", lbl: "90+ days", color: "#C92A2A" }];
+      const agingMax = computed(() => Math.max(1, ...agingRows.map(r => flt(aging.value[r.k]))));
+      const kpiDefs = computed(() => [
+        { lbl: "Monthly Revenue", val: fmt(kpis.value?.month_revenue), trend: `${kpis.value?.overdue_count || 0} overdue`, up: true, icon: "trend", bg: "#eff6ff", ic: "#2563eb" },
+        { lbl: "Collected", val: fmt(kpis.value?.month_collected), trend: "this month", up: true, icon: "pay", bg: "#f0fdf4", ic: "#16a34a" },
+        { lbl: "Outstanding", val: fmt(kpis.value?.month_outstanding), trend: kpis.value?.overdue_count + " overdue", up: false, icon: "accts", bg: "#fef2f2", ic: "#dc2626" },
+        { lbl: "Net Profit (MTD)", val: fmt(kpis.value?.net_profit_mtd), trend: "month to date", up: true, icon: "chart", bg: "#f5f3ff", ic: "#7c3aed" },
+      ]);
+      // Static demo data shown when API returns empty / fails
+      const DEMO = {
+        month_revenue: 125000, month_collected: 98500, month_outstanding: 26500, net_profit_mtd: 41200,
+        total_assets: 340000, overdue_count: 4,
+        top_customers: [
+          { customer: "Prasath Enterprises", invoice_count: 5, total_revenue: 52000 },
+          { customer: "Hari Industries", invoice_count: 3, total_revenue: 31500 },
+          { customer: "Digitise Pvt Ltd", invoice_count: 2, total_revenue: 18000 },
+          { customer: "Alpha Solutions", invoice_count: 2, total_revenue: 12750 },
+          { customer: "Beta Corp", invoice_count: 1, total_revenue: 10750 },
+        ],
+        overdue_invoices: [
+          { name: "INV-2026-00002", customer: "hari", customer_name: "hari", due_date: "2026-03-18", grand_total: 15000, outstanding_amount: 15000 },
+          { name: "INV-2026-00008", customer: "hari", customer_name: "hari", due_date: "2026-03-18", grand_total: 500, outstanding_amount: 500 },
+          { name: "INV-2026-00011", customer: "hari", customer_name: "hari", due_date: "2026-03-18", grand_total: 545, outstanding_amount: 545 },
+          { name: "INV-2026-00012", customer: "Prasath", customer_name: "Prasath", due_date: "2026-03-18", grand_total: 100000, outstanding_amount: 100000 },
+        ],
+        aging_buckets: { current: 26500, "1_30": 18000, "31_60": 8200, "61_90": 3100, over_90: 1450 },
+      };
 
-    async function load(){
-      loading.value=true;
-      const company=await resolveCompany();
-      try{
-        const d=await apiGET("zoho_books_clone.api.dashboard.get_home_dashboard",{company});
-        const hasData=d&&(d.month_revenue||d.month_collected||d.month_outstanding||(d.overdue_invoices&&d.overdue_invoices.length)||(d.top_customers&&d.top_customers.length));
-        const src=hasData?d:DEMO;
-        dash.value=src;
-        kpis.value={
-          month_revenue:     src.month_revenue     || 0,
-          month_collected:   src.month_collected   || 0,
-          month_outstanding: src.month_outstanding || 0,
-          net_profit_mtd:    src.net_profit_mtd    || 0,
-          total_assets:      src.total_assets      || 0,
-          overdue_count:     src.overdue_count      || (src.overdue_invoices?.length || 0),
-        };
-        aging.value=src.aging_buckets || {};
-      }catch(e){
-        console.error("[Dashboard]",e);
-        // API failed — show demo data so page is never blank
-        dash.value=DEMO;
-        kpis.value={month_revenue:DEMO.month_revenue,month_collected:DEMO.month_collected,month_outstanding:DEMO.month_outstanding,net_profit_mtd:DEMO.net_profit_mtd,total_assets:DEMO.total_assets,overdue_count:DEMO.overdue_count};
-        aging.value=DEMO.aging_buckets;
+      async function load() {
+        loading.value = true;
+        const company = await resolveCompany();
+        try {
+          const d = await apiGET("zoho_books_clone.api.dashboard.get_home_dashboard", { company });
+          const hasData = d && (d.month_revenue || d.month_collected || d.month_outstanding || (d.overdue_invoices && d.overdue_invoices.length) || (d.top_customers && d.top_customers.length));
+          const src = hasData ? d : DEMO;
+          dash.value = src;
+          kpis.value = {
+            month_revenue: src.month_revenue || 0,
+            month_collected: src.month_collected || 0,
+            month_outstanding: src.month_outstanding || 0,
+            net_profit_mtd: src.net_profit_mtd || 0,
+            total_assets: src.total_assets || 0,
+            overdue_count: src.overdue_count || (src.overdue_invoices?.length || 0),
+          };
+          aging.value = src.aging_buckets || {};
+        } catch (e) {
+          console.error("[Dashboard]", e);
+          // API failed — show demo data so page is never blank
+          dash.value = DEMO;
+          kpis.value = { month_revenue: DEMO.month_revenue, month_collected: DEMO.month_collected, month_outstanding: DEMO.month_outstanding, net_profit_mtd: DEMO.net_profit_mtd, total_assets: DEMO.total_assets, overdue_count: DEMO.overdue_count };
+          aging.value = DEMO.aging_buckets;
+        }
+        finally { loading.value = false; }
       }
-      finally{loading.value=false;}
-    }
-    onMounted(load);
-    return{kpis,dash,aging,loading,kpiDefs,agingRows,agingMax,showSI,showPI,showPay,load,fmt,fmtDate,fmtShort,isOverdue,statusBadge,icon,openDoc};
-  },
-  template:`
+      onMounted(load);
+      return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc };
+    },
+    template: `
 <div class="b-page">
   <InvoiceModal :show="showSI" @close="showSI=false" @saved="load"/>
   <PurchaseModal :show="showPI" @close="showPI=false" @saved="load"/>
@@ -1417,151 +1428,200 @@ const Dashboard=defineComponent({name:"Dashboard",
   </div>
 </div>`});
 
-// ══ INVOICE LIST PAGE ════════════════════════════════════════════
-const Invoices=defineComponent({name:"Invoices",
-  components:{InvoiceModal},
-  setup(){
-    const router=useRouter();
-    const list=ref([]),loading=ref(true),active=ref("all"),showNew=ref(false);
-    const search=ref("");
+  // ══ INVOICE LIST PAGE ════════════════════════════════════════════
+  const Invoices = defineComponent({
+    name: "Invoices",
+    components: { InvoiceModal },
+    setup() {
+      const router = useRouter();
+      const list = ref([]), loading = ref(true), active = ref("all"), showNew = ref(false);
+      const search = ref("");
+      const selected = ref(new Set());
+      const sortKey = ref("posting_date"), sortDir = ref(-1);
 
-    const filters=[
-      {k:"all",lbl:"All Invoices"},
-      {k:"Draft",lbl:"Draft"},
-      {k:"Submitted",lbl:"Unpaid"},
-      {k:"Overdue",lbl:"Overdue"},
-      {k:"Paid",lbl:"Paid"}
-    ];
-    const counts=computed(()=>({
-      Draft:list.value.filter(i=>i.status==="Draft").length,
-      Submitted:list.value.filter(i=>["Submitted","Partly Paid"].includes(i.status)).length,
-      Overdue:list.value.filter(isOverdue).length,
-      Paid:list.value.filter(i=>i.status==="Paid").length,
-    }));
-    const filtered=computed(()=>{
-      let r=list.value;
-      if(active.value==="Overdue")r=r.filter(isOverdue);
-      else if(active.value!=="all")r=r.filter(i=>i.status===active.value);
-      if(search.value)r=r.filter(i=>(i.name+(i.customer||"")).toLowerCase().includes(search.value.toLowerCase()));
-      return r;
-    });
+      const filters = [
+        { k: "all",     lbl: "All Invoices" },
+        { k: "Draft",   lbl: "Draft" },
+        { k: "Unpaid",  lbl: "Unpaid" },
+        { k: "Overdue", lbl: "Overdue" },
+        { k: "Paid",    lbl: "Paid" }
+      ];
 
-    async function loadList(){
-      loading.value=true;
-      try{
-        list.value=await apiList("Sales Invoice",{
-          fields:["name","customer","customer_name","invoice_number","posting_date","due_date","grand_total","outstanding_amount","status"],
-          order:"posting_date desc"
+      const counts = computed(() => ({
+        Draft:   list.value.filter(i => i.status === "Draft").length,
+        Unpaid:  list.value.filter(i => !isOverdue(i) && ["Submitted","Unpaid","Partly Paid"].includes(i.status)).length,
+        Overdue: list.value.filter(isOverdue).length,
+        Paid:    list.value.filter(i => i.status === "Paid").length,
+      }));
+
+      const filtered = computed(() => {
+        let r = list.value;
+        if (active.value === "Overdue") r = r.filter(isOverdue);
+        else if (active.value === "Unpaid") r = r.filter(i => !isOverdue(i) && ["Submitted","Unpaid","Partly Paid"].includes(i.status));
+        else if (active.value !== "all") r = r.filter(i => i.status === active.value);
+        if (search.value) {
+          const q = search.value.toLowerCase();
+          r = r.filter(i => (i.name + (i.customer_name || "") + (i.customer || "")).toLowerCase().includes(q));
+        }
+        return [...r].sort((a, b) => {
+          const va = a[sortKey.value] ?? "", vb = b[sortKey.value] ?? "";
+          return va < vb ? -sortDir.value : va > vb ? sortDir.value : 0;
         });
-      }catch(e){toast("Failed to load invoices: "+e.message,"error");}
-      finally{loading.value=false;}
-    }
+      });
 
-    function goToInvoice(name){router.push({name:"invoice-detail",params:{name}});}
+      function pillCountCls(k) {
+        return { Draft:"zb-pc-muted", Unpaid:"zb-pc-amber", Overdue:"zb-pc-red", Paid:"zb-pc-green" }[k] || "zb-pc-muted";
+      }
 
-    function statusChipCls(row){
-      const s=row.status||"Draft";
-      const over=flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date();
-      if(over)return"zb-chip-overdue";
-      if(s==="Paid")return"zb-chip-paid";
-      if(s==="Draft")return"zb-chip-draft";
-      if(s==="Submitted"||s==="Partly Paid")return"zb-chip-partpaid";
-      return"zb-chip-draft";
-    }
-    function statusLabel(row){
-      const s=row.status||"Draft";
-      const over=flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date();
-      if(over&&s!=="Draft")return"DUE TODAY";
-      if(s==="Submitted")return"SENT";
-      if(s==="Partly Paid")return"PARTIALLY PAID";
-      return s.toUpperCase();
-    }
+      async function loadList() {
+        loading.value = true;
+        try {
+          list.value = await apiList("Sales Invoice", {
+            fields: ["name","customer","customer_name","po_no","posting_date","due_date","grand_total","outstanding_amount","status","docstatus"],
+            order: "posting_date desc",
+            limit: 100
+          });
+        } catch (e) { toast("Failed to load invoices: " + e.message, "error"); }
+        finally { loading.value = false; }
+      }
 
-    onMounted(loadList);
-    return{list,loading,active,showNew,search,filters,counts,filtered,
-      loadList,goToInvoice,statusChipCls,statusLabel,fmt,fmtDate,flt,icon};
-  },
-  template:`
-<div class="zb-root no-sidebar-pad">
+      function goToInvoice(name) { router.push({ name: "invoice-detail", params: { name } }); }
+
+      function sortBy(k) {
+        if (sortKey.value === k) sortDir.value *= -1;
+        else { sortKey.value = k; sortDir.value = -1; }
+      }
+      function sortArrow(k) { return sortKey.value === k ? (sortDir.value === 1 ? " ↑" : " ↓") : ""; }
+
+      function overdueLabel(row) {
+        const days = Math.floor((new Date() - new Date(row.due_date)) / 86400000);
+        return "OVERDUE BY " + days + " DAY" + (days !== 1 ? "S" : "");
+      }
+      function statusChipCls(row) {
+        if (isOverdue(row)) return "zb-chip-overdue";
+        const s = row.status || "Draft";
+        if (s === "Paid") return "zb-chip-paid";
+        if (s === "Draft") return "zb-chip-draft";
+        if (["Submitted","Unpaid","Partly Paid"].includes(s)) return "zb-chip-partpaid";
+        return "zb-chip-draft";
+      }
+      function statusLabel(row) {
+        if (isOverdue(row)) return overdueLabel(row);
+        const s = row.status || "Draft";
+        if (s === "Submitted") return "UNPAID";
+        if (s === "Partly Paid") return "PARTIALLY PAID";
+        return s.toUpperCase();
+      }
+
+      function toggleRow(name) {
+        const s = new Set(selected.value);
+        s.has(name) ? s.delete(name) : s.add(name);
+        selected.value = s;
+      }
+      function toggleAll(e) {
+        selected.value = e.target.checked ? new Set(filtered.value.map(i => i.name)) : new Set();
+      }
+      const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(i => selected.value.has(i.name)));
+
+      onMounted(loadList);
+      return {
+        list, loading, active, showNew, search, filters, counts, filtered,
+        selected, allSelected, sortKey,
+        loadList, goToInvoice, statusChipCls, statusLabel, pillCountCls,
+        toggleRow, toggleAll, sortBy, sortArrow,
+        fmt, fmtDate, flt, icon
+      };
+    },
+    template: `
+<div class="zb-root no-sidebar-pad" style="background:#fff;min-height:100vh">
   <InvoiceModal :show="showNew" @close="showNew=false" @saved="loadList"/>
 
   <!-- TOOLBAR -->
-  <div class="zb-toolbar no-print">
-    <div class="zb-toolbar-left">
-      <span class="zb-toolbar-title">All Invoices</span>
-      <span class="zb-toolbar-caret">&#9660;</span>
+  <div class="zb-toolbar no-print" style="display:flex;align-items:center;justify-content:space-between;padding:14px 24px 12px;border-bottom:1px solid #e8ecf0">
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:16px;font-weight:700;color:#1a1a2e">All Invoices</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6b7280" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
     </div>
-    <div class="zb-toolbar-right">
-      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true">
-        <span v-html="icon('plus',12)"></span> New
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="zb-tb-btn zb-tb-primary" @click="showNew=true" style="display:inline-flex;align-items:center;gap:6px;background:#1a6ef7;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:13px;font-weight:600;cursor:pointer">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New
       </button>
-      <button class="zb-tb-btn" @click="()=>{}">▾</button>
-      <button class="zb-tb-btn" style="padding:5px 8px" @click="loadList" title="Refresh">
+      <button class="zb-tb-btn" @click="loadList" style="background:#fff;border:1px solid #e8ecf0;border-radius:6px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;color:#6b7280" title="Refresh">
         <span v-html="icon('refresh',13)"></span>
       </button>
-      <button class="zb-tb-btn" style="padding:5px 8px" title="More">•••</button>
+      <button class="zb-tb-btn" style="background:#fff;border:1px solid #e8ecf0;border-radius:6px;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;color:#6b7280" title="More">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+      </button>
     </div>
   </div>
 
-  <!-- FILTER BAR -->
-  <div class="zb-table-filter-bar no-print">
+  <!-- FILTER PILLS -->
+  <div style="display:flex;gap:8px;padding:12px 24px;border-bottom:1px solid #e8ecf0;flex-wrap:wrap">
     <button v-for="f in filters" :key="f.k"
-      class="zb-tf-pill" :class="{active:active===f.k}"
+      :class="['zb-inv-pill', active===f.k ? 'zb-inv-pill-active' : '']"
       @click="active=f.k">
       {{f.lbl}}
-      <span v-if="f.k!=='all'" class="zb-tf-cnt">{{counts[f.k]}}</span>
+      <span v-if="f.k!=='all'" :class="['zb-pill-cnt', pillCountCls(f.k)]">{{counts[f.k]}}</span>
     </button>
     <div style="flex:1"></div>
-    <div class="zb-tf-search">
-      <span v-html="icon('search',12)" style="color:#aaa"></span>
-      <input v-model="search" placeholder="Search invoices..." class="zb-tf-search-input"/>
+    <div style="position:relative;display:flex;align-items:center">
+      <svg style="position:absolute;left:9px;color:#9ca3af" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input v-model="search" placeholder="Search invoices…" style="padding:6px 12px 6px 30px;border:1px solid #e8ecf0;border-radius:20px;font-size:12.5px;outline:none;width:200px"/>
     </div>
   </div>
 
   <!-- TABLE -->
-  <div class="zb-table-wrap">
-    <table class="zb-inv-table">
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead>
         <tr>
-          <th class="zb-th zb-th-check"><input type="checkbox"/></th>
-          <th class="zb-th">DATE</th>
-          <th class="zb-th">INVOICE#</th>
-          <th class="zb-th">ORDER NUMBER</th>
-          <th class="zb-th">CUSTOMER NAME</th>
-          <th class="zb-th">STATUS</th>
-          <th class="zb-th">DUE DATE</th>
-          <th class="zb-th ta-r">AMOUNT</th>
-          <th class="zb-th ta-r">BALANCE DUE</th>
+          <th style="padding:10px 16px 10px 20px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;width:40px">
+            <input type="checkbox" :checked="allSelected" @change="toggleAll"/>
+          </th>
+          <th @click="sortBy('posting_date')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">DATE{{sortArrow('posting_date')}}</th>
+          <th @click="sortBy('name')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">INVOICE#{{sortArrow('name')}}</th>
+          <th style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff">ORDER NUMBER</th>
+          <th @click="sortBy('customer_name')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">CUSTOMER NAME{{sortArrow('customer_name')}}</th>
+          <th @click="sortBy('status')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">STATUS{{sortArrow('status')}}</th>
+          <th @click="sortBy('due_date')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:left;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">DUE DATE{{sortArrow('due_date')}}</th>
+          <th @click="sortBy('grand_total')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:right;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">AMOUNT{{sortArrow('grand_total')}}</th>
+          <th @click="sortBy('outstanding_amount')" style="padding:10px 16px;border-bottom:2px solid #e8ecf0;font-size:11px;font-weight:700;letter-spacing:.07em;color:#6b7280;text-align:right;white-space:nowrap;background:#fff;cursor:pointer;user-select:none">BALANCE DUE{{sortArrow('outstanding_amount')}}</th>
         </tr>
       </thead>
       <tbody>
         <template v-if="loading">
-          <tr v-for="n in 5" :key="n">
+          <tr v-for="n in 6" :key="n">
             <td colspan="9" style="padding:14px 16px"><div class="b-shimmer" style="height:13px;border-radius:3px"></div></td>
           </tr>
         </template>
         <template v-else>
           <tr v-if="!filtered.length">
-            <td colspan="9" class="zb-table-empty">No invoices found</td>
+            <td colspan="9" style="padding:48px;text-align:center;color:#9ca3af;font-size:13px">No invoices found</td>
           </tr>
           <tr v-else v-for="row in filtered" :key="row.name"
-            class="zb-inv-row"
+            :style="{background: selected.has(row.name) ? '#eaf1ff' : 'transparent', cursor:'pointer'}"
+            @mouseenter="e=>e.currentTarget.style.background=selected.has(row.name)?'#eaf1ff':'#f8faff'"
+            @mouseleave="e=>e.currentTarget.style.background=selected.has(row.name)?'#eaf1ff':'transparent'"
             @click="goToInvoice(row.name)">
-            <td class="zb-td zb-td-check" @click.stop><input type="checkbox"/></td>
-            <td class="zb-td zb-td-date">{{fmtDate(row.posting_date)}}</td>
-            <td class="zb-td">
-              <span class="zb-inv-link" @click.stop="goToInvoice(row.name)">{{row.name}}</span>
+            <td style="padding:13px 16px 13px 20px;border-bottom:1px solid #f0f2f5;vertical-align:middle" @click.stop>
+              <input type="checkbox" :checked="selected.has(row.name)" @change="toggleRow(row.name)"/>
             </td>
-            <td class="zb-td zb-td-muted">{{row.invoice_number||'—'}}</td>
-            <td class="zb-td zb-td-customer">{{row.customer_name||row.customer}}</td>
-            <td class="zb-td">
-              <span class="zb-status-chip" :class="statusChipCls(row)">{{statusLabel(row)}}</span>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#374151;vertical-align:middle">{{fmtDate(row.posting_date)}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
+              <span style="color:#1a6ef7;font-weight:600;font-size:13px">{{row.name}}</span>
             </td>
-            <td class="zb-td zb-td-date" :style="{color:flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<=new Date()?'#e03131':'inherit'}">
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;color:#9ca3af;vertical-align:middle">{{row.po_no||'—'}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;font-weight:600;color:#1a1a2e;vertical-align:middle">{{row.customer_name||row.customer}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle">
+              <span :class="['zb-status-chip', statusChipCls(row)]">{{statusLabel(row)}}</span>
+            </td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;vertical-align:middle"
+              :style="{color: flt(row.outstanding_amount)>0&&row.due_date&&new Date(row.due_date)<new Date() ? '#dc2626' : '#9ca3af'}">
               {{fmtDate(row.due_date)}}
             </td>
-            <td class="zb-td ta-r zb-td-mono">{{fmt(row.grand_total)}}</td>
-            <td class="zb-td ta-r zb-td-mono" :style="{color:flt(row.outstanding_amount)>0?'#1a1d23':'#2f9e44'}">
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;text-align:right;font-family:monospace;font-size:12.5px;vertical-align:middle">{{fmt(row.grand_total)}}</td>
+            <td style="padding:13px 16px;border-bottom:1px solid #f0f2f5;text-align:right;font-family:monospace;font-size:12.5px;vertical-align:middle"
+              :style="{color: flt(row.outstanding_amount)>0 ? '#dc2626' : '#059669'}">
               {{fmt(row.outstanding_amount)}}
             </td>
           </tr>
@@ -1572,173 +1632,244 @@ const Invoices=defineComponent({name:"Invoices",
 </div>
 `});
 
-// ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
-const InvoiceDetail=defineComponent({name:"InvoiceDetail",
-  components:{SendEmailModal},
-  setup(){
-    const route=useRoute();
-    const router=useRouter();
-    const invName=computed(()=>route.params.name);
-    const showSendEmail=ref(false);
-    const showSendMenu=ref(false);
+  // ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
+  const InvoiceDetail = defineComponent({
+    name: "InvoiceDetail",
+    components: { SendEmailModal, PaymentModal },
+    setup() {
+      const route = useRoute();
+      const router = useRouter();
+      const invName = computed(() => route.params.name);
+      const showSendEmail = ref(false);
+      const showSendMenu = ref(false);
 
-    // ── List (sidebar) ──────────────────────────────────────────
-    const list=ref([]),listLoading=ref(true),active=ref("all"),search=ref("");
-    const filters=[
-      {k:"all",lbl:"All Invoices"},
-      {k:"Draft",lbl:"Draft"},
-      {k:"Submitted",lbl:"Unpaid"},
-      {k:"Overdue",lbl:"Overdue"},
-      {k:"Paid",lbl:"Paid"}
-    ];
-    const counts=computed(()=>({
-      Draft:list.value.filter(i=>i.status==="Draft").length,
-      Submitted:list.value.filter(i=>["Submitted","Partly Paid"].includes(i.status)).length,
-      Overdue:list.value.filter(isOverdue).length,
-      Paid:list.value.filter(i=>i.status==="Paid").length,
-    }));
-    const filtered=computed(()=>{
-      let r=list.value;
-      if(active.value==="Overdue")r=r.filter(isOverdue);
-      else if(active.value!=="all")r=r.filter(i=>i.status===active.value);
-      if(search.value)r=r.filter(i=>(i.name+(i.customer||"")).toLowerCase().includes(search.value.toLowerCase()));
-      return r;
-    });
-    async function loadList(){
-      listLoading.value=true;
-      try{list.value=await apiList("Sales Invoice",{fields:["name","customer","customer_name","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
-      catch(e){toast("Failed to load invoices","error");}
-      finally{listLoading.value=false;}
-    }
-    function pillBadge(k){
-      return{Draft:"zb-list-draft",Submitted:"zb-list-unpaid",Overdue:"zb-list-overdue","Partly Paid":"zb-list-partpaid",Paid:"zb-list-paid"}[k]||"zb-list-draft";
-    }
-    function goInvoice(name){router.push({name:"invoice-detail",params:{name}});}
-
-    // ── Detail ──────────────────────────────────────────────────
-    const inv=ref(null),detailLoading=ref(false),detailError=ref(null);
-    const editing=ref(false),saving=ref(false),submitting=ref(false);
-    const customers=ref([]),accounts_ar=ref([]),accounts_income=ref([]);
-    const form=reactive({
-      customer:"",posting_date:"",due_date:"",debit_to:"",income_account:"",
-      currency:"INR",notes:"",company:"",
-      items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
-      taxes:[]
-    });
-
-    async function loadDetail(name){
-      if(!name)return;
-      detailLoading.value=true; detailError.value=null; editing.value=false;
-      try{inv.value=await apiGet("Sales Invoice",name);}
-      catch(e){detailError.value=e.message;}
-      finally{detailLoading.value=false;}
-    }
-
-    watch(invName,n=>{if(n)loadDetail(n);},{immediate:true});
-    onMounted(()=>{loadList();});
-
-    async function loadFormDefaults(){
-      try{customers.value=await apiList("Customer",{fields:["name"],limit:100,order:"name asc"});}catch{}
-      try{const ar=await apiList("Account",{fields:["name"],filters:[["account_type","=","Receivable"],["is_group","=",0]],limit:50});accounts_ar.value=ar;}catch{}
-      try{const inc=await apiList("Account",{fields:["name"],filters:[["account_type","in",["Income Account","Income"]],["is_group","=",0]],limit:50});accounts_income.value=inc;}catch{}
-    }
-    function startEdit(){
-      if(!inv.value)return;
-      Object.assign(form,{
-        customer:inv.value.customer||"",posting_date:inv.value.posting_date||"",
-        due_date:inv.value.due_date||"",debit_to:inv.value.debit_to||"",
-        income_account:inv.value.income_account||"",currency:inv.value.currency||"INR",
-        notes:inv.value.notes||"",company:inv.value.company||"",
-        items:(inv.value.items||[]).map(i=>({...i})),
-        taxes:(inv.value.taxes||[]).map(t=>({...t})),
+      // ── List (sidebar) ──────────────────────────────────────────
+      const list = ref([]), listLoading = ref(true), active = ref("all"), search = ref("");
+      const filters = [
+        { k: "all", lbl: "All Invoices" },
+        { k: "Draft", lbl: "Draft" },
+        { k: "Submitted", lbl: "Unpaid" },
+        { k: "Overdue", lbl: "Overdue" },
+        { k: "Paid", lbl: "Paid" }
+      ];
+      const counts = computed(() => ({
+        Draft: list.value.filter(i => i.status === "Draft").length,
+        Submitted: list.value.filter(i => ["Submitted", "Partly Paid"].includes(i.status)).length,
+        Overdue: list.value.filter(isOverdue).length,
+        Paid: list.value.filter(i => i.status === "Paid").length,
+      }));
+      const filtered = computed(() => {
+        let r = list.value;
+        if (active.value === "Overdue") r = r.filter(isOverdue);
+        else if (active.value !== "all") r = r.filter(i => i.status === active.value);
+        if (search.value) r = r.filter(i => (i.name + (i.customer || "")).toLowerCase().includes(search.value.toLowerCase()));
+        return r;
       });
-      if(!form.items.length)form.items=[{item_name:"",description:"",qty:1,rate:0,amount:0}];
-      loadFormDefaults();
-      editing.value=true;
-    }
-    function recalc(){
-      form.items.forEach(i=>{i.amount=Math.round(flt(i.qty)*flt(i.rate)*100)/100;});
-      const net=form.items.reduce((s,i)=>s+flt(i.amount),0);
-      form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0;});
-    }
-    function addItem(){form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0});}
-    function removeItem(i){if(form.items.length>1)form.items.splice(i,1);recalc();}
-    function addTax(){form.taxes.push({tax_type:"SGST",description:"SGST",rate:9,tax_amount:0});}
-    function removeTax(i){form.taxes.splice(i,1);recalc();}
-    const netTotal=computed(()=>form.items.reduce((s,i)=>s+flt(i.amount),0));
-    const totalTax=computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
-    const grandTotal=computed(()=>netTotal.value+totalTax.value);
+      async function loadList() {
+        listLoading.value = true;
+        try { list.value = await apiList("Sales Invoice", { fields: ["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "outstanding_amount", "status"], order: "posting_date desc" }); }
+        catch (e) { toast("Failed to load invoices", "error"); }
+        finally { listLoading.value = false; }
+      }
+      function pillBadge(k) {
+        return { Draft: "zb-list-draft", Submitted: "zb-list-unpaid", Overdue: "zb-list-overdue", "Partly Paid": "zb-list-partpaid", Paid: "zb-list-paid" }[k] || "zb-list-draft";
+      }
+      function goInvoice(name) { router.push({ name: "invoice-detail", params: { name } }); }
 
-    async function saveEdit(){
-      saving.value=true;
-      try{
-        recalc();
-        const doc={
-          doctype:"Sales Invoice",name:inv.value.name,
-          customer:form.customer,posting_date:form.posting_date,due_date:form.due_date,
-          debit_to:form.debit_to,income_account:form.income_account,
-          currency:form.currency,notes:form.notes,company:form.company,
-          items:form.items.filter(i=>i.item_name||flt(i.rate)).map((i,idx)=>({
-            doctype:"Sales Invoice Item",idx:idx+1,
-            item_name:i.item_name,description:i.description,
-            qty:flt(i.qty)||1,rate:flt(i.rate),amount:flt(i.amount),
-          })),
-          taxes:form.taxes.map(t=>({
-            doctype:"Tax Line",tax_type:t.tax_type,description:t.description||t.tax_type,
-            rate:flt(t.rate),tax_amount:flt(t.tax_amount),
-          })),
-        };
-        const saved=await apiGET("zoho_books_clone.api.docs.save_doc",{doc:JSON.stringify(doc)});
-        inv.value=saved;
-        const idx=list.value.findIndex(i=>i.name===saved.name);
-        if(idx>-1)Object.assign(list.value[idx],{grand_total:saved.grand_total,outstanding_amount:saved.outstanding_amount,status:saved.status,posting_date:saved.posting_date,due_date:saved.due_date});
-        editing.value=false;
-        toast("Invoice saved!","success");
-      }catch(e){toast("Save failed: "+e.message,"error");}
-      finally{saving.value=false;}
-    }
-    async function submitInvoice(){
-      if(!confirm("Submit this invoice? This cannot be undone."))return;
-      submitting.value=true;
-      try{
-        await apiSubmit("Sales Invoice",inv.value.name);
-        toast("Invoice submitted!","success");
-        await loadDetail(inv.value.name);
-        await loadList();
-      }catch(e){toast("Submit failed: "+e.message,"error");}
-      finally{submitting.value=false;}
-    }
-    function printPdf(){window.print();}
-    function toAmountWords(n){
-      const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
-      const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
-      function w(n){if(!n)return"";if(n<20)return a[n]+" ";if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?w(n%100):"");if(n<100000)return w(Math.floor(n/1000))+"Thousand "+(n%1000?w(n%1000):"");if(n<10000000)return w(Math.floor(n/100000))+"Lakh "+(n%100000?w(n%100000):"");return w(Math.floor(n/10000000))+"Crore "+(n%10000000?w(n%10000000):"");}
-      const r=Math.floor(n),p=Math.round((n-r)*100);
-      return"Indian Rupee "+w(r).trim()+(p?" and "+w(p).trim()+" Paise":"")+" Only";
-    }
-    const statusBadgeCls=computed(()=>{
-      const s=inv.value?.status;
-      if(s==="Paid")return"b-badge-green";
-      if(s==="Submitted"||s==="Partly Paid")return"b-badge-blue";
-      if(s==="Overdue")return"b-badge-red";
-      if(s==="Cancelled")return"b-badge-muted";
-      return"b-badge-amber";
-    });
-    const isDraft=computed(()=>!inv.value||inv.value.docstatus===0||inv.value.status==="Draft");
-    const paidAmt=computed(()=>Math.max(0,flt(inv.value?.grand_total)-flt(inv.value?.outstanding_amount)));
-    const paidPct=computed(()=>{const g=flt(inv.value?.grand_total);return g?Math.min(100,Math.round(paidAmt.value/g*100)):0;});
+      // ── Detail ──────────────────────────────────────────────────
+      const inv = ref(null), detailLoading = ref(false), detailError = ref(null);
+      const editing = ref(false), saving = ref(false), submitting = ref(false);
+      const customers = ref([]), accounts_ar = ref([]), accounts_income = ref([]);
+      const form = reactive({
+        customer: "", posting_date: "", due_date: "", debit_to: "", income_account: "",
+        currency: "INR", notes: "", company: "",
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+        taxes: []
+      });
 
-    return{
-      list,listLoading,active,search,filters,counts,filtered,pillBadge,goInvoice,invName,
-      inv,detailLoading,detailError,editing,saving,submitting,showSendEmail,showSendMenu,
-      form,customers,accounts_ar,accounts_income,
-      statusBadgeCls,isDraft,paidAmt,paidPct,netTotal,totalTax,grandTotal,
-      startEdit,saveEdit,submitInvoice,printPdf,
-      addItem,removeItem,addTax,removeTax,recalc,toAmountWords,
-      fmt,fmtDate,flt,icon,openDoc
-    };
-  },
-  template:`
+      async function loadDetail(name) {
+        if (!name) return;
+        detailLoading.value = true; detailError.value = null; editing.value = false;
+        try { inv.value = await apiGet("Sales Invoice", name); }
+        catch (e) { detailError.value = e.message; }
+        finally { detailLoading.value = false; }
+      }
+
+      watch(invName, n => { if (n) loadDetail(n); }, { immediate: true });
+      onMounted(() => { loadList(); });
+
+      async function loadFormDefaults() {
+        try { customers.value = await apiList("Customer", { fields: ["name"], limit: 100, order: "name asc" }); } catch { }
+        try { const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 }); accounts_ar.value = ar; } catch { }
+        try { const inc = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Income Account", "Income"]], ["is_group", "=", 0]], limit: 50 }); accounts_income.value = inc; } catch { }
+      }
+      function startEdit() {
+        if (!inv.value) return;
+        Object.assign(form, {
+          customer: inv.value.customer || "", posting_date: inv.value.posting_date || "",
+          due_date: inv.value.due_date || "", debit_to: inv.value.debit_to || "",
+          income_account: inv.value.income_account || "", currency: inv.value.currency || "INR",
+          notes: inv.value.notes || "", company: inv.value.company || "",
+          items: (inv.value.items || []).map(i => ({ ...i })),
+          taxes: (inv.value.taxes || []).map(t => ({ ...t })),
+        });
+        if (!form.items.length) form.items = [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }];
+        loadFormDefaults();
+        editing.value = true;
+      }
+      function recalc() {
+        form.items.forEach(i => { i.amount = Math.round(flt(i.qty) * flt(i.rate) * 100) / 100; });
+        const net = form.items.reduce((s, i) => s + flt(i.amount), 0);
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(net * flt(t.rate) / 100 * 100) / 100 : 0; });
+      }
+      function addItem() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeItem(i) { if (form.items.length > 1) form.items.splice(i, 1); recalc(); }
+      function addTax() { form.taxes.push({ tax_type: "SGST", description: "SGST", rate: 9, tax_amount: 0 }); }
+      function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
+      const netTotal = computed(() => form.items.reduce((s, i) => s + flt(i.amount), 0));
+      const totalTax = computed(() => form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0));
+      const grandTotal = computed(() => netTotal.value + totalTax.value);
+
+      async function saveEdit() {
+        saving.value = true;
+        try {
+          recalc();
+          const doc = {
+            doctype: "Sales Invoice", name: inv.value.name,
+            customer: form.customer, posting_date: form.posting_date, due_date: form.due_date,
+            debit_to: form.debit_to, income_account: form.income_account,
+            currency: form.currency, notes: form.notes, company: form.company,
+            items: form.items.filter(i => i.item_name || flt(i.rate)).map((i, idx) => ({
+              doctype: "Sales Invoice Item", idx: idx + 1,
+              item_name: i.item_name, description: i.description,
+              qty: flt(i.qty) || 1, rate: flt(i.rate), amount: flt(i.amount),
+            })),
+            taxes: form.taxes.map(t => ({
+              doctype: "Tax Line", tax_type: t.tax_type, description: t.description || t.tax_type,
+              rate: flt(t.rate), tax_amount: flt(t.tax_amount),
+            })),
+          };
+          const saved = await apiGET("zoho_books_clone.api.docs.save_doc", { doc: JSON.stringify(doc) });
+          inv.value = saved;
+          const idx = list.value.findIndex(i => i.name === saved.name);
+          if (idx > -1) Object.assign(list.value[idx], { grand_total: saved.grand_total, outstanding_amount: saved.outstanding_amount, status: saved.status, posting_date: saved.posting_date, due_date: saved.due_date });
+          editing.value = false;
+          toast("Invoice saved!", "success");
+        } catch (e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
+      }
+      async function submitInvoice() {
+        if (!confirm("Submit this invoice? This cannot be undone.")) return;
+        submitting.value = true;
+        try {
+          await apiSubmit("Sales Invoice", inv.value.name);
+          toast("Invoice submitted!", "success");
+          await loadDetail(inv.value.name);
+          await loadList();
+        } catch (e) { toast("Submit failed: " + e.message, "error"); }
+        finally { submitting.value = false; }
+      }
+      function printPdf() { window.print(); }
+      function toAmountWords(n) {
+        const a = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+        const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+        function w(n) { if (!n) return ""; if (n < 20) return a[n] + " "; if (n < 100) return b[Math.floor(n / 10)] + " " + (n % 10 ? a[n % 10] + " " : ""); if (n < 1000) return a[Math.floor(n / 100)] + " Hundred " + (n % 100 ? w(n % 100) : ""); if (n < 100000) return w(Math.floor(n / 1000)) + "Thousand " + (n % 1000 ? w(n % 1000) : ""); if (n < 10000000) return w(Math.floor(n / 100000)) + "Lakh " + (n % 100000 ? w(n % 100000) : ""); return w(Math.floor(n / 10000000)) + "Crore " + (n % 10000000 ? w(n % 10000000) : ""); }
+        const r = Math.floor(n), p = Math.round((n - r) * 100);
+        return "Indian Rupee " + w(r).trim() + (p ? " and " + w(p).trim() + " Paise" : "") + " Only";
+      }
+      const statusBadgeCls = computed(() => {
+        const s = inv.value?.status;
+        if (s === "Paid") return "b-badge-green";
+        if (s === "Submitted" || s === "Partly Paid") return "b-badge-blue";
+        if (s === "Overdue") return "b-badge-red";
+        if (s === "Cancelled") return "b-badge-muted";
+        return "b-badge-amber";
+      });
+      const isDraft = computed(() => !inv.value || String(inv.value.docstatus) === "0" || inv.value.status === "Draft");
+      const paidAmt = computed(() => Math.max(0, flt(inv.value?.grand_total) - flt(inv.value?.outstanding_amount)));
+      const paidPct = computed(() => { const g = flt(inv.value?.grand_total); return g ? Math.min(100, Math.round(paidAmt.value / g * 100)) : 0; });
+      const showCustMenu = ref(false);
+      const showRecPay = ref(false);
+      const recPaySaving = ref(false);
+      const recPayAccounts = ref([]);
+      const recPay = reactive({
+        amount: 0, bank_charges: 0, tax_deducted: "no",
+        payment_date: new Date().toISOString().slice(0, 10),
+        received_on: "", mode: "Cash", deposit_to: "",
+        reference: "", notes: "", ref_no: "", send_thankyou: false
+      });
+
+      watch(() => inv.value, (v) => {
+        if (v) {
+          recPay.amount = flt(v.outstanding_amount) || flt(v.grand_total);
+          recPay.ref_no = v.name;
+        }
+      });
+
+      async function openRecPay() {
+        // Load bank/cash accounts fresh each time
+        try {
+          const accs = await apiList("Account", {
+            fields: ["name", "account_type"],
+            filters: [["is_group", "=", 0]],
+            limit: 100
+          });
+          // Filter client-side to avoid server-side IN operator issues
+          recPayAccounts.value = accs.filter(a => ["Bank", "Cash"].includes(a.account_type));
+          if (!recPay.deposit_to && recPayAccounts.value.length) {
+            recPay.deposit_to = recPayAccounts.value[0].name;
+          }
+        } catch (e) {
+          recPayAccounts.value = [];
+        }
+        // Reset amount from current outstanding
+        if (inv.value) {
+          recPay.amount = flt(inv.value.outstanding_amount) || flt(inv.value.grand_total);
+          recPay.ref_no = inv.value.name;
+          recPay.payment_date = new Date().toISOString().slice(0, 10);
+        }
+        showRecPay.value = true;
+      }
+
+      async function saveRecPay(submit) {
+        if (!recPay.amount || recPay.amount <= 0) { toast("Please enter a valid amount", "error"); return; }
+        if (!recPay.deposit_to) { toast("Please select a Deposit To account", "error"); return; }
+        recPaySaving.value = true;
+        try {
+          const result = await apiPOST("zoho_books_clone.api.books_data.record_payment", {
+            invoice_name: inv.value?.name,
+            amount_received: recPay.amount,
+            deposit_to: recPay.deposit_to,
+            payment_mode: recPay.mode || "Cash",
+            payment_date: recPay.payment_date,
+            reference_no: recPay.reference || recPay.ref_no || "",
+            notes: recPay.notes || "",
+            bank_charges: recPay.bank_charges || 0,
+            tds_deducted: recPay.tax_deducted === "yes" ? 1 : 0,
+            save_as_draft: submit ? 0 : 1,
+          });
+          toast("Payment " + (result.payment_entry || result.name) + " " + (submit ? "recorded!" : "saved as draft!"));
+          showRecPay.value = false;
+          await loadDetail(invName.value);
+          loadList();
+        } catch (e) {
+          const msg = e?.message || String(e) || "Could not save payment";
+          toast(msg, "error");
+        }
+        finally { recPaySaving.value = false; }
+      }
+
+      return {
+        list, listLoading, active, search, filters, counts, filtered, pillBadge, goInvoice, invName,
+        inv, detailLoading, detailError, editing, saving, submitting, showSendEmail, showSendMenu, showCustMenu, showRecPay, recPay, recPaySaving, recPayAccounts, saveRecPay, openRecPay,
+        form, customers, accounts_ar, accounts_income,
+        statusBadgeCls, isDraft, paidAmt, paidPct, netTotal, totalTax, grandTotal,
+        startEdit, saveEdit, submitInvoice, printPdf,
+        addItem, removeItem, addTax, removeTax, recalc, toAmountWords,
+        fmt, fmtDate, flt, icon, openDoc
+      };
+    },
+    template: `
 <div class="zb-master-detail no-sidebar-pad">
 
   <!-- ══ LEFT: INVOICE SIDEBAR LIST ══ -->
@@ -1809,8 +1940,163 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
   <!-- ══ RIGHT: DETAIL AREA ══ -->
   <div class="zb-detail-area">
 
-    <!-- Action bar -->
-    <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
+    <template v-if="showRecPay">
+      <div style="display:flex;flex-direction:column;min-height:100%;flex:1;background:#fff;overflow:hidden">
+        <!-- Header -->
+        <div style="padding:16px 24px;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;background:#fff;position:sticky;top:0;z-index:10">
+          <h2 style="font-size:17px;font-weight:700;color:#111;margin:0">Payment for {{invName}}</h2>
+          <button @click="showRecPay=false" style="background:none;border:none;cursor:pointer;font-size:22px;color:#6b7280;line-height:1">✕</button>
+        </div>
+
+        <!-- Body -->
+        <div style="flex:1;padding:24px;display:grid;grid-template-columns:1fr 280px;gap:24px;overflow-y:auto;background:#fff">
+          <!-- Left form -->
+          <div>
+            <!-- Row 1: Customer + Payment # -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Customer Name*</label>
+                <input :value="inv?.customer_name||inv?.customer" readonly style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#f9fafb"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment #*</label>
+                <div style="position:relative">
+                  <input v-model="recPay.ref_no" style="width:100%;padding:8px 36px 8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+                  <span style="position:absolute;right:10px;top:50%;transform:translateY(-50%);color:#6b7280">⚙</span>
+                </div>
+              </div>
+            </div>
+
+            <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
+
+            <!-- Row 2: Amount + Bank Charges -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:6px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Amount Received (INR)*</label>
+                <input v-model.number="recPay.amount" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:2px solid #2563EB;border-radius:6px;font-size:13px;font-weight:600"/>
+                <div style="font-size:11px;color:#2563EB;margin-top:4px;cursor:pointer">PAN: <span style="text-decoration:underline">Add PAN</span></div>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Bank Charges (if any)</label>
+                <input v-model.number="recPay.bank_charges" type="number" min="0" step="0.01" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+            </div>
+
+            <!-- Tax deducted -->
+            <div style="margin-bottom:20px;padding:12px 0;border-bottom:1px solid #e5e7eb">
+              <span style="font-size:12.5px;color:#374151;margin-right:16px">Tax deducted?</span>
+              <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer;margin-right:16px">
+                <input type="radio" v-model="recPay.tax_deducted" value="no"> No Tax deducted
+              </label>
+              <label style="display:inline-flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer">
+                <input type="radio" v-model="recPay.tax_deducted" value="yes"> Yes, TDS (Income Tax)
+              </label>
+            </div>
+
+            <!-- Row 3: Payment Date + Payment Mode -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Payment Date*</label>
+                <input v-model="recPay.payment_date" type="date" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Mode</label>
+                <select v-model="recPay.mode" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
+                  <option>Cash</option><option>Bank Transfer</option><option>UPI</option><option>NEFT</option><option>RTGS</option><option>Cheque</option><option>Credit Card</option><option>Debit Card</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Row 4: Payment Received On + Deposit To -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Payment Received On</label>
+                <input v-model="recPay.received_on" type="date" placeholder="dd/MM/yyyy" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#dc2626;margin-bottom:6px">Deposit To*</label>
+                <select v-model="recPay.deposit_to" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;background:#fff">
+                  <option value="">— Select Account —</option>
+                  <option v-for="a in recPayAccounts" :key="a.name" :value="a.name">{{a.name}}</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Row 5: Reference# + Notes -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px">
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Reference#</label>
+                <input v-model="recPay.reference" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:12px;font-weight:600;color:#374151;margin-bottom:6px">Notes</label>
+                <textarea v-model="recPay.notes" rows="3" style="width:100%;padding:8px 12px;border:1px solid #d1d5db;border-radius:6px;font-size:13px;resize:vertical"></textarea>
+              </div>
+            </div>
+
+            <!-- Attachments -->
+            <div style="border-top:1px solid #e5e7eb;padding-top:20px;margin-bottom:20px">
+              <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:10px">Attachments</div>
+              <button style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151">
+                ⬆ Upload File ▾
+              </button>
+              <div style="font-size:11px;color:#9ca3af;margin-top:6px">You can upload a maximum of 5 files, 5MB each</div>
+            </div>
+
+            <!-- Thank you note -->
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
+              <input type="checkbox" v-model="recPay.send_thankyou" style="width:14px;height:14px">
+              Send a "Thank you" note for this payment
+            </label>
+          </div>
+
+          <!-- Right sidebar: Customer details -->
+          <div>
+            <div style="background:#1e3a5f;border-radius:8px;overflow:hidden">
+              <div style="padding:12px 16px;display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+                <span style="color:#fff;font-size:13px;font-weight:600">{{inv?.customer_name||inv?.customer}}'s Details</span>
+                <span style="color:#fff;font-size:16px">›</span>
+              </div>
+            </div>
+            <div style="margin-top:16px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:8px;padding:16px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#9ca3af;margin-bottom:10px">Invoice Summary</div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+                <span style="color:#6b7280">Invoice #</span>
+                <span style="font-weight:600;color:#2563EB">{{invName}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+                <span style="color:#6b7280">Grand Total</span>
+                <span style="font-weight:600">{{fmt(inv?.grand_total)}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:13px">
+                <span style="color:#6b7280">Paid</span>
+                <span style="font-weight:600;color:#16a34a">{{fmt(paidAmt)}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px">
+                <span style="color:#6b7280">Balance Due</span>
+                <span style="font-weight:700;color:#dc2626">{{fmt(inv?.outstanding_amount)}}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer buttons -->
+        <div style="padding:16px 24px;border-top:1px solid #e5e7eb;background:#f9fafb;display:flex;align-items:center;gap:12px;position:sticky;bottom:0;z-index:10">
+          <button @click="saveRecPay(false)" :disabled="recPaySaving" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit">
+            {{recPaySaving?'Saving…':'Save as Draft'}}
+          </button>
+          <button @click="saveRecPay(true)" :disabled="recPaySaving" style="padding:9px 22px;border:none;border-radius:6px;background:#2563EB;color:#fff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
+            {{recPaySaving?'Saving…':'Save as Paid'}}
+          </button>
+          <button @click="showRecPay=false" style="padding:9px 22px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:13px;font-weight:500;cursor:pointer;color:#6b7280;font-family:inherit">Cancel</button>
+        </div>
+      </div>
+    </template>
+    
+    <template v-else>
+      <div style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+        <!-- Action bar -->
+        <div class="zb-actionbar no-print" v-if="inv&&!detailLoading">
       <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
         <span style="font-size:14px;font-weight:700;color:#1a1d23">{{inv.name}}</span>
         <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">
@@ -1844,7 +2130,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
           </div>
           <button class="zb-ab-btn" @click="()=>{}"><span v-html="icon('share',12)"></span> Share</button>
           <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF/Print ▾</button>
-          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="()=>{}">💳 Record Payment ▾</button>
+          <button v-if="!isDraft" class="zb-ab-btn zb-ab-primary" @click="openRecPay()">💳 Record Payment ▾</button>
           <button v-if="isDraft" class="zb-ab-btn zb-ab-primary" @click="submitInvoice" :disabled="submitting">
             <span v-if="submitting" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
             {{submitting?'Submitting…':'Submit'}}
@@ -1858,7 +2144,7 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
     <div class="zb-banner no-print" v-if="inv&&!isDraft&&!editing">
       <span style="color:#f59e0b;font-size:15px">✦</span>
       <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Invoice has been sent. Record payment for it as soon as you receive payment. <a href="#" style="color:#2563EB;font-weight:600;text-decoration:none">Learn More</a></span>
-      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0">Record Payment</button>
+      <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="openRecPay()">Record Payment</button>
     </div>
     <div class="zb-banner zb-banner-upi no-print" v-if="inv&&!isDraft&&!editing">
       <span style="font-size:12px;color:#444">🖥 Get paid faster by <a href="#" style="color:#2563EB;text-decoration:none">setting up payment gateways</a> or <a href="#" style="color:#2563EB;text-decoration:none">display a UPI QR code</a>.</span>
@@ -1884,6 +2170,49 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
 
       <!-- PDF view or Edit form -->
       <div class="zb-pdf-wrap" v-if="!editing">
+
+        <!-- Sticky toolbar row with Customize button -->
+        <div style="width:100%;max-width:660px;display:flex;justify-content:flex-end;margin-bottom:10px;position:sticky;top:0;z-index:50">
+          <div @mouseleave="showCustMenu=false" style="position:relative">
+            <button @click="showCustMenu=!showCustMenu"
+              style="display:inline-flex;align-items:center;gap:6px;padding:7px 16px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,.35)">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+              Customize ▾
+            </button>
+            <div v-if="showCustMenu"
+              style="position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.13);min-width:210px;overflow:hidden;z-index:200">
+              <div style="padding:4px 0">
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+                  Standard Template
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m10 0h3a2 2 0 0 0 2-2v-3"/></svg>
+                  Change Template
+                </button>
+                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
+                <button @click="showCustMenu=false;$router.push('/template-editor')" class="zb-cust-menu-item" style="color:#2563EB;font-weight:600">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                  Edit Template
+                </button>
+                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+                  Update Logo &amp; Address
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+                  Manage Custom Fields
+                </button>
+                <button @click="showCustMenu=false" class="zb-cust-menu-item">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                  Terms &amp; Conditions
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="zb-pdf-paper">
           <div class="zb-sent-ribbon" v-if="!isDraft">Sent</div>
           <div class="zb-draft-ribbon" v-else>Draft</div>
@@ -1954,7 +2283,13 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
             </div>
           </div>
           <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
-          <div class="zb-pdf-footer">PDF template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></div>
+          <div class="zb-pdf-footer" style="display:flex;align-items:center;justify-content:space-between">
+            <span>PDF template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></span>
+            <button @click="$router.push('/template-editor')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;color:#2563EB;font-size:11px;font-weight:600;cursor:pointer">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              Edit Template
+            </button>
+          </div>
         </div>
       </div>
 
@@ -2060,26 +2395,31 @@ const InvoiceDetail=defineComponent({name:"InvoiceDetail",
         </div>
       </div>
 
-    </div><!-- /flex row -->
+      </div><!-- /right panel -->
+      </div><!-- /flex row -->
+    </template>
   </div><!-- /detail area -->
+  
   <SendEmailModal :show="showSendEmail" :invoice-name="invName" :inv="inv" @close="showSendEmail=false" @sent="showSendEmail=false"/>
+
 </div>
 `});
 
-const Purchases=defineComponent({name:"Purchases",
-  components:{PurchaseModal},
-  setup(){
-    const list=ref([]),loading=ref(true),showNew=ref(false);
-    async function load(){
-      loading.value=true;
-      try{list.value=await apiList("Purchase Invoice",{fields:["name","supplier","posting_date","due_date","grand_total","outstanding_amount","status"],order:"posting_date desc"});}
-      catch(e){console.error("Purchase Invoice load failed:",e.message);toast("Failed to load bills: "+e.message,"error");}
-      finally{loading.value=false;}
-    }
-    onMounted(load);
-    return{list,loading,showNew,load,fmt,fmtDate,statusBadge,icon,flt,openDoc};
-  },
-  template:`
+  const Purchases = defineComponent({
+    name: "Purchases",
+    components: { PurchaseModal },
+    setup() {
+      const list = ref([]), loading = ref(true), showNew = ref(false);
+      async function load() {
+        loading.value = true;
+        try { list.value = await apiList("Purchase Invoice", { fields: ["name", "supplier", "posting_date", "due_date", "grand_total", "outstanding_amount", "status"], order: "posting_date desc" }); }
+        catch (e) { console.error("Purchase Invoice load failed:", e.message); toast("Failed to load bills: " + e.message, "error"); }
+        finally { loading.value = false; }
+      }
+      onMounted(load);
+      return { list, loading, showNew, load, fmt, fmtDate, statusBadge, icon, flt, openDoc };
+    },
+    template: `
 <div class="b-page">
   <PurchaseModal :show="showNew" @close="showNew=false" @saved="load"/>
   <div class="b-action-bar">
@@ -2112,22 +2452,23 @@ const Purchases=defineComponent({name:"Purchases",
   </div>
 </div>`});
 
-const Payments=defineComponent({name:"Payments",
-  components:{PaymentModal},
-  setup(){
-    const list=ref([]),loading=ref(true),active=ref("all"),showNew=ref(false);
-    const types=[{k:"all",lbl:"All"},{k:"Receive",lbl:"Received"},{k:"Pay",lbl:"Paid Out"}];
-    const filtered=computed(()=>active.value==="all"?list.value:list.value.filter(p=>p.payment_type===active.value));
-    async function load(){
-      loading.value=true;
-      try{list.value=await apiList("Payment Entry",{fields:["name","party","party_type","paid_amount","payment_type","payment_date","mode_of_payment"],order:"payment_date desc"});}
-      catch(e){console.error("Payment Entry load failed:",e.message);toast("Failed to load payments: "+e.message,"error");}
-      finally{loading.value=false;}
-    }
-    onMounted(load);
-    return{list,loading,active,types,filtered,showNew,load,fmt,fmtDate,icon,statusBadge,openDoc};
-  },
-  template:`
+  const Payments = defineComponent({
+    name: "Payments",
+    components: { PaymentModal },
+    setup() {
+      const list = ref([]), loading = ref(true), active = ref("all"), showNew = ref(false);
+      const types = [{ k: "all", lbl: "All" }, { k: "Receive", lbl: "Received" }, { k: "Pay", lbl: "Paid Out" }];
+      const filtered = computed(() => active.value === "all" ? list.value : list.value.filter(p => p.payment_type === active.value));
+      async function load() {
+        loading.value = true;
+        try { list.value = await apiList("Payment Entry", { fields: ["name", "party", "party_type", "paid_amount", "payment_type", "payment_date", "mode_of_payment"], order: "payment_date desc" }); }
+        catch (e) { console.error("Payment Entry load failed:", e.message); toast("Failed to load payments: " + e.message, "error"); }
+        finally { loading.value = false; }
+      }
+      onMounted(load);
+      return { list, loading, active, types, filtered, showNew, load, fmt, fmtDate, icon, statusBadge, openDoc };
+    },
+    template: `
 <div class="b-page">
   <PaymentModal :show="showNew" @close="showNew=false" @saved="load"/>
   <div class="b-action-bar">
@@ -2159,19 +2500,20 @@ const Payments=defineComponent({name:"Payments",
   </div>
 </div>`});
 
-const Banking=defineComponent({name:"Banking",
-  setup(){
-    const cash=ref(null),cashLoad=ref(true),txns=ref([]),txnLoad=ref(false),sel=ref(null);
-    async function loadCash(){cashLoad.value=true;try{cash.value=await apiGET("zoho_books_clone.api.dashboard.get_cash_position");}finally{cashLoad.value=false;}}
-    async function pickAcct(a){
-      sel.value=a.name;txnLoad.value=true;
-      try{txns.value=await apiList("Bank Transaction",{fields:["name","date","description","debit","credit","balance","reference_number","status"],filters:[["bank_account","=",a.name]],order:"date desc",limit:30});}
-      finally{txnLoad.value=false;}
-    }
-    onMounted(loadCash);
-    return{cash,cashLoad,txns,txnLoad,sel,pickAcct,fmt,fmtDate,icon,statusBadge,flt};
-  },
-  template:`
+  const Banking = defineComponent({
+    name: "Banking",
+    setup() {
+      const cash = ref(null), cashLoad = ref(true), txns = ref([]), txnLoad = ref(false), sel = ref(null);
+      async function loadCash() { cashLoad.value = true; try { cash.value = await apiGET("zoho_books_clone.api.dashboard.get_cash_position"); } finally { cashLoad.value = false; } }
+      async function pickAcct(a) {
+        sel.value = a.name; txnLoad.value = true;
+        try { txns.value = await apiList("Bank Transaction", { fields: ["name", "date", "description", "debit", "credit", "balance", "reference_number", "status"], filters: [["bank_account", "=", a.name]], order: "date desc", limit: 30 }); }
+        finally { txnLoad.value = false; }
+      }
+      onMounted(loadCash);
+      return { cash, cashLoad, txns, txnLoad, sel, pickAcct, fmt, fmtDate, icon, statusBadge, flt };
+    },
+    template: `
 <div class="b-page">
   <div class="b-card" style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px">
     <div>
@@ -2215,21 +2557,22 @@ const Banking=defineComponent({name:"Banking",
   </div>
 </div>`});
 
-const Accounts=defineComponent({name:"Accounts",
-  setup(){
-    const list=ref([]),loading=ref(true),active=ref("All");
-    const types=computed(()=>["All",...new Set(list.value.map(a=>a.account_type).filter(Boolean))]);
-    const filtered=computed(()=>active.value==="All"?list.value:list.value.filter(a=>a.account_type===active.value));
-    const TC={Asset:"b-badge-blue",Liability:"b-badge-red",Equity:"b-badge-amber",Income:"b-badge-green",Expense:"b-badge-red",Bank:"b-badge-blue",Cash:"b-badge-green",Receivable:"b-badge-blue",Payable:"b-badge-red",Tax:"b-badge-amber"};
-    async function load(){
-      loading.value=true;
-      try{list.value=await apiList("Account",{fields:["name","account_name","account_type","parent_account","is_group"],limit:100,order:"account_type asc, account_name asc"});}
-      finally{loading.value=false;}
-    }
-    onMounted(load);
-    return{list,loading,active,types,filtered,TC,load,fmt,icon,openDoc,openNew};
-  },
-  template:`
+  const Accounts = defineComponent({
+    name: "Accounts",
+    setup() {
+      const list = ref([]), loading = ref(true), active = ref("All");
+      const types = computed(() => ["All", ...new Set(list.value.map(a => a.account_type).filter(Boolean))]);
+      const filtered = computed(() => active.value === "All" ? list.value : list.value.filter(a => a.account_type === active.value));
+      const TC = { Asset: "b-badge-blue", Liability: "b-badge-red", Equity: "b-badge-amber", Income: "b-badge-green", Expense: "b-badge-red", Bank: "b-badge-blue", Cash: "b-badge-green", Receivable: "b-badge-blue", Payable: "b-badge-red", Tax: "b-badge-amber" };
+      async function load() {
+        loading.value = true;
+        try { list.value = await apiList("Account", { fields: ["name", "account_name", "account_type", "parent_account", "is_group"], limit: 100, order: "account_type asc, account_name asc" }); }
+        finally { loading.value = false; }
+      }
+      onMounted(load);
+      return { list, loading, active, types, filtered, TC, load, fmt, icon, openDoc, openNew };
+    },
+    template: `
 <div class="b-page">
   <div class="b-action-bar">
     <div class="b-filter-row"><button v-for="t in types" :key="t" class="b-pill" :class="{active:active===t}" @click="active=t">{{t}}</button></div>
@@ -2257,28 +2600,29 @@ const Accounts=defineComponent({name:"Accounts",
   </div>
 </div>`});
 
-const Reports=defineComponent({name:"Reports",
-  setup(){
-    const today_str=new Date().toISOString().slice(0,10);
-    const from=ref(new Date(new Date().getFullYear(),new Date().getMonth(),1).toISOString().slice(0,10));
-    const to=ref(today_str);
-    const tab=ref("pl"),running=ref(false);
-    const pl=ref(null),bs=ref(null),cf=ref(null),gst=ref(null);
-    const tabs=[{k:"pl",lbl:"P & L"},{k:"bs",lbl:"Balance Sheet"},{k:"cf",lbl:"Cash Flow"},{k:"gst",lbl:"GST Summary"}];
-    async function run(){
-      running.value=true;
-      const c=co(),args={company:c,from_date:from.value,to_date:to.value};
-      try{
-        if(tab.value==="pl")pl.value=await apiGET("zoho_books_clone.db.queries.get_profit_and_loss",args);
-        else if(tab.value==="bs")bs.value=await apiGET("zoho_books_clone.db.queries.get_balance_sheet_totals",{company:c,as_of_date:to.value});
-        else if(tab.value==="cf")cf.value=await apiGET("zoho_books_clone.db.queries.get_cash_flow",args);
-        else gst.value=await apiGET("zoho_books_clone.db.queries.get_gst_summary",args);
-      }catch(e){toast(e.message,"error");}
-      finally{running.value=false;}
-    }
-    return{from,to,tab,tabs,pl,bs,cf,gst,running,run,fmt,icon,flt};
-  },
-  template:`
+  const Reports = defineComponent({
+    name: "Reports",
+    setup() {
+      const today_str = new Date().toISOString().slice(0, 10);
+      const from = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
+      const to = ref(today_str);
+      const tab = ref("pl"), running = ref(false);
+      const pl = ref(null), bs = ref(null), cf = ref(null), gst = ref(null);
+      const tabs = [{ k: "pl", lbl: "P & L" }, { k: "bs", lbl: "Balance Sheet" }, { k: "cf", lbl: "Cash Flow" }, { k: "gst", lbl: "GST Summary" }];
+      async function run() {
+        running.value = true;
+        const c = co(), args = { company: c, from_date: from.value, to_date: to.value };
+        try {
+          if (tab.value === "pl") pl.value = await apiGET("zoho_books_clone.db.queries.get_profit_and_loss", args);
+          else if (tab.value === "bs") bs.value = await apiGET("zoho_books_clone.db.queries.get_balance_sheet_totals", { company: c, as_of_date: to.value });
+          else if (tab.value === "cf") cf.value = await apiGET("zoho_books_clone.db.queries.get_cash_flow", args);
+          else gst.value = await apiGET("zoho_books_clone.db.queries.get_gst_summary", args);
+        } catch (e) { toast(e.message, "error"); }
+        finally { running.value = false; }
+      }
+      return { from, to, tab, tabs, pl, bs, cf, gst, running, run, fmt, icon, flt };
+    },
+    template: `
 <div class="b-page">
   <div class="b-report-tabs"><button v-for="t in tabs" :key="t.k" class="b-rtab" :class="{active:tab===t.k}" @click="tab=t.k;pl=null;bs=null;cf=null;gst=null">{{t.lbl}}</button></div>
   <div class="b-card" style="display:flex;align-items:center;gap:12px;padding:14px 20px;flex-wrap:wrap">
@@ -2330,36 +2674,37 @@ const Reports=defineComponent({name:"Reports",
   </div>
 </div>`});
 
-/* ═══════════════════════════════════════════════════════════════
-   APP SHELL
-═══════════════════════════════════════════════════════════════ */
-const NAV=[
-  {section:"MAIN",items:[{to:"/",lbl:"Dashboard",icon:"grid"}]},
-  {section:"INVOICING",items:[{to:"/invoices",lbl:"Sales Invoices",icon:"file"},{to:"/purchases",lbl:"Purchase Bills",icon:"purchase"},{to:"/payments",lbl:"Payments",icon:"pay"}]},
-  {section:"REPORTS",items:[{to:"/reports",lbl:"P & L",icon:"trend"},{to:"/accounts",lbl:"Balance Sheet",icon:"chart"}]},
-  {section:"",items:[{to:"/banking",lbl:"Banking",icon:"bank"}]},
-];
-const TITLES={dashboard:"Dashboard",invoices:"Sales Invoices",purchases:"Purchase Bills",payments:"Payments",banking:"Banking",accounts:"Chart of Accounts",reports:"Reports"};
+  /* ═══════════════════════════════════════════════════════════════
+     APP SHELL
+  ═══════════════════════════════════════════════════════════════ */
+  const NAV = [
+    { section: "MAIN", items: [{ to: "/", lbl: "Dashboard", icon: "grid" }] },
+    { section: "INVOICING", items: [{ to: "/invoices", lbl: "Sales Invoices", icon: "file" }, { to: "/purchases", lbl: "Purchase Bills", icon: "purchase" }, { to: "/payments", lbl: "Payments", icon: "pay" }] },
+    { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
+    { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
+  ];
+  const TITLES = { dashboard: "Dashboard", invoices: "Sales Invoices", purchases: "Purchase Bills", payments: "Payments", banking: "Banking", accounts: "Chart of Accounts", reports: "Reports" };
 
-const App=defineComponent({name:"BooksApp",
-  setup(){
-    const route=useRoute();
-    const cname=computed(()=>window.__booksCompany||"My Company");
-    const initials=computed(()=>{const n=window.frappe?.session?.user_fullname||"Admin";return n.split(" ").map(w=>w[0]).slice(0,2).join("").toUpperCase();});
-    const fullname=computed(()=>window.frappe?.session?.user_fullname||"Administrator");
-    const title=computed(()=>TITLES[route.name]||"Books");
-    const collapsed=ref(false);
-    const mobileOpen=ref(false);
+  const App = defineComponent({
+    name: "BooksApp",
+    setup() {
+      const route = useRoute();
+      const cname = computed(() => window.__booksCompany || "My Company");
+      const initials = computed(() => { const n = window.frappe?.session?.user_fullname || "Admin"; return n.split(" ").map(w => w[0]).slice(0, 2).join("").toUpperCase(); });
+      const fullname = computed(() => window.frappe?.session?.user_fullname || "Administrator");
+      const title = computed(() => TITLES[route.name] || "Books");
+      const collapsed = ref(false);
+      const mobileOpen = ref(false);
 
-    function logout(){
-      if(window.frappe&&window.frappe.call){
-        window.frappe.call({method:"logout",callback:()=>{window.location.href="/login";}});
-      } else { window.location.href="/login"; }
-    }
-    function closeMobile(){mobileOpen.value=false;}
-    return{cname,initials,fullname,title,NAV,icon,collapsed,mobileOpen,logout,closeMobile};
-  },
-  template:`
+      function logout() {
+        if (window.frappe && window.frappe.call) {
+          window.frappe.call({ method: "logout", callback: () => { window.location.href = "/login"; } });
+        } else { window.location.href = "/login"; }
+      }
+      function closeMobile() { mobileOpen.value = false; }
+      return { cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile };
+    },
+    template: `
 <div :class="{'books-root':true, collapsed:collapsed, 'mobile-open':mobileOpen}">
   <!-- Mobile overlay -->
   <div class="b-mob-overlay" v-if="mobileOpen" @click="closeMobile"></div>
@@ -2413,8 +2758,8 @@ const App=defineComponent({name:"BooksApp",
   </div>
 </div>`});
 
-/* ── CSS for modal inputs (injected once) ── */
-const modalCSS=`
+  /* ── CSS for modal inputs (injected once) ── */
+  const modalCSS = `
 .mi-label{display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px;letter-spacing:.1px}
 .mi-input{width:100%;border:1px solid #CDD5E0;border-radius:6px;padding:8px 10px;font-size:13.5px;
   font-family:inherit;color:#1A1D23;background:#fff;outline:none;transition:.15s;appearance:none}
@@ -2467,11 +2812,21 @@ const modalCSS=`
 .zb-inv-link{color:#2563EB;font-weight:700;font-size:12.5px}
 .zb-table-empty{text-align:center;padding:48px;color:#aaa;font-size:13px}
 /* Status chips */
-.zb-status-chip{display:inline-block;padding:2px 10px;border-radius:3px;font-size:11px;font-weight:700;letter-spacing:.03em}
+.zb-status-chip{display:inline-block;padding:2px 10px;border-radius:3px;font-size:11px;font-weight:700;letter-spacing:.03em;white-space:nowrap}
 .zb-chip-draft{background:#f3f4f6;color:#6b7280}
 .zb-chip-due{background:#fef3c7;color:#92400e}
-.zb-chip-overdue{background:#fee2e2;color:#991b1b}
+.zb-chip-overdue{background:transparent;color:#dc2626}
 .zb-chip-paid{background:#d1fae5;color:#065f46}
+.zb-chip-partpaid{background:#fef3c7;color:#d97706}
+/* Invoice list pills */
+.zb-inv-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:20px;font-size:12.5px;font-weight:600;border:1.5px solid #e8ecf0;background:#fff;color:#6b7280;cursor:pointer;transition:all .15s;font-family:inherit}
+.zb-inv-pill:hover{border-color:#1a6ef7;color:#1a6ef7}
+.zb-inv-pill-active{background:#eaf1ff;border-color:#1a6ef7;color:#1a6ef7}
+.zb-pill-cnt{font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:12px}
+.zb-pc-muted{background:#e5e7eb;color:#6b7280}
+.zb-pc-amber{background:#fef3c7;color:#d97706}
+.zb-pc-red{background:#fee2e2;color:#dc2626}
+.zb-pc-green{background:#d1fae5;color:#059669}
 /* Split list (narrow, when detail open) */
 .zb-split-list{width:300px;flex-shrink:0;border-right:1px solid #e0e2e7;background:#fff;display:flex;flex-direction:column;overflow:hidden}
 .zb-split-header{padding:12px 12px 0;flex-shrink:0;border-bottom:1px solid #f0f0f0}
@@ -2547,8 +2902,10 @@ const modalCSS=`
 .zb-ab-success:hover{background:#276835!important}
 .zb-banner{display:flex;align-items:center;gap:10px;padding:9px 16px;background:#fffbeb;border-bottom:1px solid #fde68a;font-size:12px;color:#92400e;flex-shrink:0}
 /* PDF wrap */
-.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;justify-content:center;align-items:flex-start}
-.zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:hidden}
+.zb-pdf-wrap{flex:1;overflow-y:auto;background:#e8eaed;padding:24px;display:flex;flex-direction:column;align-items:center;position:relative}
+.zb-pdf-paper{position:relative;width:100%;max-width:660px;background:#fff;box-shadow:0 2px 16px rgba(0,0,0,.13);padding:36px 42px;overflow:visible}
+.zb-cust-menu-item{display:flex;align-items:center;gap:9px;width:100%;padding:9px 16px;background:transparent;border:none;font-size:13px;color:#374151;cursor:pointer;text-align:left;font-family:inherit;transition:background .1s}
+.zb-cust-menu-item:hover{background:#f5f7ff;color:#2563EB}
 .zb-draft-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#6b7280;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
 .zb-sent-ribbon{position:absolute;top:26px;left:-26px;width:110px;background:#2563EB;color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-align:center;padding:5px 0;transform:rotate(-45deg);z-index:10}
 .zb-banner-upi{background:#f0f9ff;border-bottom-color:#bae6fd;padding:7px 16px}
@@ -2755,75 +3112,450 @@ const modalCSS=`
 }
 `;
 
-if(!document.getElementById("books-modal-css")){
-  const s=document.createElement("style");s.id="books-modal-css";s.textContent=modalCSS;
-  document.head.appendChild(s);
-}
-
-/* ── Boot ── */
-const router=createRouter({
-  history:createWebHashHistory(),
-  routes:[
-    {path:"/",        component:Dashboard,     name:"dashboard"},
-    {path:"/invoices",component:Invoices,      name:"invoices"},
-    {path:"/invoices/:name",component:InvoiceDetail,name:"invoice-detail"},
-    {path:"/purchases",component:Purchases,   name:"purchases"},
-    {path:"/payments", component:Payments,    name:"payments"},
-    {path:"/banking",  component:Banking,     name:"banking"},
-    {path:"/accounts", component:Accounts,   name:"accounts"},
-    {path:"/reports",  component:Reports,    name:"reports"},
-  ]
-});
-
-
-function getCsrfFromCookie(){
-  const m=document.cookie.split(";").map(c=>c.trim()).find(c=>c.startsWith("csrf_token="));
-  return m?decodeURIComponent(m.split("=").slice(1).join("=")):"";
-}
-
-async function bootstrapCsrf(){
-  if(!window.frappe)window.frappe={session:{},boot:{sysdefaults:{company:""}}};
-
- // Step 1: Try GET /api/method/zoho_books_clone.api.session.get_books_session
-  // This is a GET so no CSRF needed — and it returns the token for future POSTs
-  try{
-    const r=await fetch("/api/method/zoho_books_clone.api.session.get_books_session",{
-      method:"GET",credentials:"same-origin",
-      headers:{"Accept":"application/json"}
-    });
-    if(!r.ok){
-      // Not logged in — redirect to login
-      window.location.href="/login?redirect-to=/books";
-      return "";
-    }
-    const data=await r.json();
-    const msg=data.message||{};
-    if(msg.csrf_token&&msg.csrf_token!=="None"){
-      window.frappe.csrf_token=msg.csrf_token;
-    }
-    if(msg.user)window.frappe.session.user=msg.user;
-    if(msg.company){
-      window.__booksCompany=msg.company;
-      window.frappe.boot.sysdefaults.company=msg.company;
-    }
-    if(window.frappe.csrf_token&&window.frappe.csrf_token!=="None"){
-      return window.frappe.csrf_token;
-    }
-  }catch(e){console.warn("[Books] Session fetch failed:",e.message);}
-
-  // Step 2: Cookie fallback
-  const fromCookie=getCsrfFromCookie();
-  if(fromCookie&&fromCookie!=="None"){
-    window.frappe.csrf_token=fromCookie;
-    return fromCookie;
+  if (!document.getElementById("books-modal-css")) {
+    const s = document.createElement("style"); s.id = "books-modal-css"; s.textContent = modalCSS;
+    document.head.appendChild(s);
   }
 
-  console.error("[Books] No CSRF token available — POSTs will fail");
-  return "";
-}
+  /* ── Template Editor ── */
+  const TemplateEditor = defineComponent({
+    name: "TemplateEditor",
+    setup() {
+      const router = useRouter();
+      const activeTab = ref("general");
+      const saving = ref(false);
+      const saveMsg = ref("");
+      const previewHtml = ref("");
+      const loadingPreview = ref(false);
+      const logoUrl = ref("");
+      const upiId = ref("");
+      const showUpiQr = ref(true);
+      const primaryColor = ref("#2563EB");
+      const fontFamily = ref("Inter");
+      const paperSize = ref("A4");
+      const orientation = ref("Portrait");
+      const margins = reactive({ top: "0.7", bottom: "0.7", left: "0.55", right: "0.4" });
+      const templateName = ref("Tax Invoice");
+      const showLogo = ref(true);
+      const showSignature = ref(true);
+      const showTerms = ref(true);
+      const showNotes = ref(true);
+      const headerTitle = ref("TAX INVOICE");
+      const footerText = ref("Thanks for your business.");
+      const tableColumns = reactive({ qty: true, rate: true, amount: true, hsn: true, discount: false, tax: false });
 
-bootstrapCsrf().then(()=>{
-  createApp(App).use(router).mount("#books-app");
-});
+      const tabs = [
+        { key: "general", label: "General", icon: "⚙" },
+        { key: "header", label: "Header & Footer", icon: "📋" },
+        { key: "transaction", label: "Transaction Details", icon: "📄" },
+        { key: "table", label: "Table", icon: "⊞" },
+        { key: "total", label: "Total", icon: "∑" },
+        { key: "other", label: "Other Details", icon: "⋯" },
+      ];
+
+      async function loadSettings() {
+        try {
+          const r = await fetch("/api/method/frappe.client.get?doctype=Print+Format&name=Tax+Invoice", { credentials: "same-origin" });
+          const d = await r.json();
+          const pf = d.message || {};
+          // parse stored meta if any
+          if (pf.custom_format_meta) {
+            try {
+              const m = JSON.parse(pf.custom_format_meta);
+              if (m.primaryColor) primaryColor.value = m.primaryColor;
+              if (m.fontFamily) fontFamily.value = m.fontFamily;
+              if (m.upiId) upiId.value = m.upiId;
+              if (m.showUpiQr != null) showUpiQr.value = m.showUpiQr;
+              if (m.showLogo != null) showLogo.value = m.showLogo;
+              if (m.headerTitle) headerTitle.value = m.headerTitle;
+              if (m.footerText) footerText.value = m.footerText;
+            } catch (e) { }
+          }
+        } catch (e) { }
+        refreshPreview();
+      }
+
+      async function refreshPreview() {
+        loadingPreview.value = true;
+        try {
+          // Render using a real invoice if available, else use mock
+          const r = await fetch("/api/method/frappe.client.get_list?doctype=Sales+Invoice&limit=1&fields=[%22name%22]", { credentials: "same-origin" });
+          const d = await r.json();
+          const invName = (d.message && d.message[0]) ? d.message[0].name : null;
+          if (invName) {
+            const pr = await fetch(`/api/method/frappe.www.printview.get_html_and_style?doc=${encodeURIComponent(invName)}&print_format=Tax+Invoice&_lang=en`, { credentials: "same-origin" });
+            if (pr.ok) {
+              const pd = await pr.json();
+              previewHtml.value = (pd.message && pd.message.html) || previewHtml.value;
+            }
+          }
+        } catch (e) { }
+        loadingPreview.value = false;
+      }
+
+      async function saveTemplate() {
+        saving.value = true;
+        saveMsg.value = "";
+        try {
+          const meta = { primaryColor: primaryColor.value, fontFamily: fontFamily.value, upiId: upiId.value, showUpiQr: showUpiQr.value, showLogo: showLogo.value, headerTitle: headerTitle.value, footerText: footerText.value };
+          // Save meta to Print Format description field
+          const body = new FormData();
+          body.append("cmd", "frappe.client.set_value");
+          body.append("doctype", "Print Format");
+          body.append("name", "Tax Invoice");
+          body.append("fieldname", "description");
+          body.append("value", JSON.stringify(meta));
+          body.append("csrf_token", window.frappe?.csrf_token || "");
+          await fetch("/api/method/frappe.client.set_value", { method: "POST", credentials: "same-origin", body });
+          // Trigger server-side rebuild of HTML
+          const rb = new FormData();
+          rb.append("cmd", "zoho_books_clone.books_setup.install.seed_print_formats");
+          rb.append("csrf_token", window.frappe?.csrf_token || "");
+          await fetch("/api/method/zoho_books_clone.books_setup.install.seed_print_formats", { method: "POST", credentials: "same-origin", body: rb });
+          saveMsg.value = "✓ Saved";
+          setTimeout(() => saveMsg.value = "", 3000);
+        } catch (e) { saveMsg.value = "Error saving"; }
+        saving.value = false;
+      }
+
+      function close() { router.push("/invoices"); }
+
+      onMounted(loadSettings);
+
+      return { activeTab, tabs, saving, saveMsg, previewHtml, loadingPreview, logoUrl, upiId, showUpiQr, primaryColor, fontFamily, paperSize, orientation, margins, templateName, showLogo, showSignature, showTerms, showNotes, headerTitle, footerText, tableColumns, saveTemplate, close, refreshPreview };
+    },
+    template: `
+<div style="display:flex;flex-direction:column;height:100vh;background:#f0f2f5;overflow:hidden">
+  <!-- Top Bar -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;background:#fff;border-bottom:1px solid #e5e7eb;flex-shrink:0">
+    <span style="font-size:15px;font-weight:600;color:#111">Edit Template</span>
+    <div style="display:flex;align-items:center;gap:10px">
+      <button @click="refreshPreview" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border:1px solid #d1d5db;border-radius:6px;background:#fff;font-size:12.5px;cursor:pointer;color:#374151;font-weight:500">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Refresh Preview
+      </button>
+      <span v-if="saveMsg" style="font-size:12px;color:#16a34a;font-weight:600">{{saveMsg}}</span>
+      <button @click="saveTemplate" :disabled="saving" style="padding:6px 20px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer">
+        {{saving?'Saving…':'Save'}}
+      </button>
+      <button @click="close" style="width:30px;height:30px;border:none;background:transparent;cursor:pointer;font-size:18px;color:#6b7280;display:flex;align-items:center;justify-content:center">✕</button>
+    </div>
+  </div>
+
+  <!-- Body -->
+  <div style="display:flex;flex:1;overflow:hidden">
+
+    <!-- Left Panel -->
+    <div style="width:280px;flex-shrink:0;background:#fff;border-right:1px solid #e5e7eb;display:flex;flex-direction:column;overflow:hidden">
+      <!-- Tab Icons -->
+      <div style="display:flex;flex-direction:column;width:64px;background:#f8fafc;border-right:1px solid #e5e7eb;flex-shrink:0;position:absolute;height:calc(100vh - 52px)">
+        <button v-for="t in tabs" :key="t.key" @click="activeTab=t.key"
+          :style="{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'14px 4px',border:'none',cursor:'pointer',background:activeTab===t.key?'#eff6ff':'transparent',color:activeTab===t.key?'#2563EB':'#6b7280',borderLeft:activeTab===t.key?'3px solid #2563EB':'3px solid transparent',gap:'4px',width:'100%'}">
+          <span style="font-size:16px">{{t.icon}}</span>
+          <span style="font-size:9px;font-weight:600;text-align:center;line-height:1.2;letter-spacing:.3px">{{t.label.split(' ')[0]}}</span>
+        </button>
+      </div>
+
+      <!-- Panel Content -->
+      <div style="margin-left:64px;flex:1;overflow-y:auto;padding:16px">
+
+        <!-- GENERAL -->
+        <template v-if="activeTab==='general'">
+          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Template Properties</div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Template Name *</label>
+            <input v-model="templateName" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;outline:none"/>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Paper Size</label>
+            <div style="display:flex;gap:12px">
+              <label v-for="s in ['A5','A4','Letter']" :key="s" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+                <input type="radio" v-model="paperSize" :value="s"> {{s}}
+              </label>
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Orientation</label>
+            <div style="display:flex;gap:12px">
+              <label v-for="o in ['Portrait','Landscape']" :key="o" style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+                <input type="radio" v-model="orientation" :value="o"> {{o}}
+              </label>
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:8px">Margins (in inches)</label>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+              <div v-for="m in ['top','bottom','left','right']" :key="m">
+                <label style="font-size:10px;color:#6b7280;text-transform:capitalize">{{m}}</label>
+                <input v-model="margins[m]" type="number" step="0.05" style="width:100%;padding:5px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px;margin-top:2px"/>
+              </div>
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Primary Color</label>
+            <div style="display:flex;align-items:center;gap:8px">
+              <input type="color" v-model="primaryColor" style="width:36px;height:32px;border:1px solid #d1d5db;border-radius:4px;cursor:pointer;padding:2px"/>
+              <input v-model="primaryColor" style="flex:1;padding:6px 8px;border:1px solid #d1d5db;border-radius:5px;font-size:12px"/>
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Font Family</label>
+            <select v-model="fontFamily" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px">
+              <option>Inter</option><option>DM Sans</option><option>Poppins</option><option>Roboto</option><option>Arial</option>
+            </select>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151">
+              <input type="checkbox" v-model="showUpiQr" style="width:15px;height:15px">
+              Include Payment Stub (UPI QR)
+            </label>
+          </div>
+        </template>
+
+        <!-- HEADER & FOOTER -->
+        <template v-if="activeTab==='header'">
+          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Header & Footer</div>
+          <div style="margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151;margin-bottom:10px">
+              <input type="checkbox" v-model="showLogo" style="width:15px;height:15px">
+              Show Company Logo
+            </label>
+            <div v-if="showLogo" style="border:2px dashed #d1d5db;border-radius:8px;padding:20px;text-align:center;background:#f9fafb">
+              <div style="font-size:11px;color:#6b7280;margin-bottom:8px">Upload your company logo</div>
+              <div style="font-size:10px;color:#9ca3af">Go to: Settings → Company → Upload Logo</div>
+              <div v-if="logoUrl" style="margin-top:8px"><img :src="logoUrl" style="max-height:50px;max-width:140px"/></div>
+              <div v-else style="margin-top:8px;font-size:10px;color:#2563EB">Logo will appear from Company settings</div>
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Invoice Title</label>
+            <input v-model="headerTitle" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px"/>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Footer Text</label>
+            <textarea v-model="footerText" rows="3" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px;resize:vertical"></textarea>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151">
+              <input type="checkbox" v-model="showSignature" style="width:15px;height:15px">
+              Show Authorized Signature line
+            </label>
+          </div>
+        </template>
+
+        <!-- TRANSACTION DETAILS -->
+        <template v-if="activeTab==='transaction'">
+          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Transaction Details</div>
+          <div style="background:#eff6ff;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:#1e40af">
+            These fields appear in the header info table on the invoice.
+          </div>
+          <div v-for="field in ['Invoice #','Invoice Date','Terms','Due Date','P.O. #']" :key="field" style="margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
+              <input type="checkbox" checked style="width:14px;height:14px"> {{field}}
+            </label>
+          </div>
+        </template>
+
+        <!-- TABLE -->
+        <template v-if="activeTab==='table'">
+          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Table Columns</div>
+          <div v-for="(val,key) in tableColumns" :key="key" style="margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151;text-transform:capitalize">
+              <input type="checkbox" v-model="tableColumns[key]" style="width:14px;height:14px"> {{key==='qty'?'Quantity':key==='hsn'?'HSN Code':key.charAt(0).toUpperCase()+key.slice(1)}}
+            </label>
+          </div>
+        </template>
+
+        <!-- TOTAL -->
+        <template v-if="activeTab==='total'">
+          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Total Section</div>
+          <div v-for="f in ['Sub Total','Tax Amount','Grand Total','Balance Due','Total in Words']" :key="f" style="margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
+              <input type="checkbox" checked style="width:14px;height:14px"> {{f}}
+            </label>
+          </div>
+          <div style="margin-top:16px;padding-top:14px;border-top:1px solid #e5e7eb">
+            <div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:10px">UPI QR Code</div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:500;color:#374151;margin-bottom:10px">
+              <input type="checkbox" v-model="showUpiQr" style="width:15px;height:15px"> Show UPI QR Code
+            </label>
+            <div v-if="showUpiQr">
+              <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">UPI ID</label>
+              <input v-model="upiId" placeholder="yourname@upi" style="width:100%;padding:7px 10px;border:1px solid #d1d5db;border-radius:6px;font-size:12.5px"/>
+              <div style="font-size:10px;color:#6b7280;margin-top:4px">e.g. business@okicici, 9876543210@paytm</div>
+            </div>
+          </div>
+        </template>
+
+        <!-- OTHER -->
+        <template v-if="activeTab==='other'">
+          <div style="font-size:13px;font-weight:700;color:#111;margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid #e5e7eb">Other Details</div>
+          <div v-for="f in ['Notes','Terms & Conditions','Ship To Address','GSTIN']" :key="f" style="margin-bottom:10px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:#374151">
+              <input type="checkbox" checked style="width:14px;height:14px"> {{f}}
+            </label>
+          </div>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
+            <label style="display:block;font-size:11px;font-weight:600;color:#374151;margin-bottom:5px">Background Color</label>
+            <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px;margin-top:6px">
+              <div v-for="c in ['#ffffff','#f8fafc','#f0f9ff','#f0fdf4','#fff7ed']" :key="c"
+                :style="{width:'100%',aspectRatio:'1',background:c,borderRadius:'6px',border:'2px solid #e5e7eb',cursor:'pointer'}">
+              </div>
+            </div>
+          </div>
+        </template>
+
+      </div>
+    </div>
+
+    <!-- Right Preview -->
+    <div style="flex:1;overflow-y:auto;background:#e5e7eb;padding:24px;display:flex;flex-direction:column;align-items:center">
+      <div style="font-size:11px;color:#6b7280;margin-bottom:12px;text-transform:uppercase;letter-spacing:.8px;font-weight:600">Live Preview</div>
+      <div v-if="loadingPreview" style="display:flex;align-items:center;justify-content:center;height:200px;color:#6b7280;font-size:13px">
+        Loading preview…
+      </div>
+      <div v-else :style="{width:'100%',maxWidth:'794px',background:'#fff',borderRadius:'4px',boxShadow:'0 4px 24px rgba(0,0,0,.12)',minHeight:'1000px',overflow:'hidden',fontFamily:fontFamily}">
+        <div v-if="previewHtml" v-html="previewHtml" style="width:100%"></div>
+        <div v-else style="padding:48px 40px">
+          <!-- Static preview matching Zoho style -->
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px">
+            <div>
+              <div v-if="showLogo" style="width:140px;height:52px;border:2px dashed #d1d5db;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;color:#9ca3af;margin-bottom:8px">Your Logo</div>
+              <div style="font-size:14px;font-weight:600;color:#111">{{$root?$root.companyName||'Company Name':'Company Name'}}</div>
+              <div style="font-size:11px;color:#6b7280;margin-top:2px">Tamil Nadu, India</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:11px;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#9ca3af;margin-bottom:4px">Tax Invoice</div>
+              <div :style="{fontSize:'22px',fontWeight:'700',color:primaryColor,marginBottom:'12px'}">{{headerTitle}}</div>
+              <table style="margin-left:auto;border-collapse:collapse">
+                <tr v-for="r in [['Invoice Date','18 Mar 2026'],['Due Date','18 Mar 2026'],['Terms','Due on Receipt']]" :key="r[0]">
+                  <td style="padding:2px 0 2px 16px;font-size:11.5px;color:#9ca3af">{{r[0]}}</td>
+                  <td style="padding:2px 0 2px 16px;font-size:11.5px;font-weight:500;color:#111">{{r[1]}}</td>
+                </tr>
+              </table>
+            </div>
+          </div>
+          <hr style="border:none;border-top:1px solid #e5e7eb;margin:0 0 20px"/>
+          <div style="margin-bottom:20px">
+            <div style="font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#9ca3af;margin-bottom:4px">Bill To</div>
+            <div style="font-size:14px;font-weight:600;color:#111">Customer Name</div>
+            <div style="font-size:12px;color:#6b7280">Chennai, Tamil Nadu</div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+            <thead>
+              <tr :style="{background:primaryColor}">
+                <th style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:left">#</th>
+                <th style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:left">Item &amp; Description</th>
+                <th v-if="tableColumns.qty" style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:right">Qty</th>
+                <th v-if="tableColumns.rate" style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:right">Rate</th>
+                <th v-if="tableColumns.amount" style="padding:10px 14px;font-size:11px;font-weight:600;color:#fff;text-align:right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7">1</td>
+                <td style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7"><div style="font-weight:500">Sample Item</div><div style="font-size:11px;color:#9ca3af">Item description</div></td>
+                <td v-if="tableColumns.qty" style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7;text-align:right">1.00</td>
+                <td v-if="tableColumns.rate" style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7;text-align:right">₹5,000.00</td>
+                <td v-if="tableColumns.amount" style="padding:11px 14px;font-size:13px;color:#374151;border-bottom:1px solid #f2f4f7;text-align:right">₹5,000.00</td>
+              </tr>
+            </tbody>
+          </table>
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px">
+            <div v-if="showUpiQr" style="text-align:center;padding:12px 16px;background:#f8fafc;border-radius:8px;border:1px solid #e5e7eb;min-width:130px">
+              <div style="font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#9ca3af;margin-bottom:8px">Pay via UPI</div>
+              <div style="width:100px;height:100px;background:#e5e7eb;border-radius:4px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center">
+                <svg width="60" height="60" viewBox="0 0 60 60" fill="none"><rect x="2" y="2" width="20" height="20" rx="2" stroke="#374151" stroke-width="2"/><rect x="6" y="6" width="12" height="12" fill="#374151"/><rect x="38" y="2" width="20" height="20" rx="2" stroke="#374151" stroke-width="2"/><rect x="42" y="6" width="12" height="12" fill="#374151"/><rect x="2" y="38" width="20" height="20" rx="2" stroke="#374151" stroke-width="2"/><rect x="6" y="42" width="12" height="12" fill="#374151"/><rect x="28" y="28" width="4" height="4" fill="#374151"/><rect x="34" y="28" width="4" height="4" fill="#374151"/><rect x="40" y="28" width="4" height="4" fill="#374151"/><rect x="28" y="34" width="4" height="4" fill="#374151"/><rect x="40" y="34" width="4" height="4" fill="#374151"/><rect x="28" y="40" width="4" height="4" fill="#374151"/><rect x="34" y="40" width="4" height="4" fill="#374151"/><rect x="40" y="40" width="4" height="4" fill="#374151"/><rect x="46" y="34" width="4" height="4" fill="#374151"/><rect x="46" y="46" width="4" height="4" fill="#374151"/><rect x="34" y="46" width="4" height="4" fill="#374151"/></svg>
+              </div>
+              <div style="font-size:10px;color:#6b7280">{{upiId||'yourname@upi'}}</div>
+            </div>
+            <div style="flex:1;max-width:260px;margin-left:auto">
+              <div style="display:flex;justify-content:space-between;padding:7px 0;font-size:13px;border-top:1px solid #e5e7eb"><span style="color:#6b7280">Sub Total</span><span>₹5,000.00</span></div>
+              <div style="display:flex;justify-content:space-between;padding:9px 0;font-size:15px;font-weight:700;border-top:2px solid #e5e7eb"><span>Total</span><span>₹5,000.00</span></div>
+              <div style="display:flex;justify-content:space-between;padding:8px;font-size:13px;font-weight:600;background:#fff5f5;border-radius:4px;margin-top:4px"><span style="color:#dc2626">Balance Due</span><span style="color:#dc2626">₹5,000.00</span></div>
+            </div>
+          </div>
+          <div v-if="showSignature" style="display:flex;justify-content:flex-end;margin-top:32px">
+            <div style="text-align:center">
+              <div style="width:160px;border-top:1px solid #d1d5db;padding-top:6px">
+                <div style="font-size:11px;color:#9ca3af">Authorized Signature</div>
+              </div>
+            </div>
+          </div>
+          <div style="text-align:center;margin-top:20px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;font-weight:600;color:#374151">{{footerText}}</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>`
+  });
+
+  /* ── Boot ── */
+  const router = createRouter({
+    history: createWebHashHistory(),
+    routes: [
+      { path: "/", component: Dashboard, name: "dashboard" },
+      { path: "/invoices", component: Invoices, name: "invoices" },
+      { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
+      { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
+      { path: "/purchases", component: Purchases, name: "purchases" },
+      { path: "/payments", component: Payments, name: "payments" },
+      { path: "/banking", component: Banking, name: "banking" },
+      { path: "/accounts", component: Accounts, name: "accounts" },
+      { path: "/reports", component: Reports, name: "reports" },
+    ]
+  });
+
+
+  function getCsrfFromCookie() {
+    const m = document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("csrf_token="));
+    return m ? decodeURIComponent(m.split("=").slice(1).join("=")) : "";
+  }
+
+  async function bootstrapCsrf() {
+    if (!window.frappe) window.frappe = { session: {}, boot: { sysdefaults: { company: "" } } };
+
+    // Step 1: Try GET /api/method/zoho_books_clone.api.session.get_books_session
+    // This is a GET so no CSRF needed — and it returns the token for future POSTs
+    try {
+      const r = await fetch("/api/method/zoho_books_clone.api.session.get_books_session", {
+        method: "GET", credentials: "same-origin",
+        headers: { "Accept": "application/json" }
+      });
+      if (!r.ok) {
+        // Not logged in — redirect to login
+        window.location.href = "/login?redirect-to=/books";
+        return "";
+      }
+      const data = await r.json();
+      const msg = data.message || {};
+      if (msg.csrf_token && msg.csrf_token !== "None") {
+        window.frappe.csrf_token = msg.csrf_token;
+      }
+      if (msg.user) window.frappe.session.user = msg.user;
+      if (msg.company) {
+        window.__booksCompany = msg.company;
+        window.frappe.boot.sysdefaults.company = msg.company;
+      }
+      if (window.frappe.csrf_token && window.frappe.csrf_token !== "None") {
+        return window.frappe.csrf_token;
+      }
+    } catch (e) { console.warn("[Books] Session fetch failed:", e.message); }
+
+    // Step 2: Cookie fallback
+    const fromCookie = getCsrfFromCookie();
+    if (fromCookie && fromCookie !== "None") {
+      window.frappe.csrf_token = fromCookie;
+      return fromCookie;
+    }
+
+    console.error("[Books] No CSRF token available — POSTs will fail");
+    return "";
+  }
+
+  bootstrapCsrf().then(() => {
+    createApp(App).use(router).mount("#books-app");
+  });
 
 })();
