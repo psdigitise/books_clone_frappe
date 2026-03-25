@@ -2732,7 +2732,7 @@
             const fresh = await apiGET("frappe.client.get", { doctype: "Customer", name: form.name });
             doc.modified = fresh.modified;
           }
-          await apiGET("frappe.client.save", { doc: JSON.stringify(doc) });
+          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc) });
           toast(drawerMode.value === "edit" ? "Customer updated!" : "Customer created!");
           showDrawer.value = false;
           await load();
@@ -2750,7 +2750,7 @@
         if (!deleteTarget.value) return;
         deleting.value = true;
         try {
-          await apiGET("frappe.client.delete", { doctype: "Customer", name: deleteTarget.value.name });
+          await apiPOST("frappe.client.delete", { doctype: "Customer", name: deleteTarget.value.name });
           toast("Customer deleted");
           showDelete.value = false;
           deleteTarget.value = null;
