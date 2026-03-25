@@ -237,6 +237,7 @@
     ext: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
     send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
     share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
+    users: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -2587,6 +2588,468 @@
 </div>
 `});
 
+  /* ═══════════════════════════════════════════════════════════════
+     CUSTOMERS COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const Customers = defineComponent({
+    name: "Customers",
+    setup() {
+      const router = useRouter();
+      const list        = ref([]);
+      const loading     = ref(true);
+      const search      = ref("");
+      const activeFilter= ref("all");
+      const showDrawer  = ref(false);
+      const drawerMode  = ref("add"); // "add" | "edit"
+      const drawerLoading = ref(false);
+      const saving      = ref(false);
+      const showDelete  = ref(false);
+      const deleteTarget= ref(null);
+      const deleting    = ref(false);
+
+      const form = reactive({
+        name: "",
+        customer_name: "", customer_type: "Company",
+        tax_id: "", default_currency: "INR", credit_limit: 0,
+        email_id: "", mobile_no: "", phone: "", website: "",
+        address_line1: "", address_line2: "",
+        city: "", state: "", pincode: "", country: "India",
+        payment_terms: "", disabled: 0,
+      });
+
+      const counts = computed(() => ({
+        all:      list.value.length,
+        active:   list.value.filter(c => !c.disabled).length,
+        disabled: list.value.filter(c =>  c.disabled).length,
+      }));
+
+      const filtered = computed(() => {
+        let r = list.value;
+        if (activeFilter.value === "active")   r = r.filter(c => !c.disabled);
+        if (activeFilter.value === "disabled") r = r.filter(c =>  c.disabled);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(c =>
+          (c.customer_name||"").toLowerCase().includes(q) ||
+          (c.name||"").toLowerCase().includes(q) ||
+          (c.email_id||"").toLowerCase().includes(q) ||
+          (c.mobile_no||"").toLowerCase().includes(q) ||
+          (c.tax_id||"").toLowerCase().includes(q)
+        );
+        return r;
+      });
+
+      async function load() {
+        loading.value = true;
+        try {
+          const rows = await apiList("Customer", {
+            fields: ["name","customer_name","customer_type","email_id","mobile_no",
+                     "tax_id","city","state","disabled","default_currency","credit_limit"],
+            order: "customer_name asc", limit: 300,
+          });
+          list.value = rows || [];
+        } catch(e) {
+          toast("Failed to load customers: " + (e.message || e), "error");
+        } finally { loading.value = false; }
+      }
+
+      function resetForm() {
+        Object.assign(form, {
+          name:"", customer_name:"", customer_type:"Company",
+          tax_id:"", default_currency:"INR", credit_limit:0,
+          email_id:"", mobile_no:"", phone:"", website:"",
+          address_line1:"", address_line2:"",
+          city:"", state:"", pincode:"", country:"India",
+          payment_terms:"", disabled:0,
+        });
+      }
+
+      function openAdd() {
+        resetForm();
+        drawerMode.value = "add";
+        showDrawer.value = true;
+      }
+
+      async function openEdit(name) {
+        resetForm();
+        drawerMode.value = "edit";
+        drawerLoading.value = true;
+        showDrawer.value = true;
+        try {
+          const doc = await apiGET("frappe.client.get", { doctype: "Customer", name });
+          Object.assign(form, {
+            name: doc.name,
+            customer_name: doc.customer_name || "",
+            customer_type: doc.customer_type || "Company",
+            tax_id: doc.tax_id || "",
+            default_currency: doc.default_currency || "INR",
+            credit_limit: doc.credit_limit || 0,
+            email_id: doc.email_id || "",
+            mobile_no: doc.mobile_no || "",
+            phone: doc.phone || "",
+            website: doc.website || "",
+            address_line1: doc.address_line1 || "",
+            address_line2: doc.address_line2 || "",
+            city: doc.city || "",
+            state: doc.state || "",
+            pincode: doc.pincode || "",
+            country: doc.country || "India",
+            payment_terms: doc.payment_terms || "",
+            disabled: doc.disabled || 0,
+          });
+        } catch(e) {
+          toast("Could not load customer: " + (e.message||e), "error");
+          showDrawer.value = false;
+        } finally { drawerLoading.value = false; }
+      }
+
+      async function saveCustomer() {
+        if (!form.customer_name.trim()) { toast("Customer Name is required", "error"); return; }
+        if (form.email_id && !form.email_id.includes("@")) { toast("Invalid email address", "error"); return; }
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Customer",
+            ...(drawerMode.value === "edit" ? { name: form.name } : { naming_series: "CUST-.YYYY.-.#####" }),
+            customer_name: form.customer_name.trim(),
+            customer_type: form.customer_type,
+            tax_id: form.tax_id.trim(),
+            default_currency: form.default_currency,
+            credit_limit: parseFloat(form.credit_limit) || 0,
+            email_id: form.email_id.trim(),
+            mobile_no: form.mobile_no.trim(),
+            phone: form.phone.trim(),
+            website: form.website.trim(),
+            address_line1: form.address_line1.trim(),
+            address_line2: form.address_line2.trim(),
+            city: form.city.trim(),
+            state: form.state.trim(),
+            pincode: form.pincode.trim(),
+            country: form.country.trim() || "India",
+            payment_terms: form.payment_terms,
+            disabled: form.disabled ? 1 : 0,
+          };
+          if (drawerMode.value === "edit") {
+            const fresh = await apiGET("frappe.client.get", { doctype: "Customer", name: form.name });
+            doc.modified = fresh.modified;
+          }
+          await apiGET("frappe.client.save", { doc: JSON.stringify(doc) });
+          toast(drawerMode.value === "edit" ? "Customer updated!" : "Customer created!");
+          showDrawer.value = false;
+          await load();
+        } catch(e) {
+          toast(e.message || "Could not save customer", "error");
+        } finally { saving.value = false; }
+      }
+
+      function confirmDelete(c) {
+        deleteTarget.value = c;
+        showDelete.value = true;
+      }
+
+      async function doDelete() {
+        if (!deleteTarget.value) return;
+        deleting.value = true;
+        try {
+          await apiGET("frappe.client.delete", { doctype: "Customer", name: deleteTarget.value.name });
+          toast("Customer deleted");
+          showDelete.value = false;
+          deleteTarget.value = null;
+          await load();
+        } catch(e) {
+          toast(e.message || "Could not delete customer", "error");
+        } finally { deleting.value = false; }
+      }
+
+      onMounted(load);
+
+      return {
+        list, loading, search, activeFilter, filtered, counts,
+        showDrawer, drawerMode, drawerLoading, saving, form,
+        showDelete, deleteTarget, deleting,
+        load, openAdd, openEdit, saveCustomer, confirmDelete, doDelete,
+        icon, fmt, fmtDate,
+      };
+    },
+    template: `
+<div class="b-page cust-page">
+
+  <!-- ── Toolbar ── -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-filters">
+        <button v-for="f in [{k:'all',l:'All'},{k:'active',l:'Active'},{k:'disabled',l:'Disabled'}]"
+          :key="f.k" class="zb-inv-pill" :class="{'zb-inv-pill-active': activeFilter===f.k}"
+          @click="activeFilter=f.k">
+          {{f.l}}
+          <span class="zb-pill-cnt" :class="activeFilter===f.k?'':'zb-pc-muted'">{{counts[f.k]}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search customers…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <button class="zb-tb-btn" @click="load" title="Refresh">
+        <span v-html="icon('refresh',13)"></span> Refresh
+      </button>
+      <button class="zb-tb-btn zb-tb-primary" @click="openAdd">
+        <span v-html="icon('plus',13)"></span> New Customer
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Table ── -->
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead>
+          <tr>
+            <th>Customer</th>
+            <th>Type</th>
+            <th>GSTIN</th>
+            <th>Email</th>
+            <th>Mobile</th>
+            <th>City / State</th>
+            <th>Status</th>
+            <th style="text-align:center;width:100px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Loading -->
+          <template v-if="loading">
+            <tr v-for="n in 6" :key="n">
+              <td colspan="8" style="padding:12px 14px">
+                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
+              </td>
+            </tr>
+          </template>
+          <!-- Empty -->
+          <tr v-else-if="!filtered.length">
+            <td colspan="8" class="cust-empty">
+              <div class="cust-empty-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+              </div>
+              <div class="cust-empty-title">{{search ? 'No results found' : 'No customers yet'}}</div>
+              <div class="cust-empty-sub">{{search ? 'Try a different search term' : 'Add your first customer to get started'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd">
+                <span v-html="icon('plus',13)"></span> New Customer
+              </button>
+            </td>
+          </tr>
+          <!-- Rows -->
+          <tr v-else v-for="c in filtered" :key="c.name"
+            class="cust-row" :class="c.disabled?'cust-row-disabled':''"
+            @click="openEdit(c.name)">
+            <td>
+              <div class="cust-name">{{c.customer_name}}</div>
+              <div class="cust-id">{{c.name}}</div>
+            </td>
+            <td>
+              <span class="b-badge" :class="c.customer_type==='Company'?'b-badge-blue':'b-badge-muted'">
+                {{c.customer_type||'—'}}
+              </span>
+            </td>
+            <td class="cust-mono">{{c.tax_id||'—'}}</td>
+            <td class="cust-secondary">{{c.email_id||'—'}}</td>
+            <td class="cust-secondary">{{c.mobile_no||'—'}}</td>
+            <td class="cust-secondary">
+              {{c.city ? (c.city + (c.state ? ', '+c.state : '')) : '—'}}
+            </td>
+            <td>
+              <span class="b-badge" :class="c.disabled?'b-badge-red':'b-badge-green'">
+                {{c.disabled?'Disabled':'Active'}}
+              </span>
+            </td>
+            <td @click.stop style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="cust-act-btn cust-act-edit" @click="openEdit(c.name)" title="Edit">
+                  <span v-html="icon('edit',13)"></span>
+                </button>
+                <button class="cust-act-btn cust-act-del" @click="confirmDelete(c)" title="Delete">
+                  <span v-html="icon('trash',13)"></span>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">
+      Showing {{filtered.length}} of {{list.length}} customers
+    </div>
+  </div>
+
+  <!-- ── Add / Edit Drawer ── -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer">
+
+            <!-- Drawer Header -->
+            <div class="cust-drawer-header">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                </div>
+                <div>
+                  <div class="cust-drawer-title">{{drawerMode==='add'?'New Customer':'Edit Customer'}}</div>
+                  <div class="cust-drawer-sub">{{drawerMode==='edit'?form.name:'Fill in customer details'}}</div>
+                </div>
+              </div>
+              <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+            </div>
+
+            <!-- Loading state -->
+            <div v-if="drawerLoading" style="flex:1;display:grid;place-items:center;color:#9ca3af;font-size:13px">
+              <div>Loading customer…</div>
+            </div>
+
+            <!-- Drawer Body -->
+            <div v-else class="cust-drawer-body">
+
+              <div class="cust-sec-label">Basic Information</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field" style="grid-column:span 3">
+                  <label class="nim-label">Customer Name <span class="nim-req">*</span></label>
+                  <input v-model="form.customer_name" class="nim-input" placeholder="Full name or company name"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Customer Type</label>
+                  <select v-model="form.customer_type" class="nim-select">
+                    <option>Company</option><option>Individual</option>
+                  </select>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">GSTIN / Tax ID</label>
+                  <input v-model="form.tax_id" class="nim-input" placeholder="27AAPFU0939F1ZV"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Currency</label>
+                  <select v-model="form.default_currency" class="nim-select">
+                    <option>INR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AED</option><option>SGD</option>
+                  </select>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Credit Limit (₹)</label>
+                  <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Payment Terms</label>
+                  <select v-model="form.payment_terms" class="nim-select">
+                    <option value="">— None —</option>
+                    <option>Net 30</option><option>Net 15</option><option>Net 7</option>
+                    <option>Due on Receipt</option><option>End of Month</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="cust-sec-label">Contact</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field">
+                  <label class="nim-label">Email</label>
+                  <input v-model="form.email_id" type="email" class="nim-input" placeholder="email@example.com"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Mobile</label>
+                  <input v-model="form.mobile_no" class="nim-input" placeholder="+91 98765 43210"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Phone</label>
+                  <input v-model="form.phone" class="nim-input" placeholder="Landline"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Website</label>
+                  <input v-model="form.website" class="nim-input" placeholder="https://"/>
+                </div>
+              </div>
+
+              <div class="cust-sec-label">Billing Address</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field" style="grid-column:span 2">
+                  <label class="nim-label">Address Line 1</label>
+                  <input v-model="form.address_line1" class="nim-input" placeholder="Street, building no."/>
+                </div>
+                <div class="nim-field" style="grid-column:span 2">
+                  <label class="nim-label">Address Line 2</label>
+                  <input v-model="form.address_line2" class="nim-input" placeholder="Area, landmark"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">City</label>
+                  <input v-model="form.city" class="nim-input" placeholder="Mumbai"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">State</label>
+                  <input v-model="form.state" class="nim-input" placeholder="Maharashtra"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Pincode</label>
+                  <input v-model="form.pincode" class="nim-input" placeholder="400001"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Country</label>
+                  <input v-model="form.country" class="nim-input" placeholder="India"/>
+                </div>
+              </div>
+
+              <!-- Disable toggle (edit only) -->
+              <div v-if="drawerMode==='edit'" class="cust-disable-box" @click="form.disabled = form.disabled?0:1">
+                <input type="checkbox" :checked="!!form.disabled" @click.stop="form.disabled=form.disabled?0:1" style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer"/>
+                <label style="font-size:13px;color:#dc2626;cursor:pointer">Disable this customer (won't appear in invoice dropdowns)</label>
+              </div>
+
+            </div>
+
+            <!-- Drawer Footer -->
+            <div class="nim-footer">
+              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+              <button class="nim-btn nim-btn-primary" @click="saveCustomer" :disabled="saving">
+                <span v-if="saving" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+                {{saving ? 'Saving…' : (drawerMode==='add' ? 'Create Customer' : 'Save Changes')}}
+              </button>
+            </div>
+
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+
+  <!-- ── Delete Confirm Modal ── -->
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            </div>
+            <div class="nim-header-title">Delete Customer?</div>
+          </div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Are you sure you want to delete <strong>{{deleteTarget?.customer_name}}</strong>?
+            This action cannot be undone.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Cancel</button>
+          <button @click="doDelete" :disabled="deleting"
+            style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff;display:inline-flex;align-items:center;gap:7px">
+            <span v-if="deleting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{deleting ? 'Deleting…' : 'Yes, Delete'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+</div>
+`});
+
   const Purchases = defineComponent({
     name: "Purchases",
     components: { PurchaseModal },
@@ -2861,11 +3324,16 @@
   ═══════════════════════════════════════════════════════════════ */
   const NAV = [
     { section: "MAIN", items: [{ to: "/", lbl: "Dashboard", icon: "grid" }] },
-    { section: "INVOICING", items: [{ to: "/invoices", lbl: "Sales Invoices", icon: "file" }, { to: "/purchases", lbl: "Purchase Bills", icon: "purchase" }, { to: "/payments", lbl: "Payments", icon: "pay" }] },
+    { section: "INVOICING", items: [
+      { to: "/customers", lbl: "Customers", icon: "users" },
+      { to: "/invoices", lbl: "Sales Invoices", icon: "file" },
+      { to: "/purchases", lbl: "Purchase Bills", icon: "purchase" },
+      { to: "/payments", lbl: "Payments", icon: "pay" }
+    ]},
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard: "Dashboard", invoices: "Sales Invoices", purchases: "Purchase Bills", payments: "Payments", banking: "Banking", accounts: "Chart of Accounts", reports: "Reports" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", invoices: "Sales Invoices", purchases: "Purchase Bills", payments: "Payments", banking: "Banking", accounts: "Chart of Accounts", reports: "Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -3287,6 +3755,53 @@
 
   /* ── CSS for modal inputs (injected once) ── */
   const modalCSS = `
+/* ══ Customers Page ══ */
+.cust-page{display:flex;flex-direction:column;gap:16px;height:100%;min-height:0}
+.cust-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;flex-shrink:0}
+.cust-toolbar-left{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cust-toolbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cust-filters{display:flex;gap:5px;flex-wrap:wrap}
+.cust-search{display:flex;align-items:center;gap:7px;background:#fff;border:1.5px solid #e4e8f0;border-radius:20px;padding:6px 12px}
+.cust-search-input{border:none;outline:none;background:none;font-size:12.5px;font-family:inherit;color:#111827;width:180px;caret-color:#2563eb}
+.cust-search-input::placeholder{color:#9ca3af}
+.cust-table-card{overflow:hidden;flex:1;display:flex;flex-direction:column}
+.cust-table-wrap{flex:1;overflow-y:auto}
+.cust-table{width:100%;border-collapse:collapse;font-size:13px}
+.cust-table thead tr{background:#f8f9fc}
+.cust-table th{padding:10px 14px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;border-bottom:1.5px solid #e4e8f0;white-space:nowrap;position:sticky;top:0;background:#f8f9fc;z-index:2}
+.cust-table td{padding:11px 14px;border-bottom:1px solid #f1f3f7;vertical-align:middle}
+.cust-row{cursor:pointer;transition:background .1s}
+.cust-row:hover td{background:#f8faff}
+.cust-row-disabled{opacity:.5}
+.cust-name{font-weight:600;color:#111827;font-size:13px}
+.cust-id{font-size:11px;color:#9ca3af;margin-top:1px;font-family:monospace}
+.cust-mono{font-family:monospace;font-size:12px;color:#374151}
+.cust-secondary{font-size:12.5px;color:#374151}
+.cust-empty{text-align:center;padding:48px 20px}
+.cust-empty-icon{margin-bottom:12px;display:flex;justify-content:center}
+.cust-empty-title{font-size:15px;font-weight:600;color:#111827;margin-bottom:6px}
+.cust-empty-sub{font-size:13px;color:#9ca3af;margin-bottom:4px}
+.cust-act-btn{width:28px;height:28px;border-radius:6px;border:1.5px solid #e4e8f0;background:none;cursor:pointer;display:grid;place-items:center;transition:.15s}
+.cust-act-edit{color:#2563eb}.cust-act-edit:hover{background:#eff6ff;border-color:#2563eb}
+.cust-act-del{color:#9ca3af}.cust-act-del:hover{background:#fee2e2;border-color:#dc2626;color:#dc2626}
+.cust-row-count{padding:8px 14px;font-size:11.5px;color:#9ca3af;border-top:1px solid #f1f3f7;text-align:right;flex-shrink:0}
+/* Drawer */
+.cust-backdrop{position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.45);display:flex;justify-content:flex-end;backdrop-filter:blur(2px)}
+.cust-drawer{width:560px;max-width:95vw;height:100%;background:#fff;display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15)}
+.cust-drawer-fade-enter-active,.cust-drawer-fade-leave-active{transition:opacity .2s}
+.cust-drawer-fade-enter-from,.cust-drawer-fade-leave-to{opacity:0}
+.cust-drawer-slide-enter-active,.cust-drawer-slide-leave-active{transition:transform .25s cubic-bezier(.4,0,.2,1)}
+.cust-drawer-slide-enter-from,.cust-drawer-slide-leave-to{transform:translateX(100%)}
+.cust-drawer-header{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;background:linear-gradient(135deg,#2563eb,#4f46e5);flex-shrink:0}
+.cust-drawer-header-left{display:flex;align-items:center;gap:12px}
+.cust-drawer-icon{width:36px;height:36px;border-radius:9px;background:rgba(255,255,255,.18);display:grid;place-items:center;color:#fff;flex-shrink:0}
+.cust-drawer-title{font-size:16px;font-weight:700;color:#fff;letter-spacing:-.01em}
+.cust-drawer-sub{font-size:11.5px;color:rgba(255,255,255,.6);margin-top:2px}
+.cust-drawer-body{flex:1;overflow-y:auto;padding:22px 24px}
+.cust-sec-label{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:10px;margin-top:20px;display:block}
+.cust-sec-label:first-child{margin-top:0}
+.cust-disable-box{display:flex;align-items:center;gap:10px;padding:12px 14px;background:#fef2f2;border:1.5px solid rgba(220,38,38,.2);border-radius:9px;margin-top:8px;cursor:pointer}
+
 /* ══ New Invoice Modal (nim) ══ */
 .nim-overlay{
   position:fixed;inset:0;z-index:9000;
@@ -4331,6 +4846,7 @@
     history: createWebHashHistory(),
     routes: [
       { path: "/", component: Dashboard, name: "dashboard" },
+      { path: "/customers", component: Customers, name: "customers" },
       { path: "/invoices", component: Invoices, name: "invoices" },
       { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
       { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
