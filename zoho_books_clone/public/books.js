@@ -239,6 +239,7 @@
     share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>',
     users: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     quote: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+    order: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -3561,6 +3562,647 @@
 </div>
 `});
 
+  /* ═══════════════════════════════════════════════════════════════
+     SALES ORDERS COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const SalesOrders = defineComponent({
+    name: "SalesOrders",
+    setup() {
+      const router = useRouter();
+
+      // ── State ──
+      const list        = ref([]);
+      const customers   = ref([]);
+      const loading     = ref(true);
+      const search      = ref("");
+      const activeFilter= ref("all");
+
+      // Summary
+      const summary = computed(() => ({
+        total    : list.value.length,
+        confirmed: list.value.filter(o => o.status === "Confirmed").length,
+        progress : list.value.filter(o => o.status === "Processing").length,
+        value    : list.value.reduce((s, o) => s + flt(o.grand_total), 0),
+      }));
+
+      const STATUS_CFG = {
+        Draft     : { cls:"b-badge-muted",  lbl:"Draft"      },
+        Confirmed : { cls:"b-badge-blue",   lbl:"Confirmed"  },
+        Processing: { cls:"b-badge-amber",  lbl:"Processing" },
+        Ready     : { cls:"b-badge-green",  lbl:"Ready"      },
+        Invoiced  : { cls:"b-badge-green",  lbl:"Invoiced"   },
+        Cancelled : { cls:"b-badge-red",    lbl:"Cancelled"  },
+      };
+      const STEPS = ["Draft","Confirmed","Processing","Ready","Invoiced"];
+
+      const counts = computed(() => {
+        const r = {};
+        ["Draft","Confirmed","Processing","Ready","Invoiced"].forEach(s => {
+          r[s] = list.value.filter(o => o.status === s).length;
+        });
+        return r;
+      });
+
+      function billedPct(o) {
+        const gt = flt(o.grand_total);
+        return gt > 0 ? Math.min(100, Math.round(flt(o.billed_amount) / gt * 100)) : 0;
+      }
+
+      const filtered = computed(() => {
+        let r = list.value;
+        if (activeFilter.value !== "all") r = r.filter(o => o.status === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(o => (o.name + o.customer + (o.ref_quote||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      // ── localStorage ──
+      const LKEY = "books_sales_orders";
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch {} }
+      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
+      function nextNum() {
+        const nums = readList().map(o => parseInt((o.name||"SO-0").replace(/\D/g,"")) || 0);
+        return "SO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4,"0");
+      }
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function addDays(d,n) { const dt=new Date(d); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+
+      async function load() {
+        loading.value = true;
+        list.value = readList();
+        loading.value = false;
+        try { customers.value = await apiList("Customer", { fields:["name","customer_name"], filters:[["disabled","=",0]], order:"customer_name asc", limit:300 }); } catch {}
+      }
+
+      // ── Drawer ──
+      const showDrawer  = ref(false);
+      const drawerMode  = ref("add"); // "add" | "edit" | "view"
+      const saving      = ref(false);
+      const selCustomer = ref("");
+      const custSearch  = ref("");
+      const showCustDrop= ref(false);
+      const custDropItems = computed(() => {
+        const q = custSearch.value.toLowerCase();
+        return customers.value.filter(c =>
+          (c.customer_name||c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
+        ).slice(0, 40);
+      });
+
+      const form = reactive({
+        name:"", customer:"", order_date:"", delivery_date:"",
+        status:"Draft", ref_quote:"", po_number:"", shipping_address:"", terms:"",
+        items: [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        taxes: [],
+        net_total:0, total_tax:0, grand_total:0, billed_amount:0, created_at:"",
+      });
+
+      const viewOrder = ref(null); // for read-only view
+
+      const netTotal   = computed(() => form.items.reduce((s,r) => s + flt(r.amount), 0));
+      const taxTotal   = computed(() => form.taxes.reduce((s,t) => s + flt(t.tax_amount), 0));
+      const grandTotal = computed(() => Math.round((netTotal.value + taxTotal.value) * 100) / 100);
+
+      function recalc() {
+        form.items.forEach(r => { r.amount = Math.round(flt(r.qty) * flt(r.rate) * 100) / 100; });
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(netTotal.value * flt(t.rate) / 100 * 100) / 100 : 0; });
+      }
+      function addItem()    { form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 }); }
+      function removeItem(i){ if (form.items.length > 1) { form.items.splice(i,1); recalc(); } }
+      function addTax()     { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i,1); recalc(); }
+
+      function resetForm(fromOrder) {
+        const o = fromOrder || {};
+        Object.assign(form, {
+          name: o.name||"",
+          customer: o.customer||"",
+          order_date: o.order_date || todayStr(),
+          delivery_date: o.delivery_date || addDays(todayStr(), 14),
+          status: o.status || "Draft",
+          ref_quote: o.ref_quote||"",
+          po_number: o.po_number||"",
+          shipping_address: o.shipping_address||"",
+          terms: o.terms||"",
+          items: o.items?.length ? o.items.map(r=>({...r})) : [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+          taxes: (o.taxes||[]).map(t=>({...t})),
+          billed_amount: o.billed_amount||0,
+          created_at: o.created_at||todayStr(),
+        });
+        selCustomer.value  = o.customer||"";
+        custSearch.value   = o.customer||"";
+        showCustDrop.value = false;
+      }
+
+      function openAdd() {
+        drawerMode.value = "add";
+        resetForm();
+        showDrawer.value = true;
+      }
+      function openEdit(name) {
+        const o = list.value.find(x => x.name === name);
+        if (!o) return;
+        drawerMode.value = "edit";
+        resetForm(o);
+        showDrawer.value = true;
+      }
+      function openView(name) {
+        const o = list.value.find(x => x.name === name);
+        if (!o) return;
+        viewOrder.value  = o;
+        drawerMode.value = "view";
+        showDrawer.value = true;
+      }
+
+      function pickCustomer(c) {
+        selCustomer.value  = c.name;
+        custSearch.value   = c.customer_name || c.name;
+        form.customer      = c.name;
+        showCustDrop.value = false;
+      }
+
+      function saveOrder(status) {
+        const cust = selCustomer.value || custSearch.value.trim();
+        if (!cust) { toast("Please select a customer", "error"); return; }
+        const existing = list.value.find(o => o.name === form.name);
+        const doc = {
+          name: drawerMode.value === "edit" ? form.name : nextNum(),
+          customer: cust,
+          order_date: form.order_date || todayStr(),
+          delivery_date: form.delivery_date || "",
+          status: status,
+          ref_quote: form.ref_quote.trim(),
+          po_number: form.po_number.trim(),
+          shipping_address: form.shipping_address.trim(),
+          terms: form.terms.trim(),
+          items: form.items.filter(r => r.item_name || r.rate).map(r=>({...r})),
+          taxes: form.taxes.map(t=>({...t})),
+          net_total: Math.round(netTotal.value * 100) / 100,
+          total_tax: Math.round(taxTotal.value * 100) / 100,
+          grand_total: grandTotal.value,
+          billed_amount: existing?.billed_amount || 0,
+          created_at: existing?.created_at || todayStr(),
+        };
+        const arr = readList();
+        const idx = arr.findIndex(o => o.name === doc.name);
+        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
+        storeList(arr); list.value = arr;
+        toast(status === "Confirmed" ? "Order confirmed!" : "Order saved as Draft");
+        showDrawer.value = false;
+      }
+
+      function advanceStatus(name, newStatus) {
+        const arr = readList();
+        const o = arr.find(x => x.name === name);
+        if (!o) return;
+        o.status = newStatus;
+        storeList(arr); list.value = arr;
+        toast("Order " + name + " → " + newStatus);
+        showDrawer.value = false;
+      }
+
+      // ── Convert modal ──
+      const showConvert  = ref(false);
+      const convertTarget= ref(null);
+      function openConvert(o) { convertTarget.value = o; showConvert.value = true; }
+      function doConvert() {
+        const arr = readList();
+        const o = arr.find(x => x.name === convertTarget.value.name);
+        if (o) { o.status = "Invoiced"; o.billed_amount = o.grand_total; storeList(arr); list.value = arr; }
+        toast("Order invoiced — open Invoices to see it", "info");
+        showConvert.value = false; showDrawer.value = false;
+        router.push({ name:"invoices" });
+      }
+
+      // ── Delete modal ──
+      const showDelete  = ref(false);
+      const deleteTarget= ref(null);
+      const deleting    = ref(false);
+      function confirmDelete(o) { deleteTarget.value = o; showDelete.value = true; }
+      function doDelete() {
+        deleting.value = true;
+        const arr = readList().filter(o => o.name !== deleteTarget.value.name);
+        storeList(arr); list.value = arr;
+        toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
+      }
+
+      onMounted(load);
+
+      return {
+        list, customers, loading, search, activeFilter, filtered, counts, summary, billedPct,
+        STATUS_CFG, STEPS, showDrawer, drawerMode, saving, viewOrder,
+        form, selCustomer, custSearch, showCustDrop, custDropItems,
+        netTotal, taxTotal, grandTotal,
+        recalc, addItem, removeItem, addTax, removeTax,
+        pickCustomer, saveOrder, advanceStatus, openAdd, openEdit, openView,
+        showConvert, convertTarget, doConvert,
+        showDelete, deleteTarget, deleting, confirmDelete, doDelete,
+        load, icon, fmt, fmtDate, flt,
+      };
+    },
+    template: `
+<div class="b-page">
+
+  <!-- Summary strip -->
+  <div class="qt-summary">
+    <div class="qt-sum-card"><div class="qt-sum-label">Total Orders</div><div class="qt-sum-value">{{summary.total}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#2563eb">Confirmed</div><div class="qt-sum-value" style="color:#2563eb">{{summary.confirmed}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#d97706">In Progress</div><div class="qt-sum-value" style="color:#d97706">{{summary.progress}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#059669">Order Value</div><div class="qt-sum-value" style="color:#059669">{{fmt(summary.value)}}</div></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-filters">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+        <button v-for="f in ['Draft','Confirmed','Processing','Ready','Invoiced']" :key="f"
+          class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
+          @click="activeFilter=f">
+          {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search order, customer…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Order</button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead>
+          <tr>
+            <th>Order #</th>
+            <th>Customer</th>
+            <th>Order Date</th>
+            <th>Delivery Date</th>
+            <th style="text-align:right">Amount</th>
+            <th style="min-width:110px">Billed</th>
+            <th>Status</th>
+            <th style="text-align:center;width:120px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-if="loading">
+            <tr v-for="n in 5" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:65%"></div></td></tr>
+          </template>
+          <tr v-else-if="!filtered.length">
+            <td colspan="8" class="cust-empty">
+              <div class="cust-empty-icon">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              </div>
+              <div class="cust-empty-title">{{search?'No results found':'No sales orders yet'}}</div>
+              <div class="cust-empty-sub">{{search?'Try a different search term':'Create a sales order to track fulfilment'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Order</button>
+            </td>
+          </tr>
+          <tr v-else v-for="o in filtered" :key="o.name" class="cust-row" @click="openView(o.name)">
+            <td>
+              <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{o.name}}</div>
+              <div v-if="o.ref_quote" style="font-size:11px;color:#9ca3af;margin-top:1px">from {{o.ref_quote}}</div>
+            </td>
+            <td class="cust-name">{{o.customer||'—'}}</td>
+            <td class="cust-secondary">{{fmtDate(o.order_date)}}</td>
+            <td class="cust-secondary">{{fmtDate(o.delivery_date)||'—'}}</td>
+            <td style="text-align:right;font-family:monospace;font-weight:600;color:#111827">{{fmt(o.grand_total)}}</td>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="flex:1;background:#e4e8f0;border-radius:20px;height:6px;overflow:hidden;min-width:60px">
+                  <div :style="{width:billedPct(o)+'%',height:'100%',borderRadius:'20px',background:billedPct(o)>=100?'#059669':billedPct(o)>0?'#d97706':'#e4e8f0',transition:'width .3s'}"></div>
+                </div>
+                <span style="font-size:11px;color:#9ca3af;white-space:nowrap">{{billedPct(o)}}%</span>
+              </div>
+            </td>
+            <td><span class="b-badge" :class="(STATUS_CFG[o.status]||STATUS_CFG.Draft).cls">{{(STATUS_CFG[o.status]||STATUS_CFG.Draft).lbl}}</span></td>
+            <td @click.stop style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="cust-act-btn cust-act-edit" @click="openView(o.name)" title="View">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+                <button v-if="o.status!=='Invoiced'&&o.status!=='Cancelled'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center;transition:.15s"
+                  @click="openConvert(o)" title="Create Invoice">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </button>
+                <button v-if="o.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(o)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} orders</div>
+  </div>
+
+  <!-- ── Drawer (Add / Edit / View) ── -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer" style="width:740px">
+
+            <!-- Header -->
+            <div class="cust-drawer-header">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                </div>
+                <div>
+                  <div class="cust-drawer-title">
+                    {{drawerMode==='add'?'New Sales Order':drawerMode==='edit'?'Edit Order':viewOrder?.name}}
+                  </div>
+                  <div class="cust-drawer-sub">
+                    {{drawerMode==='view'?'Customer: '+viewOrder?.customer:(drawerMode==='edit'?form.name:'Fill in order details')}}
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span v-if="drawerMode==='view'" class="b-badge" :class="(STATUS_CFG[viewOrder?.status]||STATUS_CFG.Draft).cls">
+                  {{(STATUS_CFG[viewOrder?.status]||STATUS_CFG.Draft).lbl}}
+                </span>
+                <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+              </div>
+            </div>
+
+            <!-- ── VIEW MODE ── -->
+            <div v-if="drawerMode==='view' && viewOrder" class="cust-drawer-body">
+              <!-- Status timeline -->
+              <div class="so-timeline">
+                <div v-for="(step,i) in STEPS" :key="step" class="so-tl-step">
+                  <div class="so-tl-dot" :class="STEPS.indexOf(viewOrder.status)>i?'so-done':STEPS.indexOf(viewOrder.status)===i?'so-active':'so-pending'">
+                    <svg v-if="STEPS.indexOf(viewOrder.status)>i" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span v-else>{{i+1}}</span>
+                  </div>
+                  <span class="so-tl-label" :class="STEPS.indexOf(viewOrder.status)>=i?'so-tl-active':'so-tl-pending'">{{step}}</span>
+                  <div v-if="i<STEPS.length-1" class="so-tl-line" :class="STEPS.indexOf(viewOrder.status)>i?'so-line-done':''"></div>
+                </div>
+              </div>
+
+              <!-- Details grid -->
+              <div class="cust-sec-label" style="margin-top:0">Order Details</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field"><label class="nim-label">Customer</label><div style="font-size:13.5px;font-weight:600;color:#111827;padding:4px 0">{{viewOrder.customer}}</div></div>
+                <div class="nim-field"><label class="nim-label">Order Date</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewOrder.order_date)}}</div></div>
+                <div class="nim-field"><label class="nim-label">Delivery Date</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewOrder.delivery_date)||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Reference Quote</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewOrder.ref_quote||'—'}}</div></div>
+                <div v-if="viewOrder.po_number" class="nim-field"><label class="nim-label">Customer PO No.</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewOrder.po_number}}</div></div>
+                <div v-if="viewOrder.shipping_address" class="nim-field" style="grid-column:span 2"><label class="nim-label">Shipping Address</label><div style="font-size:13px;color:#374151;white-space:pre-line;padding:4px 0">{{viewOrder.shipping_address}}</div></div>
+              </div>
+
+              <!-- Items -->
+              <div class="cust-sec-label">Line Items</div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th>Item</th><th>Description</th>
+                    <th style="text-align:center">Qty</th>
+                    <th style="text-align:right">Rate</th>
+                    <th style="text-align:right">Amount</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="r in (viewOrder.items||[])" :key="r.item_name" class="nim-tr">
+                      <td style="font-weight:600">{{r.item_name||'—'}}</td>
+                      <td class="cust-secondary">{{r.description||''}}</td>
+                      <td style="text-align:center">{{r.qty||1}}</td>
+                      <td class="nim-amount" style="text-align:right">{{fmt(r.rate)}}</td>
+                      <td class="nim-amount" style="text-align:right">{{fmt(r.amount)}}</td>
+                    </tr>
+                    <tr v-if="!viewOrder.items?.length"><td colspan="5" style="text-align:center;padding:14px;color:#9ca3af">No items</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Totals -->
+              <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(viewOrder.net_total)}}</span></div>
+                  <div v-if="viewOrder.total_tax" class="nim-total-row nim-tax-row"><span class="nim-total-label">Tax</span><span class="nim-total-val">{{fmt(viewOrder.total_tax)}}</span></div>
+                  <div class="nim-total-grand"><span>Grand Total</span><span>{{fmt(viewOrder.grand_total)}}</span></div>
+                </div>
+              </div>
+
+              <div v-if="viewOrder.terms" class="nim-field nim-mb">
+                <label class="nim-label">Terms & Conditions</label>
+                <div style="font-size:13px;color:#6b7280;line-height:1.6;white-space:pre-line">{{viewOrder.terms}}</div>
+              </div>
+            </div>
+
+            <!-- ── EDIT/ADD FORM ── -->
+            <div v-else-if="drawerMode!=='view'" class="cust-drawer-body">
+              <div class="cust-sec-label" style="margin-top:0">Order Details</div>
+              <div class="nim-grid-3 nim-mb">
+                <!-- Customer -->
+                <div class="nim-field" style="position:relative">
+                  <label class="nim-label">Customer <span class="nim-req">*</span></label>
+                  <input v-model="custSearch" class="nim-input" placeholder="Search customer…"
+                    autocomplete="off"
+                    @focus="showCustDrop=true"
+                    @blur="setTimeout(()=>showCustDrop=false,200)"
+                    @input="showCustDrop=true"/>
+                  <div v-if="showCustDrop && custDropItems.length" class="qt-cust-drop">
+                    <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
+                      <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
+                      <div v-if="c.name!==c.customer_name" style="font-size:11px;color:#9ca3af">{{c.name}}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Order Date <span class="nim-req">*</span></label>
+                  <input v-model="form.order_date" type="date" class="nim-input"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Expected Delivery</label>
+                  <input v-model="form.delivery_date" type="date" class="nim-input"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Status</label>
+                  <select v-model="form.status" class="nim-select">
+                    <option>Draft</option><option>Confirmed</option><option>Processing</option><option>Ready</option>
+                  </select>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Reference Quote #</label>
+                  <input v-model="form.ref_quote" class="nim-input" placeholder="QT-0001"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Customer PO No.</label>
+                  <input v-model="form.po_number" class="nim-input" placeholder="Customer purchase order"/>
+                </div>
+                <div class="nim-field" style="grid-column:span 3">
+                  <label class="nim-label">Shipping Address</label>
+                  <textarea v-model="form.shipping_address" class="nim-input nim-textarea" rows="2" placeholder="Delivery address (if different from billing)"></textarea>
+                </div>
+              </div>
+
+              <!-- Items -->
+              <div class="nim-section-header" style="margin-bottom:8px">
+                <div class="cust-sec-label" style="margin:0">Line Items</div>
+              </div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th style="width:28%">Item / Service</th><th style="width:25%">Description</th>
+                    <th style="width:10%;text-align:center">Qty</th>
+                    <th style="width:16%;text-align:right">Rate (₹)</th>
+                    <th style="width:16%;text-align:right">Amount (₹)</th>
+                    <th style="width:5%"></th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
+                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
+                      <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                      <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                      <td class="nim-amount" style="text-align:right">{{flt(item.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                      <td style="text-align:center"><button v-if="form.items.length>1" @click="removeItem(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="nim-table-footer"><button @click="addItem" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Row</button></div>
+              </div>
+
+              <!-- Taxes -->
+              <div class="nim-section-header nim-mb-sm">
+                <div class="cust-sec-label" style="margin:0">Taxes</div>
+                <button @click="addTax" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Tax</button>
+              </div>
+              <div v-if="form.taxes.length" class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th style="width:20%">Type</th><th style="width:30%">Description</th>
+                    <th style="width:14%;text-align:center">Rate %</th>
+                    <th style="width:32%;text-align:right">Amount (₹)</th><th style="width:4%"></th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(tax,i) in form.taxes" :key="i" class="nim-tr">
+                      <td><select v-model="tax.tax_type" class="nim-cell" @change="tax.description=tax.tax_type;recalc()"><option>CGST</option><option>SGST</option><option>IGST</option><option>Cess</option><option>Other</option></select></td>
+                      <td><input v-model="tax.description" class="nim-cell"/></td>
+                      <td style="text-align:center"><input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                      <td class="nim-amount" style="text-align:right">{{flt(tax.tax_amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                      <td style="text-align:center"><button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Totals + Terms -->
+              <div class="nim-bottom-row">
+                <div class="nim-field" style="flex:1">
+                  <label class="nim-label">Terms &amp; Conditions</label>
+                  <textarea v-model="form.terms" class="nim-input nim-textarea" rows="4" placeholder="Delivery terms, payment terms, warranty…"></textarea>
+                </div>
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(netTotal)}}</span></div>
+                  <div v-for="tax in form.taxes" :key="tax.tax_type" class="nim-total-row nim-tax-row">
+                    <span class="nim-total-label">{{tax.description||tax.tax_type}} ({{tax.rate}}%)</span>
+                    <span class="nim-total-val">{{fmt(tax.tax_amount)}}</span>
+                  </div>
+                  <div class="nim-total-grand"><span>Grand Total</span><span>{{fmt(grandTotal)}}</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="nim-footer">
+              <!-- View mode footer -->
+              <template v-if="drawerMode==='view' && viewOrder">
+                <div style="font-size:12px;color:#9ca3af">Created {{fmtDate(viewOrder.created_at)}}</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="nim-btn nim-btn-ghost" @click="openEdit(viewOrder.name)"><span v-html="icon('edit',13)"></span> Edit</button>
+                  <button v-if="viewOrder.status==='Draft'" class="nim-btn" style="background:#2563eb;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
+                    @click="advanceStatus(viewOrder.name,'Confirmed')">Confirm Order</button>
+                  <button v-if="viewOrder.status==='Confirmed'" class="nim-btn" style="background:#d97706;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
+                    @click="advanceStatus(viewOrder.name,'Processing')">Mark Processing</button>
+                  <button v-if="viewOrder.status==='Processing'" class="nim-btn" style="background:#059669;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
+                    @click="advanceStatus(viewOrder.name,'Ready')">Mark Ready</button>
+                  <button v-if="viewOrder.status!=='Invoiced'&&viewOrder.status!=='Cancelled'" class="nim-btn nim-btn-primary" @click="openConvert(viewOrder)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    Create Invoice
+                  </button>
+                </div>
+              </template>
+              <!-- Add/Edit footer -->
+              <template v-else-if="drawerMode!=='view'">
+                <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+                <div style="display:flex;gap:8px">
+                  <button class="nim-btn nim-btn-outline" @click="saveOrder('Draft')" :disabled="saving">Save as Draft</button>
+                  <button class="nim-btn nim-btn-primary" @click="saveOrder(drawerMode==='edit'?form.status:'Confirmed')" :disabled="saving">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    {{drawerMode==='edit'?'Save Changes':'Confirm Order'}}
+                  </button>
+                </div>
+              </template>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+
+  <!-- ── Convert to Invoice Modal ── -->
+  <teleport to="body">
+    <div v-if="showConvert" class="nim-overlay" @click.self="showConvert=false">
+      <div class="nim-dialog" style="max-width:440px">
+        <div class="nim-header">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+            <div class="nim-header-title">Create Invoice from Order</div>
+          </div>
+          <button class="nim-close" @click="showConvert=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Create a Sales Invoice from order <strong>{{convertTarget?.name}}</strong> for
+            <strong>{{convertTarget?.customer}}</strong> — <strong>{{fmt(convertTarget?.grand_total)}}</strong>?<br><br>
+            This will mark the order as <strong>Invoiced</strong>.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showConvert=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" @click="doConvert">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            Create Invoice
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- ── Delete Modal ── -->
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div>
+            <div class="nim-header-title">Delete Sales Order?</div>
+          </div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Delete order <strong>{{deleteTarget?.name}}</strong>? This cannot be undone.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button @click="doDelete" :disabled="deleting"
+            style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">
+            {{deleting?'Deleting…':'Yes, Delete'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+</div>
+`});
+
   const Purchases = defineComponent({
     name: "Purchases",
     components: { PurchaseModal },
@@ -3836,16 +4478,17 @@
   const NAV = [
     { section: "MAIN", items: [{ to: "/", lbl: "Dashboard", icon: "grid" }] },
     { section: "INVOICING", items: [
-      { to: "/customers", lbl: "Customers",      icon: "users"    },
-      { to: "/quotes",    lbl: "Quotes",          icon: "quote"    },
-      { to: "/invoices",  lbl: "Sales Invoices",  icon: "file"     },
-      { to: "/purchases", lbl: "Purchase Bills",  icon: "purchase" },
-      { to: "/payments",  lbl: "Payments",        icon: "pay"      },
+      { to: "/customers",    lbl: "Customers",       icon: "users"   },
+      { to: "/quotes",       lbl: "Quotes",           icon: "quote"   },
+      { to: "/sales-orders", lbl: "Sales Orders",     icon: "order"   },
+      { to: "/invoices",     lbl: "Sales Invoices",   icon: "file"    },
+      { to: "/purchases",    lbl: "Purchase Bills",   icon: "purchase"},
+      { to: "/payments",     lbl: "Payments",         icon: "pay"     },
     ]},
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", invoices:"Sales Invoices", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
+  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -4267,6 +4910,19 @@
 
   /* ── CSS for modal inputs (injected once) ── */
   const modalCSS = `
+/* ══ Sales Orders Status Timeline ══ */
+.so-timeline{display:flex;align-items:center;padding:14px 16px;background:#f8f9fc;border-radius:10px;border:1px solid #e4e8f0;margin-bottom:18px;flex-shrink:0}
+.so-tl-step{display:flex;align-items:center;flex:1;gap:0}
+.so-tl-dot{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;transition:all .2s}
+.so-done{background:#2563eb;color:#fff}
+.so-active{background:#2563eb;color:#fff;box-shadow:0 0 0 4px rgba(37,99,235,.15)}
+.so-pending{background:#e4e8f0;color:#9ca3af}
+.so-tl-label{font-size:11px;margin-left:6px;white-space:nowrap;font-weight:500}
+.so-tl-active{color:#2563eb;font-weight:700}
+.so-tl-pending{color:#9ca3af}
+.so-tl-line{flex:1;height:2px;background:#e4e8f0;margin:0 4px;min-width:10px}
+.so-line-done{background:#2563eb}
+
 /* ══ Quotes Summary Strip ══ */
 .qt-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;flex-shrink:0}
 .qt-sum-card{background:#fff;border:1px solid #e4e8f0;border-radius:10px;padding:14px 18px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
@@ -5370,7 +6026,8 @@
     routes: [
       { path: "/", component: Dashboard, name: "dashboard" },
       { path: "/customers", component: Customers, name: "customers" },
-      { path: "/quotes",    component: Quotes,    name: "quotes"    },
+      { path: "/quotes",       component: Quotes,       name: "quotes"       },
+      { path: "/sales-orders", component: SalesOrders,  name: "sales-orders" },
       { path: "/invoices", component: Invoices, name: "invoices" },
       { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
       { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
