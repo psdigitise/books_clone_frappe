@@ -240,6 +240,7 @@
     users: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
     quote: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
     order: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    recurring: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -4203,6 +4204,647 @@
 </div>
 `});
 
+  /* ═══════════════════════════════════════════════════════════════
+     RECURRING INVOICES COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const RecurringInvoices = defineComponent({
+    name: "RecurringInvoices",
+    setup() {
+      const LKEY = "books_recurring";
+      const FREQ_DAYS  = { weekly:7, biweekly:14, monthly:30, quarterly:91, halfyearly:182, yearly:365 };
+      const FREQ_LABEL = { weekly:"Weekly", biweekly:"Every 2 Weeks", monthly:"Monthly", quarterly:"Quarterly", halfyearly:"Half Yearly", yearly:"Yearly" };
+
+      const list        = ref([]);
+      const customers   = ref([]);
+      const loading     = ref(true);
+      const search      = ref("");
+      const activeFilter= ref("all");
+
+      // ── Storage ──
+      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
+      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function nextNum() {
+        const nums = readList().map(s => parseInt((s.name||"REC-0").replace(/\D/g,""))||0);
+        return "REC-" + String((nums.length?Math.max(...nums):0)+1).padStart(4,"0");
+      }
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+
+      // ── Frequency helpers ──
+      function addFreq(dateStr, freq) {
+        const d = new Date(dateStr);
+        switch(freq) {
+          case "weekly":     d.setDate(d.getDate()+7); break;
+          case "biweekly":   d.setDate(d.getDate()+14); break;
+          case "monthly":    d.setMonth(d.getMonth()+1); break;
+          case "quarterly":  d.setMonth(d.getMonth()+3); break;
+          case "halfyearly": d.setMonth(d.getMonth()+6); break;
+          case "yearly":     d.setFullYear(d.getFullYear()+1); break;
+        }
+        return d.toISOString().slice(0,10);
+      }
+      function getNextDates(start, freq, end, count=6) {
+        const dates=[]; let cur=start;
+        const endD = end ? new Date(end) : null;
+        while(dates.length < count) {
+          const d = new Date(cur);
+          if (endD && d > endD) break;
+          dates.push(cur);
+          const next = addFreq(cur, freq);
+          if (next === cur) break;
+          cur = next;
+        }
+        return dates;
+      }
+      function getNextDue(sched) {
+        if (sched.status !== "Active") return null;
+        const hist = sched.history || [];
+        const lastDate = hist.length ? hist[hist.length-1].date : null;
+        const base = lastDate ? addFreq(lastDate, sched.frequency) : sched.start_date;
+        const endD = sched.end_date ? new Date(sched.end_date) : null;
+        if (endD && new Date(base) > endD) return null;
+        return base;
+      }
+      function daysUntil(dateStr) {
+        if (!dateStr) return null;
+        return Math.round((new Date(dateStr) - new Date()) / (1000*60*60*24));
+      }
+
+      // ── Summary ──
+      const summary = computed(() => {
+        const active = list.value.filter(s => s.status === "Active");
+        const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate()+7);
+        const due = active.filter(s => { const n=getNextDue(s); return n && new Date(n) <= weekEnd; });
+        const monthly = active.reduce((sum,s) => {
+          const d = FREQ_DAYS[s.frequency]||30;
+          return sum + flt(s.grand_total)*(30/d);
+        },0);
+        return { total:list.value.length, active:active.length, due:due.length, value:Math.round(monthly) };
+      });
+
+      const counts = computed(() => ({
+        Active: list.value.filter(s=>s.status==="Active").length,
+        Paused: list.value.filter(s=>s.status==="Paused").length,
+        Ended:  list.value.filter(s=>s.status==="Ended").length,
+      }));
+
+      const filtered = computed(() => {
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(s=>s.status===activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(s => (s.name + s.customer + (s.schedule_name||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      // ── Drawer ──
+      const showDrawer   = ref(false);
+      const drawerMode   = ref("add");
+      const saving       = ref(false);
+      const selCustomer  = ref("");
+      const custSearch   = ref("");
+      const showCustDrop = ref(false);
+      const custDropItems = computed(() => {
+        const q = custSearch.value.toLowerCase();
+        return customers.value.filter(c =>
+          (c.customer_name||c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
+        ).slice(0,40);
+      });
+
+      const form = reactive({
+        name:"", customer:"", schedule_name:"",
+        frequency:"monthly", start_date:"", end_date:"",
+        payment_terms:"", status:"Active", notes:"",
+        items:[{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        taxes:[], history:[],
+      });
+
+      const netTotal   = computed(() => form.items.reduce((s,r) => s+flt(r.amount), 0));
+      const taxTotal   = computed(() => form.taxes.reduce((s,t) => s+flt(t.tax_amount), 0));
+      const grandTotal = computed(() => Math.round((netTotal.value+taxTotal.value)*100)/100);
+
+      const previewDates = computed(() => {
+        if (!form.start_date) return [];
+        return getNextDates(form.start_date, form.frequency, form.end_date, 6);
+      });
+
+      function recalc() {
+        form.items.forEach(r => { r.amount = Math.round(flt(r.qty)*flt(r.rate)*100)/100; });
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate)>0 ? Math.round(netTotal.value*flt(t.rate)/100*100)/100 : 0; });
+      }
+      function addItem()    { form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0}); }
+      function removeItem(i){ if(form.items.length>1){ form.items.splice(i,1); recalc(); } }
+      function addTax()     { form.taxes.push({tax_type:"CGST",description:"CGST",rate:9,tax_amount:0}); recalc(); }
+      function removeTax(i) { form.taxes.splice(i,1); recalc(); }
+
+      function pickCustomer(c) {
+        selCustomer.value  = c.name;
+        custSearch.value   = c.customer_name || c.name;
+        form.customer      = c.name;
+        showCustDrop.value = false;
+      }
+
+      function resetForm(from) {
+        const s = from || {};
+        Object.assign(form, {
+          name: s.name||"", customer: s.customer||"", schedule_name: s.schedule_name||"",
+          frequency: s.frequency||"monthly", start_date: s.start_date||todayStr(),
+          end_date: s.end_date||"", payment_terms: s.payment_terms||"",
+          status: s.status||"Active", notes: s.notes||"",
+          items: s.items?.length ? s.items.map(r=>({...r})) : [{item_name:"",description:"",qty:1,rate:0,amount:0}],
+          taxes: (s.taxes||[]).map(t=>({...t})),
+          history: s.history||[],
+        });
+        selCustomer.value  = s.customer||"";
+        custSearch.value   = s.customer||"";
+        showCustDrop.value = false;
+      }
+
+      function openAdd() {
+        drawerMode.value = "add"; resetForm();
+        showDrawer.value = true;
+      }
+      function openEdit(name) {
+        const s = list.value.find(x=>x.name===name); if(!s)return;
+        drawerMode.value = "edit"; resetForm(s);
+        showDrawer.value = true;
+      }
+
+      function saveSchedule(status) {
+        const cust = selCustomer.value || custSearch.value.trim();
+        if (!cust) { toast("Please select a customer","error"); return; }
+        if (!form.start_date) { toast("Please set a Start Date","error"); return; }
+        const existing = list.value.find(s=>s.name===form.name);
+        const doc = {
+          name: drawerMode.value==="edit" ? form.name : nextNum(),
+          customer: cust, schedule_name: form.schedule_name.trim(),
+          frequency: form.frequency, start_date: form.start_date,
+          end_date: form.end_date, payment_terms: form.payment_terms,
+          status: status, notes: form.notes.trim(),
+          items: form.items.filter(r=>r.item_name||r.rate).map(r=>({...r})),
+          taxes: form.taxes.map(t=>({...t})),
+          net_total: Math.round(netTotal.value*100)/100,
+          total_tax: Math.round(taxTotal.value*100)/100,
+          grand_total: grandTotal.value,
+          history: existing?.history || form.history || [],
+          created_at: existing?.created_at || todayStr(),
+        };
+        const arr = readList();
+        const idx = arr.findIndex(s=>s.name===doc.name);
+        if (idx>=0) arr[idx]=doc; else arr.unshift(doc);
+        storeList(arr); list.value = arr;
+        toast(status==="Active" ? (drawerMode.value==="edit"?"Schedule updated":"Schedule activated!") : "Schedule saved");
+        showDrawer.value = false;
+      }
+
+      function toggleStatus(s) {
+        const arr = readList();
+        const o = arr.find(x=>x.name===s.name); if(!o) return;
+        o.status = o.status==="Active" ? "Paused" : "Active";
+        storeList(arr); list.value = arr;
+        toast("Schedule " + o.status.toLowerCase());
+      }
+
+      // ── Generate modal ──
+      const showGenerate  = ref(false);
+      const generateTarget= ref(null);
+      function openGenerate(s) { generateTarget.value=s; showGenerate.value=true; }
+      function doGenerate() {
+        const arr = readList();
+        const s = arr.find(x=>x.name===generateTarget.value.name); if(!s){ showGenerate.value=false; return; }
+        const entry = { date:todayStr(), amount:s.grand_total, inv_ref:"INV-AUTO-"+Date.now().toString(36).toUpperCase() };
+        s.history = (s.history||[]);
+        s.history.push(entry);
+        storeList(arr); list.value = arr;
+        toast(`Invoice ${entry.inv_ref} generated for ${s.customer}`,"info");
+        showGenerate.value = false;
+      }
+
+      // ── History modal ──
+      const showHistory  = ref(false);
+      const histTarget   = ref(null);
+      function openHistory(s) { histTarget.value=s; showHistory.value=true; }
+
+      // ── Delete modal ──
+      const showDelete   = ref(false);
+      const deleteTarget = ref(null);
+      const deleting     = ref(false);
+      function confirmDelete(s) { deleteTarget.value=s; showDelete.value=true; }
+      function doDelete() {
+        deleting.value=true;
+        const arr = readList().filter(s=>s.name!==deleteTarget.value.name);
+        storeList(arr); list.value=arr;
+        toast("Schedule deleted"); showDelete.value=false; deleting.value=false;
+      }
+
+      async function load() {
+        loading.value = true;
+        list.value = readList();
+        loading.value = false;
+        try { customers.value = await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
+      }
+
+      onMounted(load);
+
+      return {
+        list, loading, search, activeFilter, filtered, counts, summary,
+        FREQ_LABEL, getNextDue, daysUntil,
+        showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop, custDropItems,
+        netTotal, taxTotal, grandTotal, previewDates, todayStr,
+        recalc, addItem, removeItem, addTax, removeTax,
+        pickCustomer, saveSchedule, toggleStatus, openAdd, openEdit,
+        showGenerate, generateTarget, openGenerate, doGenerate,
+        showHistory, histTarget, openHistory,
+        showDelete, deleteTarget, deleting, confirmDelete, doDelete,
+        load, icon, fmt, fmtDate, flt,
+      };
+    },
+    template: `
+<div class="b-page">
+
+  <!-- Summary strip -->
+  <div class="qt-summary">
+    <div class="qt-sum-card"><div class="qt-sum-label">Total Schedules</div><div class="qt-sum-value">{{summary.total}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#059669">Active</div><div class="qt-sum-value" style="color:#059669">{{summary.active}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#d97706">Due This Week</div><div class="qt-sum-value" style="color:#d97706">{{summary.due}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#2563eb">Monthly Value</div><div class="qt-sum-value" style="color:#2563eb">{{fmt(summary.value)}}</div></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-filters">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+        <button v-for="f in ['Active','Paused','Ended']" :key="f"
+          class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
+          @click="activeFilter=f">
+          {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search schedule, customer…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Schedule</button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead>
+          <tr>
+            <th>Schedule</th>
+            <th>Customer</th>
+            <th>Frequency</th>
+            <th>Amount</th>
+            <th>Next Invoice</th>
+            <th>End Date</th>
+            <th style="text-align:center">Invoices</th>
+            <th>Status</th>
+            <th style="text-align:center;width:130px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-if="loading">
+            <tr v-for="n in 4" :key="n"><td colspan="9" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:65%"></div></td></tr>
+          </template>
+          <tr v-else-if="!filtered.length">
+            <td colspan="9" class="cust-empty">
+              <div class="cust-empty-icon">
+                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              </div>
+              <div class="cust-empty-title">{{search?'No schedules match':'No recurring invoices yet'}}</div>
+              <div class="cust-empty-sub">{{search?'Try a different search':'Set up automatic invoice generation for subscriptions and retainers'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Schedule</button>
+            </td>
+          </tr>
+          <tr v-else v-for="s in filtered" :key="s.name" class="cust-row" @click="openEdit(s.name)">
+            <td>
+              <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{s.name}}</div>
+              <div v-if="s.schedule_name" style="font-size:11.5px;color:#9ca3af;margin-top:1px">{{s.schedule_name}}</div>
+            </td>
+            <td class="cust-name">{{s.customer||'—'}}</td>
+            <td class="cust-secondary">{{FREQ_LABEL[s.frequency]||s.frequency}}</td>
+            <td style="font-family:monospace;font-weight:600;color:#111827">{{fmt(s.grand_total)}}</td>
+            <td>
+              <template v-if="s.status==='Active' && getNextDue(s)">
+                <span :class="['ri-next-chip', daysUntil(getNextDue(s))===0?'ri-today':daysUntil(getNextDue(s))<=3?'ri-soon':'ri-ok']">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                  {{daysUntil(getNextDue(s))===0?'Today':daysUntil(getNextDue(s))===1?'Tomorrow':fmtDate(getNextDue(s))}}
+                </span>
+              </template>
+              <span v-else class="ri-next-chip ri-none">—</span>
+            </td>
+            <td class="cust-secondary">{{fmtDate(s.end_date)||'No end'}}</td>
+            <td style="text-align:center;font-family:monospace;font-size:13px;font-weight:600;color:#2563eb">{{(s.history||[]).length}}</td>
+            <td>
+              <span class="b-badge" :class="s.status==='Active'?'b-badge-green':s.status==='Paused'?'b-badge-amber':'b-badge-muted'">
+                {{s.status}}
+              </span>
+            </td>
+            <td @click.stop style="text-align:center">
+              <div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">
+                <!-- Generate now -->
+                <button v-if="s.status==='Active'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
+                  @click="openGenerate(s)" title="Generate Invoice Now">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                </button>
+                <!-- Pause/Resume -->
+                <button v-if="s.status==='Active'" class="cust-act-btn" style="color:#d97706;border-color:rgba(217,119,6,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
+                  @click="toggleStatus(s)" title="Pause">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                </button>
+                <button v-else-if="s.status==='Paused'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
+                  @click="toggleStatus(s)" title="Resume">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                </button>
+                <!-- History -->
+                <button class="cust-act-btn cust-act-edit" @click="openHistory(s)" title="Invoice History">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"/></svg>
+                </button>
+                <!-- Delete -->
+                <button class="cust-act-btn cust-act-del" @click="confirmDelete(s)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} schedules</div>
+  </div>
+
+  <!-- ── Add/Edit Drawer ── -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer" style="width:700px">
+            <div class="cust-drawer-header">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                </div>
+                <div>
+                  <div class="cust-drawer-title">{{drawerMode==='add'?'New Recurring Invoice':'Edit Schedule'}}</div>
+                  <div class="cust-drawer-sub">{{drawerMode==='edit'?form.name:'Set up automatic invoice generation'}}</div>
+                </div>
+              </div>
+              <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+            </div>
+
+            <div class="cust-drawer-body">
+
+              <!-- Schedule Details -->
+              <div class="cust-sec-label" style="margin-top:0">Schedule Details</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field" style="position:relative">
+                  <label class="nim-label">Customer <span class="nim-req">*</span></label>
+                  <input v-model="custSearch" class="nim-input" placeholder="Search customer…"
+                    autocomplete="off" @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                  <div v-if="showCustDrop && custDropItems.length" class="qt-cust-drop">
+                    <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
+                      <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
+                      <div v-if="c.name!==c.customer_name" style="font-size:11px;color:#9ca3af">{{c.name}}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Schedule Name</label>
+                  <input v-model="form.schedule_name" class="nim-input" placeholder="e.g. Monthly Retainer — ACME Corp"/>
+                </div>
+              </div>
+
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field">
+                  <label class="nim-label">Frequency <span class="nim-req">*</span></label>
+                  <select v-model="form.frequency" class="nim-select">
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Every 2 Weeks</option>
+                    <option value="monthly">Monthly</option>
+                    <option value="quarterly">Quarterly</option>
+                    <option value="halfyearly">Half Yearly</option>
+                    <option value="yearly">Yearly</option>
+                  </select>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Start Date <span class="nim-req">*</span></label>
+                  <input v-model="form.start_date" type="date" class="nim-input"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">End Date</label>
+                  <input v-model="form.end_date" type="date" class="nim-input"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Payment Terms</label>
+                  <select v-model="form.payment_terms" class="nim-select">
+                    <option value="">— None —</option>
+                    <option>Net 30</option><option>Net 15</option><option>Net 7</option><option>Due on Receipt</option>
+                  </select>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Status</label>
+                  <select v-model="form.status" class="nim-select">
+                    <option>Active</option><option>Paused</option>
+                  </select>
+                </div>
+              </div>
+
+              <!-- Schedule preview -->
+              <div class="ri-schedule-preview nim-mb" v-if="previewDates.length">
+                <div class="ri-preview-label">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                  Next invoice dates
+                </div>
+                <div class="ri-preview-dates">
+                  <span v-for="(d,i) in previewDates" :key="d"
+                    :class="['ri-sdate', d<todayStr()?'ri-sdate-past':i===previewDates.findIndex(x=>x>=todayStr())?'ri-sdate-next':'']">
+                    {{fmtDate(d)}}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Items -->
+              <div class="nim-section-header" style="margin-bottom:8px">
+                <div class="cust-sec-label" style="margin:0">Invoice Items</div>
+              </div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th style="width:30%">Item / Service</th><th style="width:26%">Description</th>
+                    <th style="width:10%;text-align:center">Qty</th>
+                    <th style="width:16%;text-align:right">Rate (₹)</th>
+                    <th style="width:14%;text-align:right">Amount</th>
+                    <th style="width:4%"></th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
+                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
+                      <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                      <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                      <td class="nim-amount" style="text-align:right">{{flt(item.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                      <td style="text-align:center"><button v-if="form.items.length>1" @click="removeItem(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="nim-table-footer"><button @click="addItem" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Row</button></div>
+              </div>
+
+              <!-- Taxes -->
+              <div class="nim-section-header nim-mb-sm">
+                <div class="cust-sec-label" style="margin:0">Taxes</div>
+                <button @click="addTax" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Tax</button>
+              </div>
+              <div v-if="form.taxes.length" class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th style="width:20%">Type</th><th style="width:30%">Description</th>
+                    <th style="width:14%;text-align:center">Rate %</th>
+                    <th style="width:32%;text-align:right">Amount (₹)</th><th style="width:4%"></th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(tax,i) in form.taxes" :key="i" class="nim-tr">
+                      <td><select v-model="tax.tax_type" class="nim-cell" @change="tax.description=tax.tax_type;recalc()"><option>CGST</option><option>SGST</option><option>IGST</option><option>Cess</option><option>Other</option></select></td>
+                      <td><input v-model="tax.description" class="nim-cell"/></td>
+                      <td style="text-align:center"><input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                      <td class="nim-amount" style="text-align:right">{{flt(tax.tax_amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                      <td style="text-align:center"><button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Totals + Notes -->
+              <div class="nim-bottom-row">
+                <div class="nim-field" style="flex:1">
+                  <label class="nim-label">Notes / Email Message</label>
+                  <textarea v-model="form.notes" class="nim-input nim-textarea" rows="3" placeholder="Message to include on each generated invoice…"></textarea>
+                </div>
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Per Invoice Subtotal</span><span class="nim-total-val">{{fmt(netTotal)}}</span></div>
+                  <div v-for="tax in form.taxes" :key="tax.tax_type" class="nim-total-row nim-tax-row">
+                    <span class="nim-total-label">{{tax.description||tax.tax_type}} ({{tax.rate}}%)</span>
+                    <span class="nim-total-val">{{fmt(tax.tax_amount)}}</span>
+                  </div>
+                  <div class="nim-total-grand"><span>Per Invoice Total</span><span>{{fmt(grandTotal)}}</span></div>
+                </div>
+              </div>
+
+            </div>
+
+            <div class="nim-footer">
+              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+              <div style="display:flex;gap:8px">
+                <button class="nim-btn nim-btn-outline" @click="saveSchedule(form.status||'Active')" :disabled="saving">Save</button>
+                <button class="nim-btn nim-btn-primary" @click="saveSchedule('Active')" :disabled="saving">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Save &amp; Activate
+                </button>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+
+  <!-- ── Generate Now Modal ── -->
+  <teleport to="body">
+    <div v-if="showGenerate" class="nim-overlay" @click.self="showGenerate=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></div>
+            <div class="nim-header-title">Generate Invoice Now?</div>
+          </div>
+          <button class="nim-close" @click="showGenerate=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Generate an invoice for <strong>{{generateTarget?.customer}}</strong> for
+            <strong>{{fmt(generateTarget?.grand_total)}}</strong> right now?
+            This will be recorded in the invoice history.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showGenerate=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" @click="doGenerate">Generate Invoice</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- ── History Modal ── -->
+  <teleport to="body">
+    <div v-if="showHistory && histTarget" class="nim-overlay" @click.self="showHistory=false">
+      <div class="nim-dialog" style="max-width:560px">
+        <div class="nim-header">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"/></svg></div>
+            <div class="nim-header-title">Invoice History — {{histTarget.name}}</div>
+          </div>
+          <button class="nim-close" @click="showHistory=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:0;max-height:60vh;overflow-y:auto">
+          <template v-if="(histTarget.history||[]).length">
+            <table class="cust-table">
+              <thead><tr>
+                <th>Date</th><th>Invoice Ref</th><th style="text-align:right">Amount</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="h in (histTarget.history||[]).slice().reverse()" :key="h.inv_ref" class="nim-tr">
+                  <td class="cust-secondary">{{fmtDate(h.date)}}</td>
+                  <td style="font-family:monospace;color:#2563eb;font-size:12px;font-weight:700">{{h.inv_ref||'—'}}</td>
+                  <td class="nim-amount" style="text-align:right">{{fmt(h.amount)}}</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="padding:10px 14px;background:#f8f9fc;border-top:1px solid #e4e8f0;display:flex;justify-content:space-between;font-size:13px">
+              <span style="color:#9ca3af">{{(histTarget.history||[]).length}} invoice(s) generated</span>
+              <span style="font-weight:700;font-family:monospace">{{fmt((histTarget.history||[]).reduce((s,h)=>s+flt(h.amount),0))}}</span>
+            </div>
+          </template>
+          <div v-else style="text-align:center;padding:40px;color:#9ca3af;font-size:13px">No invoices generated yet</div>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showHistory=false">Close</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- ── Delete Modal ── -->
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div>
+            <div class="nim-header-title">Delete Schedule?</div>
+          </div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Delete <strong>{{deleteTarget?.name}}</strong>? All invoice history will be lost.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button @click="doDelete" :disabled="deleting"
+            style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">
+            {{deleting?'Deleting…':'Yes, Delete'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+</div>
+`});
+
   const Purchases = defineComponent({
     name: "Purchases",
     components: { PurchaseModal },
@@ -4478,17 +5120,18 @@
   const NAV = [
     { section: "MAIN", items: [{ to: "/", lbl: "Dashboard", icon: "grid" }] },
     { section: "INVOICING", items: [
-      { to: "/customers",    lbl: "Customers",       icon: "users"   },
-      { to: "/quotes",       lbl: "Quotes",           icon: "quote"   },
-      { to: "/sales-orders", lbl: "Sales Orders",     icon: "order"   },
-      { to: "/invoices",     lbl: "Sales Invoices",   icon: "file"    },
-      { to: "/purchases",    lbl: "Purchase Bills",   icon: "purchase"},
-      { to: "/payments",     lbl: "Payments",         icon: "pay"     },
+      { to: "/customers",    lbl: "Customers",           icon: "users"    },
+      { to: "/quotes",       lbl: "Quotes",               icon: "quote"    },
+      { to: "/sales-orders", lbl: "Sales Orders",         icon: "order"    },
+      { to: "/invoices",     lbl: "Sales Invoices",       icon: "file"     },
+      { to: "/recurring",    lbl: "Recurring",            icon: "recurring"},
+      { to: "/purchases",    lbl: "Purchase Bills",       icon: "purchase" },
+      { to: "/payments",     lbl: "Payments",             icon: "pay"      },
     ]},
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
+  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -4910,6 +5553,19 @@
 
   /* ── CSS for modal inputs (injected once) ── */
   const modalCSS = `
+/* ══ Recurring Invoices ══ */
+.ri-next-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
+.ri-today{background:#fff3e0;color:#e65100}
+.ri-soon{background:#fef3c7;color:#d97706}
+.ri-ok{background:#d1fae5;color:#059669}
+.ri-none{background:#f3f4f6;color:#9ca3af}
+.ri-schedule-preview{background:#f8f9fc;border:1.5px solid #e4e8f0;border-radius:9px;padding:13px 16px}
+.ri-preview-label{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;margin-bottom:10px;display:flex;align-items:center;gap:6px}
+.ri-preview-dates{display:flex;gap:7px;flex-wrap:wrap}
+.ri-sdate{padding:4px 10px;border-radius:20px;font-size:12px;font-weight:500;background:#fff;border:1.5px solid #e4e8f0;font-family:monospace;color:#374151}
+.ri-sdate-past{opacity:.4;text-decoration:line-through}
+.ri-sdate-next{background:#eff6ff;border-color:#2563eb;color:#2563eb;font-weight:700}
+
 /* ══ Sales Orders Status Timeline ══ */
 .so-timeline{display:flex;align-items:center;padding:14px 16px;background:#f8f9fc;border-radius:10px;border:1px solid #e4e8f0;margin-bottom:18px;flex-shrink:0}
 .so-tl-step{display:flex;align-items:center;flex:1;gap:0}
@@ -6027,7 +6683,8 @@
       { path: "/", component: Dashboard, name: "dashboard" },
       { path: "/customers", component: Customers, name: "customers" },
       { path: "/quotes",       component: Quotes,       name: "quotes"       },
-      { path: "/sales-orders", component: SalesOrders,  name: "sales-orders" },
+      { path: "/sales-orders", component: SalesOrders,       name: "sales-orders" },
+      { path: "/recurring",    component: RecurringInvoices,  name: "recurring"    },
       { path: "/invoices", component: Invoices, name: "invoices" },
       { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
       { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
