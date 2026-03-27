@@ -241,6 +241,8 @@
     quote: '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
     order: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
     recurring: '<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+    creditnote: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>',
+    truck: '<rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -4845,6 +4847,898 @@
 </div>
 `});
 
+  /* ═══════════════════════════════════════════════════════════════
+     CREDIT NOTES COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const CreditNotes = defineComponent({
+    name: "CreditNotes",
+    setup() {
+      const LKEY = "books_credit_notes";
+      const list         = ref([]);
+      const allInvoices  = ref([]);
+      const customers    = ref([]);
+      const loading      = ref(true);
+      const search       = ref("");
+      const activeFilter = ref("all");
+
+      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
+      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function nextNum() {
+        const n = readList().map(x=>parseInt((x.name||"CN-0").replace(/\D/g,""))||0);
+        return "CN-" + String((n.length?Math.max(...n):0)+1).padStart(4,"0");
+      }
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+
+      const STATUS_CFG = {
+        Draft:{ cls:"b-badge-muted", lbl:"Draft" },
+        Submitted:{ cls:"b-badge-blue", lbl:"Submitted" },
+        Applied:{ cls:"b-badge-green", lbl:"Applied" },
+        Cancelled:{ cls:"b-badge-red", lbl:"Cancelled" },
+      };
+
+      const summary = computed(() => ({
+        total:     list.value.length,
+        submitted: list.value.filter(n=>n.status==="Submitted").length,
+        applied:   list.value.filter(n=>n.status==="Applied").length,
+        value:     list.value.reduce((s,n)=>s+flt(n.grand_total),0),
+      }));
+
+      const counts = computed(() => ({
+        Draft:     list.value.filter(n=>n.status==="Draft").length,
+        Submitted: list.value.filter(n=>n.status==="Submitted").length,
+        Applied:   list.value.filter(n=>n.status==="Applied").length,
+      }));
+
+      const filtered = computed(() => {
+        let r = activeFilter.value==="all" ? list.value : list.value.filter(n=>n.status===activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(n=>(n.name+n.customer+(n.against_invoice||"")+(n.reason||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      // ── Drawer ──
+      const showDrawer  = ref(false);
+      const drawerMode  = ref("add");
+      const saving      = ref(false);
+      const selCustomer = ref("");
+      const custSearch  = ref("");
+      const showCustDrop= ref(false);
+      const selInvoice  = ref(null);
+      const invSearch   = ref("");
+      const showInvDrop = ref(false);
+      const viewNote    = ref(null);
+
+      const custDropItems = computed(() => {
+        const q = custSearch.value.toLowerCase();
+        return customers.value.filter(c=>(c.customer_name||c.name).toLowerCase().includes(q)||c.name.toLowerCase().includes(q)).slice(0,40);
+      });
+      const invDropItems = computed(() => {
+        const q = invSearch.value.toLowerCase();
+        return allInvoices.value.filter(i=>(selCustomer.value?i.customer===selCustomer.value:true) && (i.name.toLowerCase().includes(q)||((i.customer||"").toLowerCase().includes(q)))).slice(0,40);
+      });
+
+      const form = reactive({
+        name:"", customer:"", against_invoice:"", date:"", reason:"",
+        status:"Draft", notes:"",
+        items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
+        taxes:[],
+      });
+
+      const netTotal   = computed(()=>form.items.reduce((s,r)=>s+flt(r.amount),0));
+      const taxTotal   = computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
+      const grandTotal = computed(()=>Math.round((netTotal.value+taxTotal.value)*100)/100);
+
+      function recalc() {
+        form.items.forEach(r=>{r.amount=Math.round(flt(r.qty)*flt(r.rate)*100)/100;});
+        form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(netTotal.value*flt(t.rate)/100*100)/100:0;});
+      }
+      function addItem()    { form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0}); }
+      function removeItem(i){ if(form.items.length>1){form.items.splice(i,1);recalc();} }
+      function addTax()     { form.taxes.push({tax_type:"CGST",description:"CGST",rate:9,tax_amount:0});recalc(); }
+      function removeTax(i) { form.taxes.splice(i,1);recalc(); }
+
+      function pickCustomer(c) { selCustomer.value=c.name; custSearch.value=c.customer_name||c.name; form.customer=c.name; showCustDrop.value=false; selInvoice.value=null; invSearch.value=""; }
+      function pickInvoice(inv) {
+        selInvoice.value=inv; invSearch.value=inv.name; form.against_invoice=inv.name;
+        if (!form.items[0].item_name && !form.items[0].rate) { form.items[0]={item_name:"Credit Adjustment",description:"Credit against "+inv.name,qty:1,rate:flt(inv.grand_total),amount:flt(inv.grand_total)}; recalc(); }
+        showInvDrop.value=false;
+      }
+
+      function resetForm(from) {
+        const s=from||{};
+        Object.assign(form,{name:s.name||"",customer:s.customer||"",against_invoice:s.against_invoice||"",date:s.date||todayStr(),reason:s.reason||"",status:s.status||"Draft",notes:s.notes||"",items:s.items?.length?s.items.map(r=>({...r})):[{item_name:"",description:"",qty:1,rate:0,amount:0}],taxes:(s.taxes||[]).map(t=>({...t}))});
+        selCustomer.value=s.customer||""; custSearch.value=s.customer||""; selInvoice.value=null; invSearch.value=s.against_invoice||""; showCustDrop.value=false; showInvDrop.value=false;
+      }
+
+      function openAdd()  { drawerMode.value="add";  resetForm();   showDrawer.value=true; }
+      function openEdit(n){ const s=list.value.find(x=>x.name===n); if(!s)return; drawerMode.value="edit"; resetForm(s); showDrawer.value=true; }
+      function openView(n){ const s=list.value.find(x=>x.name===n); if(!s)return; viewNote.value=s; drawerMode.value="view"; showDrawer.value=true; }
+
+      function saveNote(status) {
+        const cust=selCustomer.value||custSearch.value.trim();
+        if(!cust){toast("Please select a customer","error");return;}
+        const existing=list.value.find(s=>s.name===form.name);
+        const doc={name:drawerMode.value==="edit"?form.name:nextNum(),customer:cust,against_invoice:invSearch.value.trim(),date:form.date||todayStr(),reason:form.reason,status,notes:form.notes,items:form.items.filter(r=>r.item_name||r.rate).map(r=>({...r})),taxes:form.taxes.map(t=>({...t})),net_total:Math.round(netTotal.value*100)/100,total_tax:Math.round(taxTotal.value*100)/100,grand_total:grandTotal.value,created_at:existing?.created_at||todayStr()};
+        const arr=readList(); const idx=arr.findIndex(s=>s.name===doc.name);
+        if(idx>=0)arr[idx]=doc; else arr.unshift(doc);
+        storeList(arr); list.value=arr;
+        toast(status==="Submitted"?"Credit note submitted!":"Credit note saved as Draft");
+        showDrawer.value=false;
+      }
+
+      // ── Delete ──
+      const showDelete  = ref(false);
+      const deleteTarget= ref(null);
+      const deleting    = ref(false);
+      function confirmDelete(n){ deleteTarget.value=n; showDelete.value=true; }
+      function doDelete(){ deleting.value=true; const arr=readList().filter(s=>s.name!==deleteTarget.value.name); storeList(arr); list.value=arr; toast("Credit note deleted"); showDelete.value=false; deleting.value=false; }
+
+      async function load() {
+        loading.value=true; list.value=readList(); loading.value=false;
+        try { customers.value=await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
+        try { allInvoices.value=await apiList("Sales Invoice",{fields:["name","customer","posting_date","grand_total","outstanding_amount"],filters:[["docstatus","=",1]],order:"posting_date desc",limit:300}); } catch {}
+      }
+      onMounted(load);
+
+      return { list, loading, search, activeFilter, filtered, counts, summary, STATUS_CFG, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
+    },
+    template: `
+<div class="b-page">
+  <div class="qt-summary">
+    <div class="qt-sum-card"><div class="qt-sum-label">Total Notes</div><div class="qt-sum-value">{{summary.total}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#2563eb">Submitted</div><div class="qt-sum-value" style="color:#2563eb">{{summary.submitted}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#059669">Applied</div><div class="qt-sum-value" style="color:#059669">{{summary.applied}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#dc2626">Total Value</div><div class="qt-sum-value" style="color:#dc2626">{{fmt(summary.value)}}</div></div>
+  </div>
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left"><div class="cust-filters">
+      <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+      <button v-for="f in ['Draft','Submitted','Applied']" :key="f" class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}" @click="activeFilter=f">
+        {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]}}</span>
+      </button>
+    </div></div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search"><span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span><input v-model="search" placeholder="Search note, customer, invoice…" class="cust-search-input" autocomplete="off"/></div>
+      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="zb-tb-btn" style="background:#dc2626;color:#fff;border-color:#dc2626" @click="openAdd"><span v-html="icon('plus',13)"></span> New Credit Note</button>
+    </div>
+  </div>
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr><th>Note #</th><th>Customer</th><th>Against Invoice</th><th>Date</th><th>Reason</th><th style="text-align:right">Amount</th><th>Status</th><th style="text-align:center;width:100px">Actions</th></tr></thead>
+        <tbody>
+          <template v-if="loading"><tr v-for="n in 4" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:65%"></div></td></tr></template>
+          <tr v-else-if="!filtered.length"><td colspan="8" class="cust-empty">
+            <div class="cust-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg></div>
+            <div class="cust-empty-title">{{search?'No results':'No credit notes yet'}}</div>
+            <div class="cust-empty-sub">{{search?'Try a different search':'Issue a credit note against a submitted invoice'}}</div>
+            <button v-if="!search" class="nim-btn" style="margin-top:12px;background:#dc2626;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer" @click="openAdd"><span v-html="icon('plus',13)"></span> New Credit Note</button>
+          </td></tr>
+          <tr v-else v-for="n in filtered" :key="n.name" class="cust-row" @click="openView(n.name)">
+            <td><div style="color:#dc2626;font-family:monospace;font-size:12px;font-weight:700">{{n.name}}</div></td>
+            <td class="cust-name">{{n.customer||'—'}}</td>
+            <td style="font-family:monospace;font-size:12px;color:#2563eb">{{n.against_invoice||'—'}}</td>
+            <td class="cust-secondary">{{fmtDate(n.date)}}</td>
+            <td class="cust-secondary" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{n.reason||'—'}}</td>
+            <td style="text-align:right;font-family:monospace;font-weight:700;color:#dc2626">{{fmt(n.grand_total)}}</td>
+            <td><span class="b-badge" :class="(STATUS_CFG[n.status]||STATUS_CFG.Draft).cls">{{n.status}}</span></td>
+            <td @click.stop style="text-align:center"><div style="display:flex;gap:4px;justify-content:center">
+              <button class="cust-act-btn cust-act-edit" @click="openEdit(n.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+              <button class="cust-act-btn cust-act-del" @click="confirmDelete(n)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+            </div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} credit notes</div>
+  </div>
+  <!-- Drawer -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer" style="width:700px">
+            <div class="cust-drawer-header">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+                </div>
+                <div>
+                  <div class="cust-drawer-title">{{drawerMode==='add'?'New Credit Note':drawerMode==='edit'?'Edit Credit Note':'View Credit Note'}}</div>
+                  <div class="cust-drawer-sub">{{drawerMode==='view'?viewNote?.name:drawerMode==='edit'?form.name:'Issue a credit against an invoice'}}</div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span v-if="drawerMode==='view'" class="b-badge" :class="(STATUS_CFG[viewNote?.status]||STATUS_CFG.Draft).cls">{{viewNote?.status}}</span>
+                <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+              </div>
+            </div>
+            <!-- View -->
+            <div v-if="drawerMode==='view' && viewNote" class="cust-drawer-body">
+              <div class="cust-sec-label" style="margin-top:0">Credit Note Details</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field"><label class="nim-label">Customer</label><div style="font-size:13.5px;font-weight:600;color:#111827;padding:4px 0">{{viewNote.customer}}</div></div>
+                <div class="nim-field"><label class="nim-label">Against Invoice</label><div style="font-size:13.5px;color:#2563eb;font-family:monospace;font-weight:700;padding:4px 0">{{viewNote.against_invoice||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Date</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewNote.date)}}</div></div>
+                <div class="nim-field"><label class="nim-label">Reason</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewNote.reason||'—'}}</div></div>
+              </div>
+              <div class="cust-sec-label">Items</div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table"><thead><tr><th>Item</th><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th></tr></thead>
+                <tbody><tr v-for="r in (viewNote.items||[])" :key="r.item_name" class="nim-tr">
+                  <td style="font-weight:600">{{r.item_name||'—'}}</td><td class="cust-secondary">{{r.description||''}}</td>
+                  <td style="text-align:center">{{r.qty||1}}</td><td class="nim-amount" style="text-align:right">{{fmt(r.rate)}}</td>
+                  <td class="nim-amount" style="text-align:right;color:#dc2626">{{fmt(r.amount)}}</td>
+                </tr></tbody></table>
+              </div>
+              <div style="display:flex;justify-content:flex-end">
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(viewNote.net_total)}}</span></div>
+                  <div class="nim-total-grand" style="color:#dc2626"><span>Credit Total</span><span>{{fmt(viewNote.grand_total)}}</span></div>
+                </div>
+              </div>
+              <div v-if="viewNote.notes" class="nim-field" style="margin-top:16px"><label class="nim-label">Notes</label><div style="font-size:13px;color:#6b7280;line-height:1.6">{{viewNote.notes}}</div></div>
+            </div>
+            <!-- Add/Edit -->
+            <div v-else-if="drawerMode!=='view'" class="cust-drawer-body">
+              <div class="cust-sec-label" style="margin-top:0">Credit Note Details</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field" style="position:relative">
+                  <label class="nim-label">Customer <span class="nim-req">*</span></label>
+                  <input v-model="custSearch" class="nim-input" placeholder="Search customer…" autocomplete="off" @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                  <div v-if="showCustDrop && custDropItems.length" class="qt-cust-drop">
+                    <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
+                      <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="nim-field" style="position:relative">
+                  <label class="nim-label">Against Invoice</label>
+                  <input v-model="invSearch" class="nim-input" placeholder="Search invoice…" autocomplete="off" @focus="showInvDrop=true" @blur="setTimeout(()=>showInvDrop=false,200)" @input="showInvDrop=true"/>
+                  <div v-if="showInvDrop && invDropItems.length" class="qt-cust-drop">
+                    <div v-for="inv in invDropItems" :key="inv.name" class="qt-drop-item" @mousedown.prevent="pickInvoice(inv)">
+                      <div style="font-weight:600;font-size:13px">{{inv.name}}</div>
+                      <div style="font-size:11px;color:#9ca3af">{{inv.customer}} · {{fmt(inv.grand_total)}}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="nim-field"><label class="nim-label">Credit Note Date</label><input v-model="form.date" type="date" class="nim-input"/></div>
+                <div class="nim-field"><label class="nim-label">Status</label><select v-model="form.status" class="nim-select"><option>Draft</option><option>Submitted</option><option>Applied</option></select></div>
+                <div class="nim-field" style="grid-column:span 2"><label class="nim-label">Reason</label><input v-model="form.reason" class="nim-input" placeholder="Reason for credit note (returns, overcharge, etc.)"/></div>
+              </div>
+              <div class="nim-section-header" style="margin-bottom:8px"><div class="cust-sec-label" style="margin:0">Items</div></div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table"><thead><tr><th style="width:30%">Item</th><th style="width:26%">Description</th><th style="width:10%;text-align:center">Qty</th><th style="width:16%;text-align:right">Rate (₹)</th><th style="width:14%;text-align:right">Amount</th><th style="width:4%"></th></tr></thead>
+                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
+                  <td><input v-model="item.item_name" class="nim-cell" placeholder="Item"/></td>
+                  <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
+                  <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                  <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                  <td class="nim-amount" style="text-align:right;color:#dc2626">{{flt(item.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                  <td style="text-align:center"><button v-if="form.items.length>1" @click="removeItem(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                </tr></tbody></table>
+                <div class="nim-table-footer"><button @click="addItem" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Row</button></div>
+              </div>
+              <div class="nim-section-header nim-mb-sm"><div class="cust-sec-label" style="margin:0">Taxes</div><button @click="addTax" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Tax</button></div>
+              <div v-if="form.taxes.length" class="nim-table-wrap nim-mb"><table class="nim-table"><thead><tr><th style="width:20%">Type</th><th style="width:30%">Desc</th><th style="width:14%;text-align:center">Rate %</th><th style="width:32%;text-align:right">Amount</th><th style="width:4%"></th></tr></thead>
+                <tbody><tr v-for="(tax,i) in form.taxes" :key="i" class="nim-tr">
+                  <td><select v-model="tax.tax_type" class="nim-cell" @change="tax.description=tax.tax_type;recalc()"><option>CGST</option><option>SGST</option><option>IGST</option><option>Cess</option><option>Other</option></select></td>
+                  <td><input v-model="tax.description" class="nim-cell"/></td>
+                  <td style="text-align:center"><input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
+                  <td class="nim-amount" style="text-align:right">{{flt(tax.tax_amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                  <td style="text-align:center"><button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                </tr></tbody></table></div>
+              <div class="nim-bottom-row">
+                <div class="nim-field" style="flex:1"><label class="nim-label">Notes</label><textarea v-model="form.notes" class="nim-input nim-textarea" rows="3" placeholder="Internal notes…"></textarea></div>
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(netTotal)}}</span></div>
+                  <div v-for="tax in form.taxes" :key="tax.tax_type" class="nim-total-row nim-tax-row"><span class="nim-total-label">{{tax.description}} ({{tax.rate}}%)</span><span class="nim-total-val">{{fmt(tax.tax_amount)}}</span></div>
+                  <div class="nim-total-grand" style="color:#dc2626"><span>Credit Total</span><span>{{fmt(grandTotal)}}</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="nim-footer">
+              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">{{drawerMode==='view'?'Close':'Cancel'}}</button>
+              <div v-if="drawerMode!=='view'" style="display:flex;gap:8px">
+                <button class="nim-btn nim-btn-outline" @click="saveNote('Draft')" :disabled="saving">Save as Draft</button>
+                <button class="nim-btn" style="background:#dc2626;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer" @click="saveNote('Submitted')" :disabled="saving">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                  Submit Credit Note
+                </button>
+              </div>
+              <div v-else style="display:flex;gap:8px">
+                <button class="nim-btn nim-btn-outline" @click="openEdit(viewNote.name)"><span v-html="icon('edit',13)"></span> Edit</button>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left"><div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div><div class="nim-header-title">Delete Credit Note?</div></div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px"><p style="font-size:14px;color:#374151;line-height:1.6">Delete <strong>{{deleteTarget?.name}}</strong>? This cannot be undone.</p></div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button @click="doDelete" :disabled="deleting" style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">{{deleting?'Deleting…':'Yes, Delete'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>
+`});
+
+  /* ═══════════════════════════════════════════════════════════════
+     PAYMENTS RECEIVED COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const PaymentsReceived = defineComponent({
+    name: "PaymentsReceived",
+    setup() {
+      const LKEY = "books_payments_received";
+      const list         = ref([]);
+      const customers    = ref([]);
+      const loading      = ref(true);
+      const search       = ref("");
+      const activeFilter = ref("all");
+
+      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
+      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function nextNum() {
+        const n=readList().map(x=>parseInt((x.name||"PAY-0").replace(/\D/g,""))||0);
+        return "PAY-" + String((n.length?Math.max(...n):0)+1).padStart(4,"0");
+      }
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+
+      const MODES = ["Cash","Bank Transfer","UPI","Cheque","Card","Other"];
+      const MODE_CSS = { Cash:"#f0fff4|#276539", "Bank Transfer":"#eff6ff|#2563eb", UPI:"#f3e8ff|#7c3aed", Cheque:"#fefce8|#854d0e", Card:"#fdf2f8|#9d174d", Other:"#f3f4f6|#374151" };
+
+      const summary = computed(() => {
+        const total = list.value.reduce((s,p)=>s+flt(p.amount),0);
+        const now = new Date(); const mo = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
+        const moTotal = list.value.filter(p=>(p.date||"").startsWith(mo)).reduce((s,p)=>s+flt(p.amount),0);
+        const avg = list.value.length ? Math.round(total/list.value.length) : 0;
+        return { total, moTotal, count:list.value.length, avg };
+      });
+
+      const counts = computed(() => {
+        const r={};
+        MODES.forEach(m=>{ r[m]=list.value.filter(p=>p.mode===m).length; });
+        return r;
+      });
+
+      const filtered = computed(() => {
+        let r = activeFilter.value==="all" ? list.value : list.value.filter(p=>p.mode===activeFilter.value);
+        const q=search.value.toLowerCase().trim();
+        if(q) r=r.filter(p=>(p.name+p.customer+(p.ref||"")+(p.mode||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      // Drawer
+      const showDrawer   = ref(false);
+      const drawerMode   = ref("add");
+      const saving       = ref(false);
+      const selCustomer  = ref("");
+      const custSearch   = ref("");
+      const showCustDrop = ref(false);
+      const showCheque   = ref(false);
+
+      const custDropItems = computed(() => {
+        const q=custSearch.value.toLowerCase();
+        return customers.value.filter(c=>(c.customer_name||c.name).toLowerCase().includes(q)||c.name.toLowerCase().includes(q)).slice(0,40);
+      });
+
+      const form = reactive({ name:"", customer:"", date:"", mode:"Bank Transfer", amount:0, ref:"", remarks:"", cheque_no:"", cheque_date:"", bank_name:"" });
+
+      function pickCustomer(c) { selCustomer.value=c.name; custSearch.value=c.customer_name||c.name; form.customer=c.name; showCustDrop.value=false; }
+
+      function resetForm(from) {
+        const s=from||{};
+        Object.assign(form,{name:s.name||"",customer:s.customer||"",date:s.date||todayStr(),mode:s.mode||"Bank Transfer",amount:s.amount||0,ref:s.ref||"",remarks:s.remarks||"",cheque_no:s.cheque_no||"",cheque_date:s.cheque_date||"",bank_name:s.bank_name||""});
+        selCustomer.value=s.customer||""; custSearch.value=s.customer||""; showCustDrop.value=false; showCheque.value=(s.mode==="Cheque");
+      }
+
+      function openAdd()  { drawerMode.value="add";  resetForm();   showDrawer.value=true; }
+      function openEdit(n){ const s=list.value.find(x=>x.name===n); if(!s)return; drawerMode.value="edit"; resetForm(s); showDrawer.value=true; }
+
+      function savePayment() {
+        const cust=selCustomer.value||custSearch.value.trim();
+        if(!cust){toast("Please select a customer","error");return;}
+        if(!flt(form.amount)){toast("Please enter an amount","error");return;}
+        const existing=list.value.find(s=>s.name===form.name);
+        const doc={name:drawerMode.value==="edit"?form.name:nextNum(),customer:cust,date:form.date||todayStr(),mode:form.mode,amount:flt(form.amount),ref:form.ref.trim(),remarks:form.remarks.trim(),cheque_no:form.cheque_no,cheque_date:form.cheque_date,bank_name:form.bank_name,created_at:existing?.created_at||todayStr()};
+        const arr=readList(); const idx=arr.findIndex(s=>s.name===doc.name);
+        if(idx>=0)arr[idx]=doc; else arr.unshift(doc);
+        storeList(arr); list.value=arr;
+        toast("Payment recorded!"); showDrawer.value=false;
+      }
+
+      // Receipt modal
+      const showReceipt = ref(false);
+      const receiptData = ref(null);
+      function openReceipt(n){ receiptData.value=list.value.find(x=>x.name===n); showReceipt.value=true; }
+
+      // Delete
+      const showDelete  = ref(false);
+      const deleteTarget= ref(null);
+      const deleting    = ref(false);
+      function confirmDelete(n){ deleteTarget.value=n; showDelete.value=true; }
+      function doDelete(){ deleting.value=true; const arr=readList().filter(s=>s.name!==deleteTarget.value.name); storeList(arr); list.value=arr; toast("Payment deleted"); showDelete.value=false; deleting.value=false; }
+
+      async function load() {
+        loading.value=true; list.value=readList(); loading.value=false;
+        try {
+          const frappe = await apiList("Payment Entry",{fields:["name","party","posting_date","mode_of_payment","paid_amount","reference_no","remarks","docstatus"],filters:[["payment_type","=","Receive"],["docstatus","=",1]],order:"posting_date desc",limit:300});
+          const existing = new Set(list.value.filter(p=>p.from_frappe).map(p=>p.frappe_ref));
+          const newFromFrappe = (frappe||[]).filter(r=>!existing.has(r.name)).map(r=>({name:nextNum(),frappe_ref:r.name,from_frappe:true,customer:r.party,date:r.posting_date,mode:r.mode_of_payment||"Bank Transfer",amount:r.paid_amount,ref:r.reference_no||"",remarks:r.remarks||"",created_at:r.posting_date}));
+          if(newFromFrappe.length){ const arr=[...readList(),...newFromFrappe]; storeList(arr); list.value=arr; }
+        } catch {}
+        try { customers.value=await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
+      }
+      onMounted(load);
+
+      return { list, loading, search, activeFilter, filtered, counts, summary, MODES, MODE_CSS, showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop, custDropItems, showCheque, pickCustomer, savePayment, openAdd, openEdit, showReceipt, receiptData, openReceipt, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
+    },
+    template: `
+<div class="b-page">
+  <div class="qt-summary">
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#059669">Total Received</div><div class="qt-sum-value" style="color:#059669">{{fmt(summary.total)}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#2563eb">This Month</div><div class="qt-sum-value" style="color:#2563eb">{{fmt(summary.moTotal)}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label">Total Payments</div><div class="qt-sum-value">{{summary.count}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#7c3aed">Average</div><div class="qt-sum-value" style="color:#7c3aed">{{fmt(summary.avg)}}</div></div>
+  </div>
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left"><div class="cust-filters">
+      <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+      <button v-for="m in MODES" :key="m" class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===m}" @click="activeFilter=m">
+        {{m}} <span class="zb-pill-cnt" :class="activeFilter===m?'':'zb-pc-muted'">{{counts[m]||0}}</span>
+      </button>
+    </div></div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search"><span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span><input v-model="search" placeholder="Search payment, customer…" class="cust-search-input" autocomplete="off"/></div>
+      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> Record Payment</button>
+    </div>
+  </div>
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr><th>Ref #</th><th>Customer</th><th>Date</th><th>Mode</th><th style="text-align:right">Amount</th><th>Reference No.</th><th>Remarks</th><th style="text-align:center;width:90px">Actions</th></tr></thead>
+        <tbody>
+          <template v-if="loading"><tr v-for="n in 5" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:65%"></div></td></tr></template>
+          <tr v-else-if="!filtered.length"><td colspan="8" class="cust-empty">
+            <div class="cust-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div>
+            <div class="cust-empty-title">{{search?'No results':'No payments recorded yet'}}</div>
+            <div class="cust-empty-sub">{{search?'Try a different search':'Record customer payments received'}}</div>
+            <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> Record Payment</button>
+          </td></tr>
+          <tr v-else v-for="p in filtered" :key="p.name" class="cust-row" @click="openReceipt(p.name)">
+            <td><div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{p.name}}</div></td>
+            <td class="cust-name">{{p.customer||'—'}}</td>
+            <td class="cust-secondary">{{fmtDate(p.date)}}</td>
+            <td>
+              <span class="b-badge" :style="{background:MODE_CSS[p.mode]?.split('|')[0]||'#f3f4f6',color:MODE_CSS[p.mode]?.split('|')[1]||'#374151'}">{{p.mode||'Other'}}</span>
+            </td>
+            <td style="text-align:right;font-family:monospace;font-weight:700;font-size:14px;color:#059669">{{fmt(p.amount)}}</td>
+            <td class="cust-mono" style="font-size:12px">{{p.ref||'—'}}</td>
+            <td class="cust-secondary" style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{p.remarks||'—'}}</td>
+            <td @click.stop style="text-align:center"><div style="display:flex;gap:4px;justify-content:center">
+              <button class="cust-act-btn cust-act-edit" @click="openEdit(p.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+              <button class="cust-act-btn cust-act-del" @click="confirmDelete(p)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+            </div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} payments</div>
+  </div>
+  <!-- Add/Edit Drawer -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer" style="width:560px">
+            <div class="cust-drawer-header">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div>
+                <div><div class="cust-drawer-title">{{drawerMode==='add'?'Record Payment':'Edit Payment'}}</div><div class="cust-drawer-sub">{{drawerMode==='edit'?form.name:'Enter payment details'}}</div></div>
+              </div>
+              <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+            </div>
+            <div class="cust-drawer-body">
+              <div class="cust-sec-label" style="margin-top:0">Payment Details</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field" style="position:relative">
+                  <label class="nim-label">Customer <span class="nim-req">*</span></label>
+                  <input v-model="custSearch" class="nim-input" placeholder="Search customer…" autocomplete="off" @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                  <div v-if="showCustDrop && custDropItems.length" class="qt-cust-drop">
+                    <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)"><div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div></div>
+                  </div>
+                </div>
+                <div class="nim-field"><label class="nim-label">Payment Date</label><input v-model="form.date" type="date" class="nim-input"/></div>
+                <div class="nim-field"><label class="nim-label">Amount <span class="nim-req">*</span></label><input v-model.number="form.amount" type="number" min="0" step="0.01" class="nim-input nim-amount-input" placeholder="0.00"/></div>
+                <div class="nim-field"><label class="nim-label">Mode of Payment</label>
+                  <select v-model="form.mode" class="nim-select" @change="showCheque=form.mode==='Cheque'">
+                    <option v-for="m in MODES" :key="m">{{m}}</option>
+                  </select>
+                </div>
+                <div class="nim-field"><label class="nim-label">Reference No. (UTR / Txn ID)</label><input v-model="form.ref" class="nim-input" placeholder="e.g. UTR123456789"/></div>
+                <div class="nim-field"><label class="nim-label">Remarks</label><input v-model="form.remarks" class="nim-input" placeholder="Optional note"/></div>
+              </div>
+              <template v-if="showCheque">
+                <div class="cust-sec-label">Cheque Details</div>
+                <div class="nim-grid-3 nim-mb">
+                  <div class="nim-field"><label class="nim-label">Cheque No.</label><input v-model="form.cheque_no" class="nim-input" placeholder="Cheque number"/></div>
+                  <div class="nim-field"><label class="nim-label">Cheque Date</label><input v-model="form.cheque_date" type="date" class="nim-input"/></div>
+                  <div class="nim-field"><label class="nim-label">Bank Name</label><input v-model="form.bank_name" class="nim-input" placeholder="Bank name"/></div>
+                </div>
+              </template>
+            </div>
+            <div class="nim-footer">
+              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+              <button class="nim-btn nim-btn-primary" @click="savePayment" :disabled="saving">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                {{drawerMode==='edit'?'Save Changes':'Record Payment'}}
+              </button>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+  <!-- Receipt modal -->
+  <teleport to="body">
+    <div v-if="showReceipt && receiptData" class="nim-overlay" @click.self="showReceipt=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header">
+          <div class="nim-header-left"><div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><div class="nim-header-title">Payment Receipt</div></div>
+          <button class="nim-close" @click="showReceipt=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <div style="text-align:center;margin-bottom:16px"><div style="font-size:28px;font-weight:800;color:#059669">{{fmt(receiptData.amount)}}</div><div style="font-size:13px;color:#9ca3af;margin-top:4px">Received from {{receiptData.customer}}</div></div>
+          <div class="nim-grid-2" style="gap:10px">
+            <div class="nim-field"><label class="nim-label">Date</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(receiptData.date)}}</div></div>
+            <div class="nim-field"><label class="nim-label">Mode</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{receiptData.mode}}</div></div>
+            <div v-if="receiptData.ref" class="nim-field"><label class="nim-label">Reference No.</label><div style="font-size:13px;font-family:monospace;color:#2563eb;padding:4px 0">{{receiptData.ref}}</div></div>
+            <div v-if="receiptData.remarks" class="nim-field" style="grid-column:span 2"><label class="nim-label">Remarks</label><div style="font-size:13px;color:#6b7280;padding:4px 0">{{receiptData.remarks}}</div></div>
+          </div>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showReceipt=false">Close</button>
+          <button class="nim-btn nim-btn-outline" @click="openEdit(receiptData.name);showReceipt=false"><span v-html="icon('edit',13)"></span> Edit</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+  <!-- Delete -->
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left"><div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div><div class="nim-header-title">Delete Payment?</div></div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px"><p style="font-size:14px;color:#374151;line-height:1.6">Delete payment <strong>{{deleteTarget?.name}}</strong>? This cannot be undone.</p></div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button @click="doDelete" :disabled="deleting" style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">{{deleting?'Deleting…':'Yes, Delete'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>
+`});
+
+  /* ═══════════════════════════════════════════════════════════════
+     E-WAY BILLS COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const EwayBills = defineComponent({
+    name: "EwayBills",
+    setup() {
+      const LKEY = "books_eway_bills";
+      const list         = ref([]);
+      const loading      = ref(true);
+      const search       = ref("");
+      const activeFilter = ref("all");
+
+      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
+      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function nextNum() {
+        const n=readList().map(x=>parseInt((x.name||"EWB-0").replace(/\D/g,""))||0);
+        return "EWB-" + String((n.length?Math.max(...n):0)+1).padStart(6,"0");
+      }
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+
+      function calcValidDays(dist, vehicleType) {
+        const d=parseInt(dist)||0;
+        if(vehicleType==="Over Dimensional Cargo") return 20;
+        if(d<100) return 1; if(d<300) return 3; if(d<500) return 5;
+        if(d<1000) return 10; return 15;
+      }
+      function calcExpiry(genDate, dist, vehicleType) {
+        if(!genDate) return "";
+        const dt=new Date(genDate); dt.setDate(dt.getDate()+calcValidDays(dist,vehicleType));
+        return dt.toISOString().slice(0,10);
+      }
+      function isExpired(b) {
+        if(b.status==="Cancelled") return false;
+        return b.expiry_date && new Date(b.expiry_date) < new Date();
+      }
+      function effectiveStatus(b) { return isExpired(b)?"Expired":b.status||"Active"; }
+
+      const STATUS_CFG = { Active:{cls:"b-badge-green",lbl:"Active"}, Expired:{cls:"b-badge-red",lbl:"Expired"}, Cancelled:{cls:"b-badge-muted",lbl:"Cancelled"} };
+
+      const summary = computed(() => {
+        const active=list.value.filter(b=>effectiveStatus(b)==="Active").length;
+        const expiring=list.value.filter(b=>{ if(effectiveStatus(b)!=="Active")return false; const d=Math.round((new Date(b.expiry_date)-new Date())/(1000*60*60*24)); return d>=0&&d<=2; }).length;
+        const value=list.value.reduce((s,b)=>s+flt(b.taxable_value),0);
+        return { total:list.value.length, active, expiring, value };
+      });
+
+      const counts = computed(() => ({
+        Active:    list.value.filter(b=>effectiveStatus(b)==="Active").length,
+        Expired:   list.value.filter(b=>effectiveStatus(b)==="Expired").length,
+        Cancelled: list.value.filter(b=>b.status==="Cancelled").length,
+      }));
+
+      const filtered = computed(() => {
+        let r = activeFilter.value==="all" ? list.value : list.value.filter(b=>effectiveStatus(b)===activeFilter.value);
+        const q=search.value.toLowerCase().trim();
+        if(q) r=r.filter(b=>(b.name+(b.from_gstin||"")+(b.to_gstin||"")+(b.vehicle_no||"")+(b.invoice_no||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      // Drawer
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const saving     = ref(false);
+      const viewBill   = ref(null);
+
+      const form = reactive({ name:"", ewb_no:"", invoice_no:"", invoice_date:"", doc_type:"Tax Invoice", supply_type:"Outward", from_gstin:"", from_name:"", from_address:"", to_gstin:"", to_name:"", to_address:"", taxable_value:0, igst:0, cgst:0, sgst:0, cess:0, hsn_code:"", description:"", quantity:0, unit:"NOS", transport_mode:"Road", distance:0, transporter_id:"", transporter_name:"", vehicle_no:"", vehicle_type:"Regular", generated_date:"", expiry_date:"", status:"Active" });
+
+      function updateExpiry() { if(form.generated_date&&form.distance) form.expiry_date=calcExpiry(form.generated_date,form.distance,form.vehicle_type); }
+
+      function resetForm(from) {
+        const s=from||{};
+        Object.assign(form,{name:s.name||"",ewb_no:s.ewb_no||"",invoice_no:s.invoice_no||"",invoice_date:s.invoice_date||todayStr(),doc_type:s.doc_type||"Tax Invoice",supply_type:s.supply_type||"Outward",from_gstin:s.from_gstin||"",from_name:s.from_name||"",from_address:s.from_address||"",to_gstin:s.to_gstin||"",to_name:s.to_name||"",to_address:s.to_address||"",taxable_value:s.taxable_value||0,igst:s.igst||0,cgst:s.cgst||0,sgst:s.sgst||0,cess:s.cess||0,hsn_code:s.hsn_code||"",description:s.description||"",quantity:s.quantity||0,unit:s.unit||"NOS",transport_mode:s.transport_mode||"Road",distance:s.distance||0,transporter_id:s.transporter_id||"",transporter_name:s.transporter_name||"",vehicle_no:s.vehicle_no||"",vehicle_type:s.vehicle_type||"Regular",generated_date:s.generated_date||todayStr(),expiry_date:s.expiry_date||calcExpiry(todayStr(),s.distance||0,s.vehicle_type||"Regular"),status:s.status||"Active"});
+      }
+
+      function openAdd()  { drawerMode.value="add";  resetForm();   showDrawer.value=true; }
+      function openView(n){ const b=list.value.find(x=>x.name===n); if(!b)return; viewBill.value=b; drawerMode.value="view"; showDrawer.value=true; }
+      function openEdit(n){ const b=list.value.find(x=>x.name===n); if(!b)return; drawerMode.value="edit"; resetForm(b); showDrawer.value=true; }
+
+      function saveEWB() {
+        if(!form.invoice_no.trim()){toast("Please enter Invoice No.","error");return;}
+        const existing=list.value.find(s=>s.name===form.name);
+        const doc={...form,name:drawerMode.value==="edit"?form.name:nextNum(),created_at:existing?.created_at||todayStr()};
+        const arr=readList(); const idx=arr.findIndex(s=>s.name===doc.name);
+        if(idx>=0)arr[idx]=doc; else arr.unshift(doc);
+        storeList(arr); list.value=arr; toast("E-Way Bill saved!"); showDrawer.value=false;
+      }
+
+      function cancelBill(b) {
+        const arr=readList(); const o=arr.find(x=>x.name===b.name); if(!o)return;
+        o.status="Cancelled"; storeList(arr); list.value=arr; toast("E-Way Bill cancelled"); showDrawer.value=false;
+      }
+
+      // Delete
+      const showDelete  = ref(false);
+      const deleteTarget= ref(null);
+      const deleting    = ref(false);
+      function confirmDelete(b){ deleteTarget.value=b; showDelete.value=true; }
+      function doDelete(){ deleting.value=true; const arr=readList().filter(s=>s.name!==deleteTarget.value.name); storeList(arr); list.value=arr; toast("E-Way Bill deleted"); showDelete.value=false; deleting.value=false; }
+
+      function daysLeft(b) {
+        if(!b.expiry_date||effectiveStatus(b)!=="Active") return null;
+        return Math.round((new Date(b.expiry_date)-new Date())/(1000*60*60*24));
+      }
+
+      async function load() { loading.value=true; list.value=readList(); loading.value=false; }
+      onMounted(load);
+
+      return { list, loading, search, activeFilter, filtered, counts, summary, STATUS_CFG, effectiveStatus, daysLeft, showDrawer, drawerMode, saving, viewBill, form, updateExpiry, resetForm, saveEWB, cancelBill, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
+    },
+    template: `
+<div class="b-page">
+  <div class="qt-summary">
+    <div class="qt-sum-card"><div class="qt-sum-label">Total E-Way Bills</div><div class="qt-sum-value">{{summary.total}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#059669">Active</div><div class="qt-sum-value" style="color:#059669">{{summary.active}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#d97706">Expiring Soon</div><div class="qt-sum-value" style="color:#d97706">{{summary.expiring}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#2563eb">Taxable Value</div><div class="qt-sum-value" style="color:#2563eb">{{fmt(summary.value)}}</div></div>
+  </div>
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left"><div class="cust-filters">
+      <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+      <button v-for="f in ['Active','Expired','Cancelled']" :key="f" class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}" @click="activeFilter=f">
+        {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]||0}}</span>
+      </button>
+    </div></div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search"><span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span><input v-model="search" placeholder="Search EWB, GSTIN, invoice…" class="cust-search-input" autocomplete="off"/></div>
+      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New E-Way Bill</button>
+    </div>
+  </div>
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr><th>EWB No.</th><th>Invoice No.</th><th>From GSTIN</th><th>To GSTIN</th><th>Vehicle</th><th style="text-align:right">Taxable Value</th><th>Valid Until</th><th>Status</th><th style="text-align:center;width:90px">Actions</th></tr></thead>
+        <tbody>
+          <template v-if="loading"><tr v-for="n in 4" :key="n"><td colspan="9" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:65%"></div></td></tr></template>
+          <tr v-else-if="!filtered.length"><td colspan="9" class="cust-empty">
+            <div class="cust-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+            <div class="cust-empty-title">{{search?'No results':'No E-Way Bills yet'}}</div>
+            <div class="cust-empty-sub">{{search?'Try a different search':'Create E-Way Bills for goods transport'}}</div>
+            <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New E-Way Bill</button>
+          </td></tr>
+          <tr v-else v-for="b in filtered" :key="b.name" class="cust-row" @click="openView(b.name)">
+            <td>
+              <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{b.ewb_no||b.name}}</div>
+              <div style="font-size:11px;color:#9ca3af">{{fmtDate(b.generated_date)}}</div>
+            </td>
+            <td style="font-family:monospace;font-size:12px;color:#374151;font-weight:600">{{b.invoice_no||'—'}}</td>
+            <td class="cust-mono" style="font-size:11.5px">{{b.from_gstin||'—'}}</td>
+            <td class="cust-mono" style="font-size:11.5px">{{b.to_gstin||'—'}}</td>
+            <td class="cust-secondary">{{b.vehicle_no||'—'}}</td>
+            <td style="text-align:right;font-family:monospace;font-weight:600;color:#111827">{{fmt(b.taxable_value)}}</td>
+            <td>
+              <template v-if="effectiveStatus(b)==='Active' && daysLeft(b)!==null">
+                <span :class="['ri-next-chip', daysLeft(b)<=0?'ri-today':daysLeft(b)<=2?'ri-soon':'ri-ok']">
+                  {{daysLeft(b)<=0?'Today':daysLeft(b)===1?'Tomorrow':fmtDate(b.expiry_date)}}
+                </span>
+              </template>
+              <span v-else class="cust-secondary">{{fmtDate(b.expiry_date)||'—'}}</span>
+            </td>
+            <td><span class="b-badge" :class="STATUS_CFG[effectiveStatus(b)]?.cls||'b-badge-muted'">{{effectiveStatus(b)}}</span></td>
+            <td @click.stop style="text-align:center"><div style="display:flex;gap:4px;justify-content:center">
+              <button class="cust-act-btn cust-act-edit" @click="openEdit(b.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+              <button class="cust-act-btn cust-act-del" @click="confirmDelete(b)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+            </div></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} E-Way Bills</div>
+  </div>
+  <!-- Drawer -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer" style="width:720px">
+            <div class="cust-drawer-header">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+                <div><div class="cust-drawer-title">{{drawerMode==='add'?'New E-Way Bill':drawerMode==='edit'?'Edit E-Way Bill':'E-Way Bill Details'}}</div><div class="cust-drawer-sub">{{drawerMode==='view'?(viewBill?.ewb_no||viewBill?.name):drawerMode==='edit'?form.name:'Enter transport and goods details'}}</div></div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span v-if="drawerMode==='view'" class="b-badge" :class="STATUS_CFG[effectiveStatus(viewBill||{})]?.cls||'b-badge-muted'">{{effectiveStatus(viewBill||{})}}</span>
+                <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+              </div>
+            </div>
+            <!-- View mode -->
+            <div v-if="drawerMode==='view' && viewBill" class="cust-drawer-body">
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">EWB Number</label><div style="font-size:14px;font-weight:700;color:#2563eb;font-family:monospace;padding:4px 0">{{viewBill.ewb_no||viewBill.name}}</div></div>
+                <div class="nim-field"><label class="nim-label">Invoice No.</label><div style="font-size:13.5px;font-weight:600;color:#374151;font-family:monospace;padding:4px 0">{{viewBill.invoice_no||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Invoice Date</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewBill.invoice_date)}}</div></div>
+                <div class="nim-field"><label class="nim-label">Document Type</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewBill.doc_type}}</div></div>
+                <div class="nim-field"><label class="nim-label">Generated On</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewBill.generated_date)}}</div></div>
+                <div class="nim-field"><label class="nim-label">Valid Until</label><div :style="{fontSize:'13.5px',fontWeight:'700',color:effectiveStatus(viewBill)==='Expired'?'#dc2626':daysLeft(viewBill)<=2?'#d97706':'#059669',padding:'4px 0'}">{{fmtDate(viewBill.expiry_date)||'—'}}</div></div>
+              </div>
+              <div class="cust-sec-label">Consignor (From)</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field"><label class="nim-label">GSTIN</label><div style="font-size:13px;font-family:monospace;color:#374151;padding:4px 0">{{viewBill.from_gstin||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Name</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewBill.from_name||'—'}}</div></div>
+                <div v-if="viewBill.from_address" class="nim-field" style="grid-column:span 2"><label class="nim-label">Address</label><div style="font-size:13px;color:#6b7280;padding:4px 0">{{viewBill.from_address}}</div></div>
+              </div>
+              <div class="cust-sec-label">Consignee (To)</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field"><label class="nim-label">GSTIN</label><div style="font-size:13px;font-family:monospace;color:#374151;padding:4px 0">{{viewBill.to_gstin||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Name</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewBill.to_name||'—'}}</div></div>
+              </div>
+              <div class="cust-sec-label">Transport</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">Mode</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewBill.transport_mode}}</div></div>
+                <div class="nim-field"><label class="nim-label">Vehicle No.</label><div style="font-size:13.5px;font-family:monospace;font-weight:700;color:#374151;padding:4px 0">{{viewBill.vehicle_no||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Distance</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewBill.distance||0}} km</div></div>
+              </div>
+              <div class="cust-sec-label">Tax Details</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">Taxable Value</label><div style="font-size:15px;font-weight:700;color:#111827;padding:4px 0">{{fmt(viewBill.taxable_value)}}</div></div>
+                <div class="nim-field"><label class="nim-label">IGST</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmt(viewBill.igst)}}</div></div>
+                <div class="nim-field"><label class="nim-label">CGST + SGST</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmt(flt(viewBill.cgst)+flt(viewBill.sgst))}}</div></div>
+              </div>
+            </div>
+            <!-- Add/Edit form -->
+            <div v-else-if="drawerMode!=='view'" class="cust-drawer-body">
+              <div class="cust-sec-label" style="margin-top:0">Bill Details</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">EWB Number (auto/manual)</label><input v-model="form.ewb_no" class="nim-input" placeholder="e.g. 123456789012"/></div>
+                <div class="nim-field"><label class="nim-label">Invoice No. <span class="nim-req">*</span></label><input v-model="form.invoice_no" class="nim-input" placeholder="INV-2026-00001"/></div>
+                <div class="nim-field"><label class="nim-label">Invoice Date</label><input v-model="form.invoice_date" type="date" class="nim-input"/></div>
+                <div class="nim-field"><label class="nim-label">Document Type</label><select v-model="form.doc_type" class="nim-select"><option>Tax Invoice</option><option>Bill of Supply</option><option>Delivery Challan</option></select></div>
+                <div class="nim-field"><label class="nim-label">Supply Type</label><select v-model="form.supply_type" class="nim-select"><option>Outward</option><option>Inward</option></select></div>
+                <div class="nim-field"><label class="nim-label">Status</label><select v-model="form.status" class="nim-select"><option>Active</option><option>Cancelled</option></select></div>
+              </div>
+              <div class="cust-sec-label">Consignor (From)</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">GSTIN</label><input v-model="form.from_gstin" class="nim-input" placeholder="27AAPFU0939F1ZV"/></div>
+                <div class="nim-field"><label class="nim-label">Name</label><input v-model="form.from_name" class="nim-input" placeholder="Sender name"/></div>
+                <div class="nim-field" style="grid-column:span 1"><label class="nim-label">Address</label><input v-model="form.from_address" class="nim-input" placeholder="City, State"/></div>
+              </div>
+              <div class="cust-sec-label">Consignee (To)</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">GSTIN</label><input v-model="form.to_gstin" class="nim-input" placeholder="29ABCDE1234F1Z5"/></div>
+                <div class="nim-field"><label class="nim-label">Name</label><input v-model="form.to_name" class="nim-input" placeholder="Receiver name"/></div>
+                <div class="nim-field"><label class="nim-label">Address</label><input v-model="form.to_address" class="nim-input" placeholder="City, State"/></div>
+              </div>
+              <div class="cust-sec-label">Goods</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">HSN Code</label><input v-model="form.hsn_code" class="nim-input" placeholder="e.g. 8471"/></div>
+                <div class="nim-field"><label class="nim-label">Description</label><input v-model="form.description" class="nim-input" placeholder="Product description"/></div>
+                <div class="nim-field"><label class="nim-label">Quantity</label><input v-model.number="form.quantity" type="number" min="0" class="nim-input"/></div>
+                <div class="nim-field"><label class="nim-label">Unit</label><select v-model="form.unit" class="nim-select"><option>NOS</option><option>KGS</option><option>MTR</option><option>LTR</option><option>BOX</option><option>PCS</option></select></div>
+                <div class="nim-field"><label class="nim-label">Taxable Value (₹)</label><input v-model.number="form.taxable_value" type="number" min="0" class="nim-input"/></div>
+              </div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">IGST (₹)</label><input v-model.number="form.igst" type="number" min="0" step="0.01" class="nim-input"/></div>
+                <div class="nim-field"><label class="nim-label">CGST (₹)</label><input v-model.number="form.cgst" type="number" min="0" step="0.01" class="nim-input"/></div>
+                <div class="nim-field"><label class="nim-label">SGST (₹)</label><input v-model.number="form.sgst" type="number" min="0" step="0.01" class="nim-input"/></div>
+              </div>
+              <div class="cust-sec-label">Transport</div>
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field"><label class="nim-label">Transport Mode</label><select v-model="form.transport_mode" class="nim-select"><option>Road</option><option>Rail</option><option>Air</option><option>Ship</option></select></div>
+                <div class="nim-field"><label class="nim-label">Distance (km)</label><input v-model.number="form.distance" type="number" min="1" class="nim-input" placeholder="e.g. 350" @input="updateExpiry"/></div>
+                <div class="nim-field"><label class="nim-label">Transporter ID/GSTIN</label><input v-model="form.transporter_id" class="nim-input" placeholder="Transporter GSTIN"/></div>
+                <div class="nim-field"><label class="nim-label">Transporter Name</label><input v-model="form.transporter_name" class="nim-input" placeholder="Transport company"/></div>
+                <div class="nim-field"><label class="nim-label">Vehicle Number</label><input v-model="form.vehicle_no" class="nim-input" placeholder="MH01AB1234"/></div>
+                <div class="nim-field"><label class="nim-label">Vehicle Type</label><select v-model="form.vehicle_type" class="nim-select" @change="updateExpiry"><option>Regular</option><option>Over Dimensional Cargo</option></select></div>
+              </div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field"><label class="nim-label">Generated Date</label><input v-model="form.generated_date" type="date" class="nim-input" @input="updateExpiry"/></div>
+                <div class="nim-field"><label class="nim-label">Expiry Date <span style="color:#9ca3af;font-weight:400">(auto-calculated)</span></label><input v-model="form.expiry_date" type="date" class="nim-input"/></div>
+              </div>
+            </div>
+            <div class="nim-footer">
+              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">{{drawerMode==='view'?'Close':'Cancel'}}</button>
+              <div v-if="drawerMode==='view'" style="display:flex;gap:8px">
+                <button v-if="viewBill?.status!=='Cancelled'" class="nim-btn nim-btn-outline" style="color:#dc2626;border-color:#dc2626" @click="cancelBill(viewBill)">Cancel Bill</button>
+                <button class="nim-btn nim-btn-outline" @click="openEdit(viewBill.name)"><span v-html="icon('edit',13)"></span> Edit</button>
+              </div>
+              <button v-else class="nim-btn nim-btn-primary" @click="saveEWB" :disabled="saving">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                {{drawerMode==='edit'?'Save Changes':'Generate E-Way Bill'}}
+              </button>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left"><div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div><div class="nim-header-title">Delete E-Way Bill?</div></div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px"><p style="font-size:14px;color:#374151;line-height:1.6">Delete <strong>{{deleteTarget?.ewb_no||deleteTarget?.name}}</strong>? This cannot be undone.</p></div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button @click="doDelete" :disabled="deleting" style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">{{deleting?'Deleting…':'Yes, Delete'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>
+`});
+
   const Purchases = defineComponent({
     name: "Purchases",
     components: { PurchaseModal },
@@ -5120,18 +6014,21 @@
   const NAV = [
     { section: "MAIN", items: [{ to: "/", lbl: "Dashboard", icon: "grid" }] },
     { section: "INVOICING", items: [
-      { to: "/customers",    lbl: "Customers",           icon: "users"    },
-      { to: "/quotes",       lbl: "Quotes",               icon: "quote"    },
-      { to: "/sales-orders", lbl: "Sales Orders",         icon: "order"    },
-      { to: "/invoices",     lbl: "Sales Invoices",       icon: "file"     },
-      { to: "/recurring",    lbl: "Recurring",            icon: "recurring"},
-      { to: "/purchases",    lbl: "Purchase Bills",       icon: "purchase" },
-      { to: "/payments",     lbl: "Payments",             icon: "pay"      },
+      { to: "/customers",         lbl: "Customers",          icon: "users"     },
+      { to: "/quotes",            lbl: "Quotes",              icon: "quote"     },
+      { to: "/sales-orders",      lbl: "Sales Orders",        icon: "order"     },
+      { to: "/invoices",          lbl: "Sales Invoices",      icon: "file"      },
+      { to: "/recurring",         lbl: "Recurring",           icon: "recurring" },
+      { to: "/credit-notes",      lbl: "Credit Notes",        icon: "creditnote"},
+      { to: "/payments-received", lbl: "Payments Received",   icon: "pay"       },
+      { to: "/eway-bills",        lbl: "E-Way Bills",         icon: "truck"     },
+      { to: "/purchases",         lbl: "Purchase Bills",      icon: "purchase"  },
+      { to: "/payments",          lbl: "Payments",            icon: "pay"       },
     ]},
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
+  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", "credit-notes":"Credit Notes", "payments-received":"Payments Received", "eway-bills":"E-Way Bills", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -6684,7 +7581,10 @@
       { path: "/customers", component: Customers, name: "customers" },
       { path: "/quotes",       component: Quotes,       name: "quotes"       },
       { path: "/sales-orders", component: SalesOrders,       name: "sales-orders" },
-      { path: "/recurring",    component: RecurringInvoices,  name: "recurring"    },
+      { path: "/recurring",         component: RecurringInvoices, name: "recurring"          },
+      { path: "/credit-notes",      component: CreditNotes,       name: "credit-notes"       },
+      { path: "/payments-received", component: PaymentsReceived,  name: "payments-received"  },
+      { path: "/eway-bills",        component: EwayBills,         name: "eway-bills"         },
       { path: "/invoices", component: Invoices, name: "invoices" },
       { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
       { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
