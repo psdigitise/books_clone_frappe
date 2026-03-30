@@ -6235,48 +6235,276 @@
     name: "Purchases",
     components: { PurchaseModal },
     setup() {
-      const list = ref([]), loading = ref(true), showNew = ref(false);
+      const router = useRouter();
+      const list = ref([]), loading = ref(true);
+      const activeFilter = ref("all");
+      const search = ref("");
+      const showNew = ref(false);
+
+      const filters = [
+        { k: "all",     lbl: "All Bills"  },
+        { k: "Draft",   lbl: "Draft"      },
+        { k: "Unpaid",  lbl: "Unpaid"     },
+        { k: "Overdue", lbl: "Overdue"    },
+        { k: "Paid",    lbl: "Paid"       },
+      ];
+
+      function isOverdue(b) {
+        return flt(b.outstanding_amount) > 0 && b.due_date && new Date(b.due_date) < new Date();
+      }
+
+      const summary = computed(() => {
+        const out = list.value.reduce((s, b) => s + flt(b.outstanding_amount), 0);
+        const ovr = list.value.filter(isOverdue).reduce((s, b) => s + flt(b.outstanding_amount), 0);
+        const now = new Date();
+        const mo = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+        const paid = list.value.filter(b => b.status === "Paid" && (b.posting_date || "").startsWith(mo))
+          .reduce((s, b) => s + flt(b.grand_total), 0);
+        return { total: list.value.length, outstanding: out, overdue: ovr, paid };
+      });
+
+      const counts = computed(() => ({
+        Draft:   list.value.filter(b => b.status === "Draft").length,
+        Unpaid:  list.value.filter(b => ["Submitted","Unpaid","Partly Paid"].includes(b.status)).length,
+        Overdue: list.value.filter(isOverdue).length,
+        Paid:    list.value.filter(b => b.status === "Paid").length,
+      }));
+
+      const pillCountCls = (k) => ({
+        Draft: "zb-pc-muted", Unpaid: "zb-pc-amber",
+        Overdue: "zb-pc-red", Paid: "zb-pc-green"
+      })[k] || "zb-pc-muted";
+
+      const filtered = computed(() => {
+        let r = list.value;
+        if (activeFilter.value === "Draft")   r = r.filter(b => b.status === "Draft");
+        if (activeFilter.value === "Unpaid")  r = r.filter(b => ["Submitted","Unpaid","Partly Paid"].includes(b.status) && !isOverdue(b));
+        if (activeFilter.value === "Overdue") r = r.filter(isOverdue);
+        if (activeFilter.value === "Paid")    r = r.filter(b => b.status === "Paid");
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(b => (b.name + (b.supplier||"") + (b.bill_no||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      function statusClass(b) {
+        if (isOverdue(b)) return "b-badge-red";
+        return {
+          Paid: "b-badge-green", "Partly Paid": "b-badge-amber",
+          Submitted: "b-badge-amber", Unpaid: "b-badge-amber",
+          Draft: "b-badge-muted", Cancelled: "b-badge-muted"
+        }[b.status] || "b-badge-muted";
+      }
+      function statusLabel(b) {
+        if (isOverdue(b)) return "Overdue";
+        return b.status || "Draft";
+      }
+
       async function load() {
         loading.value = true;
-        try { list.value = await apiList("Purchase Invoice", { fields: ["name", "supplier", "posting_date", "due_date", "grand_total", "outstanding_amount", "status"], order: "posting_date desc" }); }
-        catch (e) { console.error("Purchase Invoice load failed:", e.message); toast("Failed to load bills: " + e.message, "error"); }
+        try {
+          list.value = await apiList("Purchase Invoice", {
+            fields: ["name","supplier","bill_no","posting_date","due_date","grand_total","outstanding_amount","status","docstatus"],
+            order: "posting_date desc", limit: 300
+          });
+        } catch (e) { toast("Failed to load bills: " + e.message, "error"); }
         finally { loading.value = false; }
       }
+
+      // Delete/cancel confirm
+      const showCancel = ref(false);
+      const cancelTarget = ref(null);
+      const cancelling = ref(false);
+
+      function confirmCancel(name) { cancelTarget.value = name; showCancel.value = true; }
+      function closeCancelModal() { cancelTarget.value = null; showCancel.value = false; }
+      async function doCancel() {
+        cancelling.value = true;
+        try {
+          await apiPOST("frappe.client.delete", { doctype: "Purchase Invoice", name: cancelTarget.value });
+          toast("Bill cancelled");
+          closeCancelModal();
+          await load();
+        } catch (e) { toast(e.message || "Could not cancel", "error"); }
+        finally { cancelling.value = false; }
+      }
+
       onMounted(load);
-      return { list, loading, showNew, load, fmt, fmtDate, statusBadge, icon, flt, openDoc };
+      return {
+        list, loading, activeFilter, search, filters, counts, summary, filtered,
+        pillCountCls, statusClass, statusLabel, isOverdue,
+        showNew, showCancel, cancelTarget, cancelling,
+        load, confirmCancel, closeCancelModal, doCancel,
+        fmt, fmtDate, flt, icon, openDoc
+      };
     },
     template: `
-<div class="b-page">
+<div class="b-page cust-page">
   <PurchaseModal :show="showNew" @close="showNew=false" @saved="load"/>
-  <div class="b-action-bar">
-    <div></div>
-    <div style="display:flex;gap:8px">
-      <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="b-btn" style="background:#2F9E44;color:#fff;border:none" @click="showNew=true"><span v-html="icon('plus',13)"></span> New Bill</button>
+
+  <!-- Summary strip -->
+  <div class="qt-summary">
+    <div class="qt-sum-card">
+      <div class="qt-sum-label">Total Bills</div>
+      <div class="qt-sum-value">{{summary.total}}</div>
+    </div>
+    <div class="qt-sum-card">
+      <div class="qt-sum-label" style="color:#E67700">Outstanding</div>
+      <div class="qt-sum-value" style="color:#E67700;font-size:17px">{{fmt(summary.outstanding)}}</div>
+    </div>
+    <div class="qt-sum-card">
+      <div class="qt-sum-label" style="color:#C92A2A">Overdue</div>
+      <div class="qt-sum-value" style="color:#C92A2A;font-size:17px">{{fmt(summary.overdue)}}</div>
+    </div>
+    <div class="qt-sum-card">
+      <div class="qt-sum-label" style="color:#2F9E44">Paid This Month</div>
+      <div class="qt-sum-value" style="color:#2F9E44;font-size:17px">{{fmt(summary.paid)}}</div>
     </div>
   </div>
-  <div class="b-card" style="padding:0;overflow:hidden">
-    <table class="b-table">
-      <thead><tr><th>Bill #</th><th>Supplier</th><th>Date</th><th>Due Date</th><th class="ta-r">Amount</th><th class="ta-r">Outstanding</th><th>Status</th><th></th></tr></thead>
-      <tbody>
-        <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
-        <template v-else>
-          <tr v-for="inv in list" :key="inv.name" class="clickable" @click="openDoc('Purchase Invoice',inv.name)">
-            <td><span class="mono c-accent fw-700" style="font-size:12px">{{inv.name}}</span></td>
-            <td class="fw-600">{{inv.supplier}}</td>
-            <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.posting_date)}}</td>
-            <td class="c-muted" style="font-size:12.5px">{{fmtDate(inv.due_date)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px">{{fmt(inv.grand_total)}}</td>
-            <td class="ta-r mono fw-600" style="font-size:13px" :class="flt(inv.outstanding_amount)>0?'c-amber':'c-green'">{{fmt(inv.outstanding_amount)}}</td>
-            <td><span class="b-badge" :class="statusBadge(inv.status)">{{inv.status}}</span></td>
-            <td><button @click.stop="openDoc('Purchase Invoice',inv.name)" style="background:none;border:none;cursor:pointer;color:#2F9E44" v-html="icon('ext',14)"></button></td>
-          </tr>
-          <tr v-if="!list.length"><td colspan="8" class="b-empty">No bills found</td></tr>
-        </template>
-      </tbody>
-    </table>
+
+  <!-- Toolbar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-filters">
+        <button v-for="f in filters" :key="f.k"
+          class="zb-inv-pill" :class="{'zb-inv-pill-active': activeFilter===f.k}"
+          @click="activeFilter=f.k">
+          {{f.lbl}}
+          <span v-if="f.k!=='all'" class="zb-pill-cnt" :class="activeFilter===f.k ? pillCountCls(f.k) : 'zb-pc-muted'">
+            {{counts[f.k]}}
+          </span>
+        </button>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search bill, vendor..." class="cust-search-input" autocomplete="off"/>
+      </div>
+      <button class="zb-tb-btn" @click="load" title="Refresh">
+        <span v-html="icon('refresh',13)"></span> Refresh
+      </button>
+      <button class="zb-tb-btn" style="background:#E67700;color:#fff;border-color:#E67700" @click="showNew=true">
+        <span v-html="icon('plus',13)"></span> New Bill
+      </button>
+    </div>
   </div>
+
+  <!-- Table -->
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead>
+          <tr>
+            <th>Bill #</th>
+            <th>Vendor Bill No.</th>
+            <th>Vendor</th>
+            <th>Bill Date</th>
+            <th>Due Date</th>
+            <th style="text-align:right">Amount</th>
+            <th style="text-align:right">Outstanding</th>
+            <th>Status</th>
+            <th style="text-align:center;width:80px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- Loading shimmer -->
+          <template v-if="loading">
+            <tr v-for="n in 6" :key="n">
+              <td colspan="9" style="padding:12px 14px">
+                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
+              </td>
+            </tr>
+          </template>
+          <!-- Empty state -->
+          <tr v-else-if="!filtered.length">
+            <td colspan="9" class="cust-empty">
+              <div class="cust-empty-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                </svg>
+              </div>
+              <div class="cust-empty-title">{{search ? 'No bills match' : 'No purchase bills yet'}}</div>
+              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Record vendor bills to track payables'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;background:#E67700;border-color:#E67700" @click="showNew=true">
+                <span v-html="icon('plus',13)"></span> New Bill
+              </button>
+            </td>
+          </tr>
+          <!-- Data rows -->
+          <tr v-else v-for="b in filtered" :key="b.name"
+            class="cust-row"
+            @click="openDoc('Purchase Invoice', b.name)">
+            <td>
+              <span style="color:#E67700;font-family:monospace;font-size:12px;font-weight:700">{{b.name}}</span>
+            </td>
+            <td style="font-family:monospace;font-size:12px;color:#868E96">{{b.bill_no||'—'}}</td>
+            <td class="cust-name">{{b.supplier||'—'}}</td>
+            <td class="cust-secondary">{{fmtDate(b.posting_date)}}</td>
+            <td class="cust-secondary" :style="{color: isOverdue(b) ? '#C92A2A' : '', fontWeight: isOverdue(b) ? '600' : ''}">
+              {{fmtDate(b.due_date)}}
+            </td>
+            <td style="text-align:right;font-family:monospace;font-weight:600">{{fmt(b.grand_total)}}</td>
+            <td style="text-align:right;font-family:monospace;font-weight:600"
+              :style="{color: flt(b.outstanding_amount)>0 ? '#E67700' : '#2F9E44'}">
+              {{fmt(b.outstanding_amount)}}
+            </td>
+            <td>
+              <span class="b-badge" :class="statusClass(b)">{{statusLabel(b)}}</span>
+            </td>
+            <td @click.stop style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="cust-act-btn" style="color:#6b7280;border-color:#e5e7eb"
+                  @click="openDoc('Purchase Invoice', b.name)" title="Open in Frappe">
+                  <span v-html="icon('ext',13)"></span>
+                </button>
+                <button v-if="b.status==='Draft'" class="cust-act-btn cust-act-del"
+                  @click="confirmCancel(b.name)" title="Cancel">
+                  <span v-html="icon('x',13)"></span>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">
+      Showing {{filtered.length}} of {{list.length}} bills
+    </div>
+  </div>
+
+  <!-- Cancel confirm modal -->
+  <teleport to="body">
+    <div v-if="showCancel" class="nim-overlay" @click.self="closeCancelModal">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><span v-html="icon('x',16)"></span></div>
+            <div class="nim-header-title">Cancel Bill?</div>
+          </div>
+          <button class="nim-close" @click="closeCancelModal" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Cancel bill <strong>{{cancelTarget}}</strong>? This will delete the draft.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="closeCancelModal">Keep It</button>
+          <button @click="doCancel" :disabled="cancelling"
+            style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff;display:inline-flex;align-items:center;gap:7px">
+            <span v-if="cancelling" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{cancelling ? 'Cancelling…' : 'Yes, Cancel'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </div>`});
+
+
 
   const Payments = defineComponent({
     name: "Payments",
