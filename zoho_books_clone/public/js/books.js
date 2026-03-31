@@ -7303,6 +7303,280 @@
   </teleport>
 </div>`});
 
+  /* ═══════════════════════════════════════════════════════════════
+     DEBIT NOTES (PURCHASE RETURNS)
+     localStorage-backed, ported from debit-notes.html
+  ═══════════════════════════════════════════════════════════════ */
+  const DebitNotes = defineComponent({
+    name: "DebitNotes",
+    setup() {
+      const LKEY = "books_debit_notes";
+      const REASONS = [
+        "Goods Returned", "Overcharged", "Damaged Goods",
+        "Quantity Shortage", "Quality Issues", "Duplicate Bill",
+        "Post-purchase Discount", "Other"
+      ];
+
+      const list = ref([]), vendors = ref([]), allBills = ref([]), loading = ref(true);
+      const search = ref(""), activeFilter = ref("all");
+      const showDrawer = ref(false), drawerMode = ref("add"), saving = ref(false);
+      const viewNote = ref(null), editingName = ref(null);
+
+      // Drawer Form
+      const form = reactive({
+        name: "", vendor: "", against_bill: "", date: "", reason: "",
+        debit_type: "Partial", notes: "", items: [], debit_amount: 0
+      });
+
+      const showDelete = ref(false), deleteTarget = ref(null);
+
+      // Helpers
+      const store = (d) => { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch {} };
+      const loadLocal = () => { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } };
+      const nextNum = () => {
+        const n = loadLocal().map(x => parseInt((x.name || "DN-0").replace(/\D/g, "")) || 0);
+        return "DN-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(4, "0");
+      };
+
+      const summary = computed(() => {
+        const issued = list.value.reduce((s, n) => s + flt(n.debit_amount), 0);
+        const pending = list.value.filter(n => n.status === "Submitted").reduce((s, n) => s + flt(n.debit_amount), 0);
+        const applied = list.value.filter(n => n.status === "Applied").reduce((s, n) => s + flt(n.debit_amount), 0);
+        return { total: list.value.length, issued, pending, applied };
+      });
+
+      const counts = computed(() => ({
+        Draft: list.value.filter(n => n.status === "Draft").length,
+        Submitted: list.value.filter(n => n.status === "Submitted").length,
+        Applied: list.value.filter(n => n.status === "Applied").length
+      }));
+
+      const filtered = computed(() => {
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(n => n.status === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(n => (n.name + (n.vendor || "") + (n.against_bill || "") + (n.reason || "")).toLowerCase().includes(q));
+        return r;
+      });
+
+      async function load() {
+        loading.value = true;
+        list.value = loadLocal();
+        try {
+          vendors.value = await apiList("Supplier", { fields: ["name", "supplier_name"], filters: [["disabled", "=", 0]], order: "supplier_name asc", limit: 300 });
+          allBills.value = await apiList("Purchase Invoice", { fields: ["name", "supplier", "posting_date", "grand_total", "outstanding_amount"], filters: [["docstatus", "=", 1]], order: "posting_date desc", limit: 300 });
+        } catch (e) { console.error("Load failed", e); }
+        finally { loading.value = false; }
+      }
+
+      function openAdd() {
+        editingName.value = null;
+        Object.assign(form, {
+          name: "", vendor: "", against_bill: "", date: new Date().toISOString().slice(0, 10),
+          reason: "", debit_type: "Partial", notes: "",
+          items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+          debit_amount: 0
+        });
+        drawerMode.value = "add"; showDrawer.value = true;
+      }
+
+      function openView(n) { viewNote.value = n; drawerMode.value = "view"; showDrawer.value = true; }
+
+      function openEdit(n) {
+        editingName.value = n.name;
+        Object.assign(form, JSON.parse(JSON.stringify(n)));
+        drawerMode.value = "edit"; showDrawer.value = true;
+      }
+
+      function addRow() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeRow(i) { if (form.items.length > 1) form.items.splice(i, 1); recalc(); }
+      function recalc() {
+        form.items.forEach(r => { r.amount = flt(flt(r.qty) * flt(r.rate)); });
+        form.debit_amount = form.items.reduce((s, r) => s + r.amount, 0);
+      }
+
+      async function saveNote(status) {
+        if (!form.vendor) { toast("Select a vendor", "error"); return; }
+        if (!form.reason) { toast("Select a reason", "error"); return; }
+        if (form.debit_amount <= 0) { toast("Amount must be > 0", "error"); return; }
+
+        saving.value = true;
+        const doc = { ...form, name: editingName.value || nextNum(), status, created_at: form.created_at || new Date().toISOString() };
+        const idx = list.value.findIndex(n => n.name === doc.name);
+        if (idx >= 0) list.value[idx] = doc; else list.value.unshift(doc);
+        store(list.value);
+        toast(status === "Draft" ? "Saved as draft" : "Debit note issued");
+        showDrawer.value = false;
+        saving.value = false;
+        await load();
+      }
+
+      function confirmDelete(n) { deleteTarget.value = n; showDelete.value = true; }
+      function doDelete() {
+        list.value = list.value.filter(n => n.name !== deleteTarget.value.name);
+        store(list.value);
+        toast("Deleted");
+        showDelete.value = false;
+        load();
+      }
+
+      function applyDebit() {
+        const n = list.value.find(x => x.name === viewNote.value.name);
+        if (n) { n.status = "Applied"; store(list.value); toast("Applied"); showDrawer.value = false; load(); }
+      }
+
+      onMounted(load);
+      return {
+        list, vendors, allBills, loading, search, activeFilter, summary, counts, filtered,
+        showDrawer, drawerMode, form, saving, viewNote, REASONS,
+        openAdd, openView, openEdit, addRow, removeRow, recalc, saveNote,
+        showDelete, deleteTarget, confirmDelete, doDelete, applyDebit,
+        fmt, fmtDate, flt, icon
+      };
+    },
+    template: `
+<div class="b-page cust-page">
+  <div class="qt-summary">
+    <div class="qt-sum-card"><div class="qt-sum-label">Total Notes</div><div class="qt-sum-value">{{summary.total}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:var(--pur)">Debit Raised</div><div class="qt-sum-value" style="color:var(--pur)">{{fmt(summary.issued)}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:var(--amber)">Pending</div><div class="qt-sum-value" style="color:var(--amber)">{{fmt(summary.pending)}}</div></div>
+    <div class="qt-sum-card"><div class="qt-sum-label" style="color:var(--green)">Applied</div><div class="qt-sum-value" style="color:var(--green)">{{fmt(summary.applied)}}</div></div>
+  </div>
+
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-filters">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='Draft'}" @click="activeFilter='Draft'">Draft <span class="zb-pill-cnt">{{counts.Draft}}</span></button>
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='Submitted'}" @click="activeFilter='Submitted'">Submitted <span class="zb-pill-cnt">{{counts.Submitted}}</span></button>
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='Applied'}" @click="activeFilter='Applied'">Applied <span class="zb-pill-cnt">{{counts.Applied}}</span></button>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search"><span v-html="icon('search',13)"></span><input v-model="search" placeholder="Search notes..."/></div>
+      <button class="zb-tb-btn" style="background:var(--pur);color:#fff;border:none" @click="openAdd"><span v-html="icon('plus',13)"></span> New Debit Note</button>
+    </div>
+  </div>
+
+  <div class="b-card cust-table-card">
+    <table class="cust-table">
+      <thead><tr><th>Note #</th><th>Vendor</th><th>Date</th><th>Against Bill</th><th>Reason</th><th class="ta-r">Amount</th><th>Status</th><th class="ta-c">Actions</th></tr></thead>
+      <tbody>
+        <tr v-if="loading"><td colspan="8" class="ta-c"><div class="b-shimmer" style="height:15px"></div></td></tr>
+        <tr v-else v-for="n in filtered" :key="n.name" class="cust-row" @click="openView(n)">
+          <td class="fw-700 c-pur">{{n.name}}</td>
+          <td class="fw-600">{{n.vendor}}</td>
+          <td class="c-muted">{{fmtDate(n.date)}}</td>
+          <td><span v-if="n.against_bill" class="b-badge b-badge-amber">{{n.against_bill}}</span></td>
+          <td class="c-muted">{{n.reason}}</td>
+          <td class="ta-r fw-700 c-pur">{{fmt(n.debit_amount)}}</td>
+          <td><span class="b-badge" :class="n.status==='Applied'?'b-badge-green':n.status==='Submitted'?'b-badge-blue':'b-badge-muted'">{{n.status}}</span></td>
+          <td class="ta-c" @click.stop>
+            <button v-if="n.status==='Draft'" class="cust-act-btn" @click="openEdit(n)" v-html="icon('edit',13)"></button>
+            <button v-if="n.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(n)" v-html="icon('trash',13)"></button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <teleport to="body">
+    <transition name="nim-fade">
+      <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+        <transition name="nim-slide">
+          <div class="nim-drawer" :style="{width: drawerMode==='view'?'520px':'680px'}">
+            <div class="nim-header">
+              <div class="nim-header-left">
+                <div class="nim-header-icon" v-html="icon('file',16)"></div>
+                <div class="nim-header-title">{{drawerMode==='add'?'New Debit Note':drawerMode==='edit'?'Edit Debit Note':'Debit Note Detail'}}</div>
+              </div>
+              <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+            </div>
+            <div class="nim-body">
+              <template v-if="drawerMode==='view'">
+                <div class="b-card" style="padding:20px">
+                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Vendor</span><span class="fw-700">{{viewNote.vendor}}</span></div>
+                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Date</span><span>{{fmtDate(viewNote.date)}}</span></div>
+                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Reason</span><span>{{viewNote.reason}}</span></div>
+                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px" v-if="viewNote.against_bill"><span>Against Bill</span><span class="c-pur">{{viewNote.against_bill}}</span></div>
+                  <hr v-if="viewNote.items?.length" style="margin:15px 0;border-top:1px solid #eee"/>
+                  <table v-if="viewNote.items?.length" class="b-table">
+                    <thead><tr><th>Item</th><th class="ta-c">Qty</th><th class="ta-r">Rate</th><th class="ta-r">Total</th></tr></thead>
+                    <tbody><tr v-for="it in viewNote.items"><td>{{it.item_name}}</td><td class="ta-c">{{it.qty}}</td><td class="ta-r">{{fmt(it.rate)}}</td><td class="ta-r fw-700 c-pur">{{fmt(it.amount)}}</td></tr></tbody>
+                  </table>
+                  <div class="nim-totals" style="margin-top:20px;border-top:1px solid var(--pur);padding-top:10px">
+                    <div class="nim-total-grand" style="display:flex;justify-content:space-between;font-size:16px;font-weight:700"><span>Total Debit</span><span>{{fmt(viewNote.debit_amount)}}</span></div>
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <div class="nim-form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:15px">
+                  <div class="nim-field"><label class="nim-label">Vendor</label>
+                    <select v-model="form.vendor" class="nim-input">
+                      <option v-for="v in vendors" :key="v.name" :value="v.name">{{v.supplier_name}}</option>
+                    </select>
+                  </div>
+                  <div class="nim-field"><label class="nim-label">Date</label><input type="date" v-model="form.date" class="nim-input"/></div>
+                  <div class="nim-field"><label class="nim-label">Against Bill (Optional)</label>
+                    <select v-model="form.against_bill" class="nim-input">
+                      <option value="">None</option>
+                      <option v-for="b in allBills.filter(x=>x.supplier===form.vendor)" :key="b.name" :value="b.name">{{b.name}} ({{fmt(b.grand_total)}})</option>
+                    </select>
+                  </div>
+                  <div class="nim-field"><label class="nim-label">Reason</label>
+                    <select v-model="form.reason" class="nim-input"><option v-for="r in REASONS" :value="r">{{r}}</option></select>
+                  </div>
+                </div>
+                <div class="b-card" style="padding:10px;margin-top:15px">
+                  <table class="nim-table" style="width:100%">
+                    <thead><tr><th style="text-align:left">Item</th><th style="width:70px">Qty</th><th style="width:120px">Rate</th><th style="width:120px;text-align:right">Amount</th><th style="width:30px"></th></tr></thead>
+                    <tbody>
+                      <tr v-for="(it,i) in form.items" :key="i">
+                        <td><input v-model="it.item_name" class="nim-table-input" placeholder="Item name..."/></td>
+                        <td><input v-model.number="it.qty" type="number" class="nim-table-input ta-c" @input="recalc" style="width:60px;text-align:center"/></td>
+                        <td><input v-model.number="it.rate" type="number" class="nim-table-input ta-r" @input="recalc" style="width:100%;text-align:right"/></td>
+                        <td class="ta-r fw-600 c-pur" style="padding:0 10px;text-align:right">{{fmt(it.amount)}}</td>
+                        <td><button v-if="form.items.length>1" @click="removeRow(i)" style="color:#f87171;border:none;background:none;cursor:pointer" v-html="icon('trash',12)"></button></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <button @click="addRow" style="background:none;border:none;color:var(--pur);cursor:pointer;font-weight:600;margin-top:8px">+ Add Row</button>
+                </div>
+                <div class="nim-totals" style="margin-top:15px;text-align:right">
+                  <div class="nim-total-grand" style="font-size:18px;font-weight:700;color:var(--pur)">Total Debit: {{fmt(form.debit_amount)}}</div>
+                </div>
+              </template>
+            </div>
+            <div class="nim-footer">
+              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">{{drawerMode==='view'?'Close':'Cancel'}}</button>
+              <div v-if="drawerMode==='view'" style="display:flex;gap:8px">
+                <button v-if="viewNote.status==='Submitted'" class="nim-btn" style="background:var(--green);color:#fff;border:none;height:37px;border-radius:8px;padding:0 15px;font-weight:600;cursor:pointer" @click="applyDebit">Mark as Applied</button>
+                <button class="nim-btn nim-btn-outline" @click="openEdit(viewNote)">Edit</button>
+              </div>
+              <div v-else style="display:flex;gap:8px">
+                <button class="nim-btn nim-btn-outline" @click="saveNote('Draft')" :disabled="saving">Save as Draft</button>
+                <button class="nim-btn nim-btn-primary" style="background:var(--pur);border:none" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
+              </div>
+            </div>
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:#dc2626"><div class="nim-header-title">Delete Debit Note?</div></div>
+        <div class="nim-body" style="padding:20px">Delete <b>{{deleteTarget.name}}</b>? This cannot be undone.</div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Cancel</button>
+          <button class="nim-btn" style="background:#dc2626;color:#fff;height:37px;border-radius:8px;padding:0 15px;font-weight:600;cursor:pointer;border:none" @click="doDelete">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
 
 
   const Payments = defineComponent({
@@ -7546,12 +7820,13 @@
       { to: "/vendors",           lbl: "Vendors",             icon: "vendors"   },
       { to: "/purchase-orders",   lbl: "Purchase Orders",    icon: "order"     },
       { to: "/purchases",         lbl: "Purchase Bills",      icon: "purchase"  },
+      { to: "/debit-notes",       lbl: "Debit Notes",         icon: "creditnote"},
       { to: "/payments",          lbl: "Payments",            icon: "pay"       },
     ]},
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", "credit-notes":"Credit Notes", "payments-received":"Payments Received", "eway-bills":"E-Way Bills", vendors:"Vendors", "purchase-orders":"Purchase Orders", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
+  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", "credit-notes":"Credit Notes", "payments-received":"Payments Received", "eway-bills":"E-Way Bills", vendors:"Vendors", "purchase-orders":"Purchase Orders", purchases:"Purchase Bills", "debit-notes":"Debit Notes", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -9115,6 +9390,7 @@
       { path: "/vendors", component: Vendors, name: "vendors" },
       { path: "/purchase-orders", component: PurchaseOrders, name: "purchase-orders" },
       { path: "/purchases", component: Purchases, name: "purchases" },
+      { path: "/debit-notes", component: DebitNotes, name: "debit-notes" },
       { path: "/payments", component: Payments, name: "payments" },
       { path: "/banking", component: Banking, name: "banking" },
       { path: "/accounts", component: Accounts, name: "accounts" },
