@@ -7312,9 +7312,14 @@
     setup() {
       const LKEY = "books_debit_notes";
       const REASONS = [
-        "Goods Returned", "Overcharged", "Damaged Goods",
-        "Quantity Shortage", "Quality Issues", "Duplicate Bill",
-        "Post-purchase Discount", "Other"
+        { val: "Goods Returned",  lbl: "Goods Returned to Vendor" },
+        { val: "Overcharged",     lbl: "Overcharged by Vendor" },
+        { val: "Damaged Goods",    lbl: "Damaged / Defective Goods" },
+        { val: "Quantity Shortage",lbl: "Quantity Shortage" },
+        { val: "Quality Issues",   lbl: "Quality Issues" },
+        { val: "Duplicate Bill",   lbl: "Duplicate Bill" },
+        { val: "Post-purchase Discount", lbl: "Post-purchase Discount" },
+        { val: "Other",            lbl: "Other" }
       ];
 
       const list = ref([]), vendors = ref([]), allBills = ref([]), loading = ref(true);
@@ -7342,7 +7347,7 @@
         const issued = list.value.reduce((s, n) => s + flt(n.debit_amount), 0);
         const pending = list.value.filter(n => n.status === "Submitted").reduce((s, n) => s + flt(n.debit_amount), 0);
         const applied = list.value.filter(n => n.status === "Applied").reduce((s, n) => s + flt(n.debit_amount), 0);
-        return { total: list.value.length, issued, pending, applied };
+        return { total: list.value.length, issued, pending, applied};
       });
 
       const counts = computed(() => ({
@@ -7356,6 +7361,11 @@
         const q = search.value.toLowerCase().trim();
         if (q) r = r.filter(n => (n.name + (n.vendor || "") + (n.against_bill || "") + (n.reason || "")).toLowerCase().includes(q));
         return r;
+      });
+
+      const selectedBillDetails = computed(() => {
+        if (!form.against_bill) return null;
+        return allBills.value.find(b => b.name === form.against_bill) || null;
       });
 
       async function load() {
@@ -7426,7 +7436,7 @@
 
       onMounted(load);
       return {
-        list, vendors, allBills, loading, search, activeFilter, summary, counts, filtered,
+        list, vendors, allBills, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
         showDrawer, drawerMode, form, saving, viewNote, REASONS,
         openAdd, openView, openEdit, addRow, removeRow, recalc, saveNote,
         showDelete, deleteTarget, confirmDelete, doDelete, applyDebit,
@@ -7434,44 +7444,53 @@
       };
     },
     template: `
-<div class="b-page cust-page">
-  <div class="qt-summary">
-    <div class="qt-sum-card"><div class="qt-sum-label">Total Notes</div><div class="qt-sum-value">{{summary.total}}</div></div>
-    <div class="qt-sum-card"><div class="qt-sum-label" style="color:var(--pur)">Debit Raised</div><div class="qt-sum-value" style="color:var(--pur)">{{fmt(summary.issued)}}</div></div>
-    <div class="qt-sum-card"><div class="qt-sum-label" style="color:var(--amber)">Pending</div><div class="qt-sum-value" style="color:var(--amber)">{{fmt(summary.pending)}}</div></div>
-    <div class="qt-sum-card"><div class="qt-sum-label" style="color:var(--green)">Applied</div><div class="qt-sum-value" style="color:var(--green)">{{fmt(summary.applied)}}</div></div>
+<div class="b-page">
+  <div style="background:#fff3e0;border:1px solid rgba(230,119,0,0.2);border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13.3px;color:#495057">
+    <span style="font-size:18px">ℹ️</span>
+    <span>A <b>Debit Note</b> reduces an outstanding purchase bill — use it when you return goods to a vendor or were overcharged. It debits your Accounts Payable.</span>
+  </div>
+
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Notes</div><div class="dn-sum-val">{{summary.total}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#e67700">Total Debit Raised</div><div class="dn-sum-val" style="color:#e67700">{{fmt(summary.issued)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#d97706">Pending Application</div><div class="dn-sum-val" style="color:#d97706">{{fmt(summary.pending)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#16a34a">Applied to Bills</div><div class="dn-sum-val" style="color:#16a34a">{{fmt(summary.applied)}}</div></div>
   </div>
 
   <div class="cust-toolbar">
     <div class="cust-toolbar-left">
       <div class="cust-filters">
-        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
-        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='Draft'}" @click="activeFilter='Draft'">Draft <span class="zb-pill-cnt">{{counts.Draft}}</span></button>
-        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='Submitted'}" @click="activeFilter='Submitted'">Submitted <span class="zb-pill-cnt">{{counts.Submitted}}</span></button>
-        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='Applied'}" @click="activeFilter='Applied'">Applied <span class="zb-pill-cnt">{{counts.Applied}}</span></button>
+        <button class="dn-pill" :class="{active:activeFilter==='all'}" @click="activeFilter='all'">All</button>
+        <button class="dn-pill" :class="{active:activeFilter==='Draft'}" @click="activeFilter='Draft'">Draft <span class="dn-pc" style="background:#f1f3f5;color:#868e96">{{counts.Draft}}</span></button>
+        <button class="dn-pill" :class="{active:activeFilter==='Submitted'}" @click="activeFilter='Submitted'">Submitted <span class="dn-pc" style="background:#eef2ff;color:#3b5bdb">{{counts.Submitted}}</span></button>
+        <button class="dn-pill" :class="{active:activeFilter==='Applied'}" @click="activeFilter='Applied'">Applied <span class="dn-pc" style="background:#ebfbee;color:#2f9e44">{{counts.Applied}}</span></button>
       </div>
     </div>
     <div class="cust-toolbar-right">
-      <div class="cust-search"><span v-html="icon('search',13)"></span><input v-model="search" placeholder="Search notes..."/></div>
-      <button class="zb-tb-btn" style="background:var(--pur);color:#fff;border:none" @click="openAdd"><span v-html="icon('plus',13)"></span> New Debit Note</button>
+      <div class="cust-search"><span v-html="icon('search',13)"></span><input v-model="search" placeholder="Search note, vendor, bill..."/></div>
+      <button class="b-btn b-btn-primary" style="background:#e67700" @click="openAdd"><span v-html="icon('plus',13)"></span> New Debit Note</button>
     </div>
   </div>
 
-  <div class="b-card cust-table-card">
-    <table class="cust-table">
-      <thead><tr><th>Note #</th><th>Vendor</th><th>Date</th><th>Against Bill</th><th>Reason</th><th class="ta-r">Amount</th><th>Status</th><th class="ta-c">Actions</th></tr></thead>
+  <div class="b-card" style="overflow:hidden">
+    <table class="dn-tbl">
+      <thead><tr>
+        <th>Debit Note #</th><th>Vendor</th><th>Date</th><th>Against Bill</th>
+        <th>Reason</th><th class="ta-r">Debit Amount</th><th>Status</th>
+        <th class="ta-c" style="width:100px">Actions</th>
+      </tr></thead>
       <tbody>
         <tr v-if="loading"><td colspan="8" class="ta-c"><div class="b-shimmer" style="height:15px"></div></td></tr>
         <tr v-else v-for="n in filtered" :key="n.name" class="cust-row" @click="openView(n)">
-          <td class="fw-700 c-pur">{{n.name}}</td>
+          <td class="fw-700" style="color:#e67700">{{n.name}}</td>
           <td class="fw-600">{{n.vendor}}</td>
           <td class="c-muted">{{fmtDate(n.date)}}</td>
           <td><span v-if="n.against_bill" class="b-badge b-badge-amber">{{n.against_bill}}</span></td>
           <td class="c-muted">{{n.reason}}</td>
-          <td class="ta-r fw-700 c-pur">{{fmt(n.debit_amount)}}</td>
+          <td class="ta-r fw-700" style="color:#e67700">{{fmt(n.debit_amount)}}</td>
           <td><span class="b-badge" :class="n.status==='Applied'?'b-badge-green':n.status==='Submitted'?'b-badge-blue':'b-badge-muted'">{{n.status}}</span></td>
           <td class="ta-c" @click.stop>
-            <button v-if="n.status==='Draft'" class="cust-act-btn" @click="openEdit(n)" v-html="icon('edit',13)"></button>
+            <button v-if="n.status==='Draft'" class="cust-act-btn cust-act-edit" @click="openEdit(n)" v-html="icon('edit',13)"></button>
             <button v-if="n.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(n)" v-html="icon('trash',13)"></button>
           </td>
         </tr>
@@ -7483,78 +7502,104 @@
     <transition name="nim-fade">
       <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
         <transition name="nim-slide">
-          <div class="nim-drawer" :style="{width: drawerMode==='view'?'520px':'680px'}">
-            <div class="nim-header">
-              <div class="nim-header-left">
-                <div class="nim-header-icon" v-html="icon('file',16)"></div>
-                <div class="nim-header-title">{{drawerMode==='add'?'New Debit Note':drawerMode==='edit'?'Edit Debit Note':'Debit Note Detail'}}</div>
-              </div>
-              <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+          <div class="nim-drawer" style="width:680px">
+            <div class="dn-dh">
+              <div><div class="dn-dh-title">{{drawerMode==='add'?'New Debit Note':drawerMode==='edit'?'Edit Debit Note':'Debit Note Details'}}</div><div class="dn-dh-sub" v-if="form.name">{{form.name}}</div></div>
+              <button class="nim-close" @click="showDrawer=false" style="color:#fff" v-html="icon('x',16)"></button>
             </div>
             <div class="nim-body">
               <template v-if="drawerMode==='view'">
-                <div class="b-card" style="padding:20px">
-                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Vendor</span><span class="fw-700">{{viewNote.vendor}}</span></div>
-                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Date</span><span>{{fmtDate(viewNote.date)}}</span></div>
-                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px"><span>Reason</span><span>{{viewNote.reason}}</span></div>
-                  <div class="b-row-flex" style="display:flex;justify-content:space-between;margin-bottom:8px" v-if="viewNote.against_bill"><span>Against Bill</span><span class="c-pur">{{viewNote.against_bill}}</span></div>
-                  <hr v-if="viewNote.items?.length" style="margin:15px 0;border-top:1px solid #eee"/>
-                  <table v-if="viewNote.items?.length" class="b-table">
-                    <thead><tr><th>Item</th><th class="ta-c">Qty</th><th class="ta-r">Rate</th><th class="ta-r">Total</th></tr></thead>
-                    <tbody><tr v-for="it in viewNote.items"><td>{{it.item_name}}</td><td class="ta-c">{{it.qty}}</td><td class="ta-r">{{fmt(it.rate)}}</td><td class="ta-r fw-700 c-pur">{{fmt(it.amount)}}</td></tr></tbody>
-                  </table>
-                  <div class="nim-totals" style="margin-top:20px;border-top:1px solid var(--pur);padding-top:10px">
-                    <div class="nim-total-grand" style="display:flex;justify-content:space-between;font-size:16px;font-weight:700"><span>Total Debit</span><span>{{fmt(viewNote.debit_amount)}}</span></div>
+                <div class="dn-sec-lbl">Debit Note Information</div>
+                <div class="dn-fg dn-fg2">
+                   <div><div class="c-muted" style="font-size:11px">Vendor</div><div class="fw-700">{{viewNote.vendor}}</div></div>
+                   <div><div class="c-muted" style="font-size:11px">Date</div><div class="fw-700">{{fmtDate(viewNote.date)}}</div></div>
+                   <div><div class="c-muted" style="font-size:11px">Against Bill</div><div class="fw-700 c-amber">{{viewNote.against_bill || '—'}}</div></div>
+                   <div><div class="c-muted" style="font-size:11px">Reason</div><div class="fw-700">{{viewNote.reason}}</div></div>
+                </div>
+                <div class="dn-sec-lbl">Returned Items</div>
+                <table class="dn-itbl">
+                  <thead><tr><th>Item</th><th class="ta-c">Qty</th><th class="ta-r">Rate</th><th class="ta-r">Amount</th></tr></thead>
+                  <tbody><tr v-for="it in viewNote.items"><td>{{it.item_name}}</td><td class="ta-c">{{it.qty}}</td><td class="ta-r">{{fmt(it.rate)}}</td><td class="ta-r fw-700">{{fmt(it.amount)}}</td></tr></tbody>
+                </table>
+                <div style="display:flex;justify-content:flex-end;margin-top:16px">
+                  <div class="dn-totals" style="min-width:240px">
+                    <div class="dn-t-row"><span>Total Amount</span><span class="fw-700">{{fmt(viewNote.debit_amount)}}</span></div>
                   </div>
                 </div>
               </template>
               <template v-else>
-                <div class="nim-form-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:15px">
-                  <div class="nim-field"><label class="nim-label">Vendor</label>
-                    <select v-model="form.vendor" class="nim-input">
+                <span class="dn-sec-lbl">Debit Note Details</span>
+                <div class="dn-fg dn-fg3">
+                  <div><label class="fl">Vendor <span class="req">*</span></label>
+                    <select v-model="form.vendor" class="dn-fi">
                       <option v-for="v in vendors" :key="v.name" :value="v.name">{{v.supplier_name}}</option>
                     </select>
                   </div>
-                  <div class="nim-field"><label class="nim-label">Date</label><input type="date" v-model="form.date" class="nim-input"/></div>
-                  <div class="nim-field"><label class="nim-label">Against Bill (Optional)</label>
-                    <select v-model="form.against_bill" class="nim-input">
-                      <option value="">None</option>
+                  <div><label class="fl">Against Bill</label>
+                    <select v-model="form.against_bill" class="dn-fi">
+                      <option value="">— Select Bill —</option>
                       <option v-for="b in allBills.filter(x=>x.supplier===form.vendor)" :key="b.name" :value="b.name">{{b.name}} ({{fmt(b.grand_total)}})</option>
                     </select>
                   </div>
-                  <div class="nim-field"><label class="nim-label">Reason</label>
-                    <select v-model="form.reason" class="nim-input"><option v-for="r in REASONS" :value="r">{{r}}</option></select>
+                  <div><label class="fl">Debit Note Date <span class="req">*</span></label><input type="date" v-model="form.date" class="dn-fi"/></div>
+                </div>
+
+                <div v-if="selectedBillDetails" class="dn-bill-info">
+                  <div style="font-size:11.5px;font-weight:700;color:#e67700;text-transform:uppercase;margin-bottom:8px">Original Bill Details</div>
+                  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+                    <div><div style="font-size:11px;color:#868e96">Date</div><div style="font-size:13px;font-weight:600">{{fmtDate(selectedBillDetails.posting_date)}}</div></div>
+                    <div><div style="font-size:11px;color:#868e96">Grand Total</div><div style="font-size:13px;font-weight:600">{{fmt(selectedBillDetails.grand_total)}}</div></div>
+                    <div><div style="font-size:11px;color:#868e96">Outstanding</div><div style="font-size:13px;font-weight:600">{{fmt(selectedBillDetails.outstanding_amount)}}</div></div>
                   </div>
                 </div>
-                <div class="b-card" style="padding:10px;margin-top:15px">
-                  <table class="nim-table" style="width:100%">
-                    <thead><tr><th style="text-align:left">Item</th><th style="width:70px">Qty</th><th style="width:120px">Rate</th><th style="width:120px;text-align:right">Amount</th><th style="width:30px"></th></tr></thead>
+
+                <div class="dn-fg dn-fg2">
+                  <div><label class="fl">Reason <span class="req">*</span></label>
+                    <select v-model="form.reason" class="dn-fi"><option value="">— Select reason —</option><option v-for="r in REASONS" :value="r.val">{{r.lbl}}</option></select>
+                  </div>
+                  <div><label class="fl">Debit Type</label>
+                    <select v-model="form.debit_type" class="dn-fi"><option value="Full">Full Reversal</option><option value="Partial">Partial Debit</option></select>
+                  </div>
+                </div>
+                <div class="dn-fg" style="grid-template-columns:1fr"><label class="fl">Notes</label><textarea v-model="form.notes" class="dn-fi" rows="2" placeholder="Details about return..."></textarea></div>
+
+                <span class="dn-sec-lbl">Items Being Returned / Debited</span>
+                <div style="border:1px solid #ffe0b2;border-radius:8px;overflow:hidden;margin-bottom:16px">
+                  <table class="dn-itbl">
+                    <thead><tr><th style="width:30%">Item</th><th>Description</th><th style="width:80px;text-align:center">Qty</th><th style="width:120px;text-align:right">Rate</th><th style="width:120px;text-align:right">Amount</th><th style="width:40px"></th></tr></thead>
                     <tbody>
                       <tr v-for="(it,i) in form.items" :key="i">
-                        <td><input v-model="it.item_name" class="nim-table-input" placeholder="Item name..."/></td>
-                        <td><input v-model.number="it.qty" type="number" class="nim-table-input ta-c" @input="recalc" style="width:60px;text-align:center"/></td>
-                        <td><input v-model.number="it.rate" type="number" class="nim-table-input ta-r" @input="recalc" style="width:100%;text-align:right"/></td>
-                        <td class="ta-r fw-600 c-pur" style="padding:0 10px;text-align:right">{{fmt(it.amount)}}</td>
-                        <td><button v-if="form.items.length>1" @click="removeRow(i)" style="color:#f87171;border:none;background:none;cursor:pointer" v-html="icon('trash',12)"></button></td>
+                        <td><input v-model="it.item_name" class="dn-ci" placeholder="Item..."/></td>
+                        <td><input v-model="it.description" class="dn-ci" placeholder="Desc..."/></td>
+                        <td><input v-model.number="it.qty" type="number" class="dn-ci ta-c" @input="recalc"/></td>
+                        <td><input v-model.number="it.rate" type="number" class="dn-ci ta-r" @input="recalc"/></td>
+                        <td class="ta-r fw-600" style="padding:0 10px">{{fmt(it.amount)}}</td>
+                        <td class="ta-c"><button v-if="form.items.length>1" @click="removeRow(i)" style="color:#f87171;border:none;background:none;cursor:pointer" v-html="icon('trash',13)"></button></td>
                       </tr>
                     </tbody>
                   </table>
-                  <button @click="addRow" style="background:none;border:none;color:var(--pur);cursor:pointer;font-weight:600;margin-top:8px">+ Add Row</button>
+                  <div style="padding:8px 12px;background:#fff8f0;border-top:1px solid #ffe0b2">
+                    <button @click="addRow" style="background:none;border:none;cursor:pointer;color:#e67700;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px">+ Add Row</button>
+                  </div>
                 </div>
-                <div class="nim-totals" style="margin-top:15px;text-align:right">
-                  <div class="nim-total-grand" style="font-size:18px;font-weight:700;color:var(--pur)">Total Debit: {{fmt(form.debit_amount)}}</div>
+
+                <div style="display:flex;justify-content:flex-end">
+                  <div class="dn-totals" style="min-width:280px">
+                    <div class="dn-t-row"><span style="color:#868e96">Subtotal</span><span class="mono">{{fmt(form.debit_amount)}}</span></div>
+                    <div class="dn-t-row"><span>Debit Amount</span><span class="mono">{{fmt(form.debit_amount)}}</span></div>
+                  </div>
                 </div>
               </template>
             </div>
             <div class="nim-footer">
               <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">{{drawerMode==='view'?'Close':'Cancel'}}</button>
               <div v-if="drawerMode==='view'" style="display:flex;gap:8px">
-                <button v-if="viewNote.status==='Submitted'" class="nim-btn" style="background:var(--green);color:#fff;border:none;height:37px;border-radius:8px;padding:0 15px;font-weight:600;cursor:pointer" @click="applyDebit">Mark as Applied</button>
-                <button class="nim-btn nim-btn-outline" @click="openEdit(viewNote)">Edit</button>
+                <button v-if="viewNote.status==='Submitted'" class="b-btn" style="background:#16a34a;color:#fff" @click="applyDebit">Mark as Applied</button>
+                <button class="b-btn b-btn-ghost" @click="openEdit(viewNote)">Edit</button>
               </div>
               <div v-else style="display:flex;gap:8px">
-                <button class="nim-btn nim-btn-outline" @click="saveNote('Draft')" :disabled="saving">Save as Draft</button>
-                <button class="nim-btn nim-btn-primary" style="background:var(--pur);border:none" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
+                <button class="b-btn b-btn-ghost" @click="saveNote('Draft')" :disabled="saving" style="color:#e67700;border-color:#e67700">Save as Draft</button>
+                <button class="b-btn b-btn-primary" style="background:#e67700" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
               </div>
             </div>
           </div>
@@ -7567,10 +7612,10 @@
     <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
       <div class="nim-dialog" style="max-width:420px">
         <div class="nim-header" style="background:#dc2626"><div class="nim-header-title">Delete Debit Note?</div></div>
-        <div class="nim-body" style="padding:20px">Delete <b>{{deleteTarget.name}}</b>? This cannot be undone.</div>
+        <div class="nim-body" style="padding:24px">Are you sure you want to delete <b>{{deleteTarget.name}}</b>?</div>
         <div class="nim-footer">
           <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Cancel</button>
-          <button class="nim-btn" style="background:#dc2626;color:#fff;height:37px;border-radius:8px;padding:0 15px;font-weight:600;cursor:pointer;border:none" @click="doDelete">Yes, Delete</button>
+          <button class="b-btn" style="background:#dc2626;color:#fff" @click="doDelete">Yes, Delete</button>
         </div>
       </div>
     </div>
@@ -8510,6 +8555,35 @@
 }
 .nim-btn-primary:hover:not(:disabled){background:#1d4ed8;box-shadow:0 4px 12px rgba(37,99,235,.4);}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* ══ Debit Notes Overhaul ══ */
+.dn-sum-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.dn-sum-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px}
+.dn-sum-lbl{font-size:11px;color:#868e96;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.dn-sum-val{font-size:20px;font-weight:700;font-family:monospace}
+.dn-pill{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;border:1px solid #e2e8f0;background:#fff;color:#868e96;cursor:pointer;transition:all .15s}
+.dn-pill:hover{border-color:#e67700;color:#1a1d23}.dn-pill.active{background:rgba(230,119,0,0.1);border-color:#e67700;color:#e67700}
+.dn-pc{font-size:11px;font-weight:500;padding:1px 6px;border-radius:10px;margin-left:2px}
+.dn-tbl{width:100%;border-collapse:collapse;font-size:13px}
+.dn-tbl th{text-align:left;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#868e96;font-weight:600;white-space:nowrap;background:#f8f9fc}
+.dn-tbl td{padding:11px 14px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
+.dn-dh{background:#e67700;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.dn-dh-title{color:#fff;font-size:16px;font-weight:700}
+.dn-dh-sub{color:rgba(255,255,255,0.7);font-size:12px;margin-top:2px}
+.dn-sec-lbl{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868e96;margin-bottom:10px;margin-top:20px;display:block;padding-top:20px;border-top:1px solid #e2e8f0}
+.dn-sec-lbl:first-child{border-top:none;padding-top:0;margin-top:0}
+.dn-fg{display:grid;gap:14px;margin-bottom:14px}.dn-fg2{grid-template-columns:1fr 1fr}.dn-fg3{grid-template-columns:1fr 1fr 1fr}
+.dn-fi{width:100%;border:1px solid #cdd5e0;border-radius:6px;padding:8px 10px;font-size:13.5px;color:#1a1d23;background:#fff;outline:none;transition:border-color .15s}
+.dn-fi:focus{border-color:#e67700;box-shadow:0 0 0 3px rgba(230,119,0,0.1)}
+.dn-bill-info{background:#fff3e0;border:1px solid rgba(230,119,0,0.2);border-radius:8px;padding:14px 16px;margin-bottom:16px}
+.dn-itbl{width:100%;border-collapse:collapse}
+.dn-itbl th{padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868e96;border-bottom:1px solid #e8ecf0;background:#fafbfc}
+.dn-itbl td{padding:7px 8px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
+.dn-ci{border:none;outline:none;background:transparent;font-size:13px;color:#1a1d23;width:100%;padding:4px 6px;border-radius:4px}
+.dn-ci:focus{background:#fff3e0;box-shadow:0 0 0 2px rgba(230,119,0,0.15)}
+.dn-totals{background:#fff3e0;border:1px solid rgba(230,119,0,0.15);border-radius:8px;overflow:hidden}
+.dn-t-row{display:flex;justify-content:space-between;padding:9px 16px;font-size:13px;border-bottom:1px solid rgba(230,119,0,0.1)}
+.dn-t-row:last-child{border-bottom:none;font-size:15px;font-weight:700;background:#ffe0b2;color:#e67700}
 @media(max-width:640px){
   .nim-grid-3{grid-template-columns:1fr 1fr;}
   .nim-grid-2{grid-template-columns:1fr;}
