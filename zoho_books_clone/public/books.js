@@ -6231,6 +6231,805 @@
 </div>
 `});
 
+  /* ═══════════════════════════════════════════════════════════════
+     PURCHASE ORDERS COMPONENT
+     localStorage-backed, mirrors purchase-orders.html exactly
+  ═══════════════════════════════════════════════════════════════ */
+  const PurchaseOrders = defineComponent({
+    name: "PurchaseOrders",
+    setup() {
+      const router = useRouter();
+      const LKEY = "books_purchase_orders";
+      const STEPS = ["Draft","Sent","Confirmed","Received","Billed"];
+
+      /* ── localStorage helpers ── */
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch {} }
+      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
+      function nextNum() {
+        const nums = readList().map(o => parseInt((o.name||"PO-0").replace(/\D/g,""))||0);
+        return "PO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4,"0");
+      }
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+
+      /* ── State ── */
+      const list         = ref([]);
+      const vendors      = ref([]);
+      const allItems     = ref([]);
+      const loading      = ref(true);
+      const search       = ref("");
+      const activeFilter = ref("all");
+
+      /* ── Drawer state ── */
+      const showDrawer   = ref(false);
+      const drawerMode   = ref("add"); // "add" | "edit" | "view"
+      const saving       = ref(false);
+      const viewOrder    = ref(null);
+
+      const selVendor    = ref("");
+      const vendSearch   = ref("");
+      const showVendDrop = ref(false);
+      const itemSearch   = ref([]);  // per-row item search state
+      const showItemDrop = ref([]);  // per-row dropdown visibility
+
+      const form = reactive({
+        name: "", vendor: "", order_date: "", expected_date: "",
+        status: "Draft", vendor_ref: "", delivery_address: "", terms: "",
+        items: [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        taxes: [],
+        net_total: 0, total_tax: 0, grand_total: 0,
+        received_value: 0, created_at: "",
+      });
+
+      /* ── Confirm modals ── */
+      const showConvert  = ref(false);
+      const convertTarget= ref(null);
+      const showDelete   = ref(false);
+      const deleteTarget = ref(null);
+      const deleting     = ref(false);
+
+      /* ── Summary ── */
+      const summary = computed(() => {
+        const pending   = list.value.filter(o => ["Sent","Confirmed"].includes(o.status)).length;
+        const received  = list.value.filter(o => o.status === "Received").length;
+        const value     = list.value.reduce((s,o) => s + flt(o.grand_total), 0);
+        return { total: list.value.length, pending, received, value };
+      });
+
+      const STATUS_CFG = {
+        Draft:     { cls: "b-badge-muted",  lbl: "Draft"     },
+        Sent:      { cls: "b-badge-blue",   lbl: "Sent"      },
+        Confirmed: { cls: "b-badge-amber",  lbl: "Confirmed" },
+        Received:  { cls: "b-badge-green",  lbl: "Received"  },
+        Billed:    { cls: "b-badge-purple", lbl: "Billed"    },
+        Cancelled: { cls: "b-badge-red",    lbl: "Cancelled" },
+      };
+
+      const counts = computed(() => {
+        const r = {};
+        ["Draft","Sent","Confirmed","Received","Billed"].forEach(s => {
+          r[s] = list.value.filter(o => o.status === s).length;
+        });
+        return r;
+      });
+
+      const pillCls = (k) => ({
+        Draft:"zb-pc-muted", Sent:"b-badge-blue", Confirmed:"zb-pc-amber",
+        Received:"zb-pc-green", Billed:"zb-pc-muted"
+      })[k] || "zb-pc-muted";
+
+      const filtered = computed(() => {
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(o => o.status === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(o => (o.name + o.vendor + (o.vendor_ref||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      function receivedPct(o) {
+        const g = flt(o.grand_total);
+        return g > 0 ? Math.min(100, Math.round(flt(o.received_value) / g * 100)) : 0;
+      }
+
+      /* ── Load ── */
+      async function load() {
+        loading.value = true;
+        list.value = readList();
+        loading.value = false;
+        try { vendors.value = await apiList("Supplier", { fields:["name","supplier_name"], filters:[["disabled","=",0]], order:"supplier_name asc", limit:300 }); } catch {}
+        try { allItems.value = await apiGET("zoho_books_clone.api.books_data.get_items", {}) || []; } catch {}
+      }
+
+      /* ── Vendor dropdown helpers ── */
+      const vendDropItems = computed(() => {
+        const q = vendSearch.value.toLowerCase();
+        return vendors.value.filter(v =>
+          (v.supplier_name||"").toLowerCase().includes(q) || v.name.toLowerCase().includes(q)
+        ).slice(0, 40);
+      });
+      function pickVendor(v) {
+        selVendor.value = v.name;
+        vendSearch.value = v.supplier_name || v.name;
+        form.vendor = v.name;
+        showVendDrop.value = false;
+      }
+
+      /* ── Item dropdown helpers ── */
+      function itemDropItems(i) {
+        const q = (itemSearch.value[i] || "").toLowerCase();
+        return allItems.value.filter(it => (it.item_name||"").toLowerCase().includes(q)).slice(0, 25);
+      }
+      function pickItem(i, it) {
+        form.items[i].item_name  = it.item_name || it.name;
+        form.items[i].rate       = flt(it.standard_rate);
+        form.items[i].description = it.description || "";
+        recalc();
+        showItemDrop.value = showItemDrop.value.map((v,idx) => idx === i ? false : v);
+      }
+
+      /* ── Recalc ── */
+      function recalc() {
+        form.items.forEach(r => { r.amount = Math.round(flt(r.qty) * flt(r.rate) * 100) / 100; });
+        const net = form.items.reduce((s, r) => s + flt(r.amount), 0);
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(net * flt(t.rate) / 100 * 100) / 100 : 0; });
+        form.net_total   = Math.round(net * 100) / 100;
+        form.total_tax   = Math.round(form.taxes.reduce((s,t) => s + flt(t.tax_amount), 0) * 100) / 100;
+        form.grand_total = Math.round((net + form.total_tax) * 100) / 100;
+      }
+
+      function addRow() {
+        form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 });
+        itemSearch.value.push("");
+        showItemDrop.value.push(false);
+      }
+      function removeRow(i) {
+        if (form.items.length > 1) {
+          form.items.splice(i, 1);
+          itemSearch.value.splice(i, 1);
+          showItemDrop.value.splice(i, 1);
+          recalc();
+        }
+      }
+      function addTax()    { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
+      function removeTax(i){ form.taxes.splice(i, 1); recalc(); }
+
+      /* ── Reset form ── */
+      function resetForm(from) {
+        const s = from || {};
+        Object.assign(form, {
+          name:             s.name            || "",
+          vendor:           s.vendor          || "",
+          order_date:       s.order_date      || todayStr(),
+          expected_date:    s.expected_date   || addDays(todayStr(), 14),
+          status:           s.status          || "Draft",
+          vendor_ref:       s.vendor_ref      || "",
+          delivery_address: s.delivery_address || "",
+          terms:            s.terms           || "",
+          items: s.items?.length ? s.items.map(r => ({...r})) : [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+          taxes: (s.taxes||[]).map(t => ({...t})),
+          net_total:      flt(s.net_total),
+          total_tax:      flt(s.total_tax),
+          grand_total:    flt(s.grand_total),
+          received_value: flt(s.received_value),
+          created_at:     s.created_at || todayStr(),
+        });
+        selVendor.value = s.vendor || "";
+        vendSearch.value = s.vendor || "";
+        itemSearch.value = form.items.map(() => "");
+        showItemDrop.value = form.items.map(() => false);
+        showVendDrop.value = false;
+      }
+
+      /* ── Open modes ── */
+      function openAdd() {
+        drawerMode.value = "add";
+        resetForm();
+        showDrawer.value = true;
+      }
+      function openEdit(name) {
+        const o = list.value.find(x => x.name === name); if (!o) return;
+        drawerMode.value = "edit";
+        resetForm(o);
+        showDrawer.value = true;
+      }
+      function openView(name) {
+        const o = list.value.find(x => x.name === name); if (!o) return;
+        viewOrder.value = o;
+        drawerMode.value = "view";
+        showDrawer.value = true;
+      }
+
+      /* ── Save ── */
+      function saveOrder(status) {
+        const vendor = selVendor.value || vendSearch.value.trim();
+        if (!vendor) { toast("Please select a Vendor", "error"); return; }
+        recalc();
+        const existing = list.value.find(o => o.name === form.name);
+        const doc = {
+          name:             form.name || nextNum(),
+          vendor,
+          order_date:       form.order_date || todayStr(),
+          expected_date:    form.expected_date,
+          status,
+          vendor_ref:       form.vendor_ref.trim(),
+          delivery_address: form.delivery_address.trim(),
+          items:            form.items.filter(r => r.item_name || r.rate).map(r => ({...r})),
+          taxes:            form.taxes.map(t => ({...t})),
+          net_total:        form.net_total,
+          total_tax:        form.total_tax,
+          grand_total:      form.grand_total,
+          received_value:   existing?.received_value || 0,
+          terms:            form.terms.trim(),
+          created_at:       existing?.created_at || todayStr(),
+        };
+        const arr = readList();
+        const idx = arr.findIndex(o => o.name === doc.name);
+        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
+        storeList(arr); list.value = arr;
+        toast(status === "Sent" ? "Order sent to vendor!" : drawerMode.value === "edit" ? "Order updated" : "Order saved as Draft");
+        showDrawer.value = false;
+      }
+
+      /* ── Advance status ── */
+      function advanceStatus(name, newStatus) {
+        const arr = readList();
+        const o = arr.find(x => x.name === name); if (!o) return;
+        o.status = newStatus;
+        storeList(arr); list.value = arr;
+        toast("Order " + name + " → " + newStatus);
+        showDrawer.value = false;
+        if (viewOrder.value?.name === name) viewOrder.value = { ...o };
+      }
+
+      /* ── Convert to Bill ── */
+      function openConvert(name) { convertTarget.value = name; showConvert.value = true; }
+      function doConvert() {
+        const arr = readList();
+        const o = arr.find(x => x.name === convertTarget.value); if (!o) { showConvert.value = false; return; }
+        o.status = "Billed"; o.received_value = o.grand_total;
+        storeList(arr); list.value = arr;
+        toast("Order billed. Open Purchase Bills to see the new bill.", "info");
+        showConvert.value = false; showDrawer.value = false;
+        router.push("/purchases");
+      }
+
+      /* ── Delete ── */
+      function confirmDelete(name) { deleteTarget.value = name; showDelete.value = true; }
+      function doDelete() {
+        deleting.value = true;
+        const arr = readList().filter(o => o.name !== deleteTarget.value);
+        storeList(arr); list.value = arr;
+        toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
+      }
+
+      const nextStatusMap = { Draft:"Sent", Sent:"Confirmed", Confirmed:"Received", Received:"Billed" };
+      const nextLabelMap  = { Draft:"Mark Sent", Sent:"Confirm Order", Confirmed:"Mark Received", Received:"Mark Billed" };
+      const nextColorMap  = { Draft:"#E67700", Sent:"#E67700", Confirmed:"#2F9E44", Received:"#7048E8" };
+
+      onMounted(load);
+
+      return {
+        list, vendors, allItems, loading, search, activeFilter, filtered,
+        summary, STATUS_CFG, counts, pillCls, receivedPct, STEPS,
+        showDrawer, drawerMode, saving, viewOrder, form,
+        selVendor, vendSearch, showVendDrop, vendDropItems,
+        itemSearch, showItemDrop, itemDropItems,
+        showConvert, convertTarget, showDelete, deleteTarget, deleting,
+        nextStatusMap, nextLabelMap, nextColorMap,
+        load, openAdd, openEdit, openView, saveOrder, advanceStatus,
+        openConvert, doConvert, confirmDelete, doDelete,
+        addRow, removeRow, addTax, removeTax, recalc, pickVendor, pickItem,
+        fmt, fmtDate, flt, icon, todayStr, addDays, toast
+      };
+    },
+    template: `
+<div class="b-page cust-page">
+
+  <!-- Summary strip -->
+  <div class="qt-summary">
+    <div class="qt-sum-card">
+      <div class="qt-sum-label">Total Orders</div>
+      <div class="qt-sum-value">{{summary.total}}</div>
+    </div>
+    <div class="qt-sum-card">
+      <div class="qt-sum-label" style="color:#E67700">Pending Receipt</div>
+      <div class="qt-sum-value" style="color:#E67700">{{summary.pending}}</div>
+    </div>
+    <div class="qt-sum-card">
+      <div class="qt-sum-label" style="color:#2F9E44">Received</div>
+      <div class="qt-sum-value" style="color:#2F9E44">{{summary.received}}</div>
+    </div>
+    <div class="qt-sum-card">
+      <div class="qt-sum-label" style="color:#3B5BDB">Order Value</div>
+      <div class="qt-sum-value" style="color:#3B5BDB;font-size:17px">{{fmt(summary.value)}}</div>
+    </div>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-filters">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+        <button v-for="f in ['Draft','Sent','Confirmed','Received','Billed']" :key="f"
+          class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
+          @click="activeFilter=f">
+          {{f}}
+          <span class="zb-pill-cnt" :class="activeFilter===f ? pillCls(f) : 'zb-pc-muted'">{{counts[f]}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search order, vendor..." class="cust-search-input" autocomplete="off"/>
+      </div>
+      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="zb-tb-btn" style="background:#E67700;color:#fff;border-color:#E67700" @click="openAdd">
+        <span v-html="icon('plus',13)"></span> New Order
+      </button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="b-card cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead>
+          <tr>
+            <th>PO #</th>
+            <th>Vendor</th>
+            <th>Order Date</th>
+            <th>Expected By</th>
+            <th style="text-align:right">Amount</th>
+            <th style="min-width:110px">Received</th>
+            <th>Status</th>
+            <th style="text-align:center;width:120px">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template v-if="loading">
+            <tr v-for="n in 5" :key="n">
+              <td colspan="8" style="padding:12px 14px">
+                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
+              </td>
+            </tr>
+          </template>
+          <tr v-else-if="!filtered.length">
+            <td colspan="8" class="cust-empty">
+              <div class="cust-empty-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5">
+                  <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+                </svg>
+              </div>
+              <div class="cust-empty-title">{{search ? 'No orders match' : 'No purchase orders yet'}}</div>
+              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Create purchase orders to track procurement'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;background:#E67700;border-color:#E67700" @click="openAdd">
+                <span v-html="icon('plus',13)"></span> New Order
+              </button>
+            </td>
+          </tr>
+          <tr v-else v-for="o in filtered" :key="o.name" class="cust-row" @click="openView(o.name)">
+            <td>
+              <div style="color:#E67700;font-family:monospace;font-size:12px;font-weight:700">{{o.name}}</div>
+              <div v-if="o.vendor_ref" style="font-size:11px;color:#9ca3af">Ref: {{o.vendor_ref}}</div>
+            </td>
+            <td class="cust-name">{{o.vendor||'—'}}</td>
+            <td class="cust-secondary">{{fmtDate(o.order_date)}}</td>
+            <td class="cust-secondary">{{fmtDate(o.expected_date)||'—'}}</td>
+            <td style="text-align:right;font-family:monospace;font-weight:600;color:#111827">{{fmt(o.grand_total)}}</td>
+            <td>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="flex:1;background:#e4e8f0;border-radius:20px;height:6px;overflow:hidden;min-width:60px">
+                  <div :style="{width:receivedPct(o)+'%',height:'100%',borderRadius:'20px',background:receivedPct(o)>=100?'#059669':receivedPct(o)>0?'#E67700':'#e4e8f0',transition:'width .3s'}"></div>
+                </div>
+                <span style="font-size:11px;color:#9ca3af;white-space:nowrap">{{receivedPct(o)}}%</span>
+              </div>
+            </td>
+            <td>
+              <span class="b-badge" :class="(STATUS_CFG[o.status]||STATUS_CFG.Draft).cls">
+                {{o.status}}
+              </span>
+            </td>
+            <td @click.stop style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="cust-act-btn cust-act-edit" @click="openView(o.name)" title="View">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+                <button v-if="!['Billed','Cancelled'].includes(o.status)"
+                  class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
+                  @click="openConvert(o.name)" title="Create Bill">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </button>
+                <button v-if="o.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(o.name)" title="Delete">
+                  <span v-html="icon('trash',13)"></span>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div v-if="!loading && filtered.length" class="cust-row-count">
+      Showing {{filtered.length}} of {{list.length}} orders
+    </div>
+  </div>
+
+  <!-- ══ DRAWER ══ -->
+  <teleport to="body">
+    <transition name="cust-drawer-fade">
+      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+        <transition name="cust-drawer-slide">
+          <div v-if="showDrawer" class="cust-drawer" style="width:740px">
+
+            <!-- Header -->
+            <div class="cust-drawer-header" :style="{background: drawerMode==='view' ? 'linear-gradient(135deg,#E67700,#C96200)' : 'linear-gradient(135deg,#2563eb,#4f46e5)'}">
+              <div class="cust-drawer-header-left">
+                <div class="cust-drawer-icon">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                </div>
+                <div>
+                  <div class="cust-drawer-title">
+                    {{drawerMode==='add' ? 'New Purchase Order' : drawerMode==='edit' ? 'Edit Order' : viewOrder?.name}}
+                  </div>
+                  <div class="cust-drawer-sub">
+                    {{drawerMode==='view' ? 'Vendor: '+viewOrder?.vendor : drawerMode==='edit' ? form.name : 'Fill in order details'}}
+                  </div>
+                </div>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px">
+                <span v-if="drawerMode==='view'" class="b-badge" :class="(STATUS_CFG[viewOrder?.status]||STATUS_CFG.Draft).cls">
+                  {{viewOrder?.status}}
+                </span>
+                <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
+              </div>
+            </div>
+
+            <!-- ── VIEW MODE ── -->
+            <div v-if="drawerMode==='view' && viewOrder" class="cust-drawer-body">
+              <!-- Status timeline -->
+              <div class="so-timeline" style="margin-bottom:20px">
+                <div v-for="(step,i) in STEPS" :key="step" class="so-tl-step">
+                  <div class="so-tl-dot"
+                    :class="STEPS.indexOf(viewOrder.status)>i ? 'so-done' : STEPS.indexOf(viewOrder.status)===i ? 'so-active' : 'so-pending'">
+                    <svg v-if="STEPS.indexOf(viewOrder.status)>i" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    <span v-else>{{i+1}}</span>
+                  </div>
+                  <span class="so-tl-label" :class="STEPS.indexOf(viewOrder.status)>=i ? 'so-tl-active' : 'so-tl-pending'">{{step}}</span>
+                  <div v-if="i<STEPS.length-1" class="so-tl-line" :class="STEPS.indexOf(viewOrder.status)>i ? 'so-line-done' : ''"></div>
+                </div>
+              </div>
+
+              <!-- Detail grid -->
+              <div class="cust-sec-label" style="margin-top:0">Order Details</div>
+              <div class="nim-grid-2 nim-mb">
+                <div class="nim-field"><label class="nim-label">Vendor</label><div style="font-size:13.5px;font-weight:600;color:#111827;padding:4px 0">{{viewOrder.vendor}}</div></div>
+                <div class="nim-field"><label class="nim-label">Order Date</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewOrder.order_date)}}</div></div>
+                <div class="nim-field"><label class="nim-label">Expected By</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{fmtDate(viewOrder.expected_date)||'—'}}</div></div>
+                <div class="nim-field"><label class="nim-label">Vendor Reference</label><div style="font-size:13.5px;color:#374151;padding:4px 0">{{viewOrder.vendor_ref||'—'}}</div></div>
+                <div v-if="viewOrder.delivery_address" class="nim-field" style="grid-column:span 2">
+                  <label class="nim-label">Delivery Address</label>
+                  <div style="font-size:13px;color:#374151;white-space:pre-line;padding:4px 0">{{viewOrder.delivery_address}}</div>
+                </div>
+              </div>
+
+              <!-- Items table -->
+              <div class="cust-sec-label">Line Items</div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th>Item</th><th>Description</th>
+                    <th style="text-align:center">Qty</th>
+                    <th style="text-align:right">Rate</th>
+                    <th style="text-align:right">Amount</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="r in (viewOrder.items||[])" :key="r.item_name" class="nim-tr">
+                      <td style="font-weight:600">{{r.item_name||'—'}}</td>
+                      <td class="cust-secondary">{{r.description||''}}</td>
+                      <td style="text-align:center">{{r.qty||1}}</td>
+                      <td class="nim-amount" style="text-align:right">{{fmt(r.rate)}}</td>
+                      <td class="nim-amount" style="text-align:right">{{fmt(r.amount)}}</td>
+                    </tr>
+                    <tr v-if="!viewOrder.items?.length"><td colspan="5" style="text-align:center;padding:14px;color:#9ca3af">No items</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Totals -->
+              <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(viewOrder.net_total)}}</span></div>
+                  <div v-if="flt(viewOrder.total_tax)" class="nim-total-row nim-tax-row"><span class="nim-total-label">Tax</span><span class="nim-total-val">{{fmt(viewOrder.total_tax)}}</span></div>
+                  <div class="nim-total-grand"><span>Grand Total</span><span>{{fmt(viewOrder.grand_total)}}</span></div>
+                </div>
+              </div>
+
+              <div v-if="viewOrder.terms" class="nim-field">
+                <label class="nim-label">Terms &amp; Conditions</label>
+                <div style="font-size:13px;color:#6b7280;line-height:1.6;white-space:pre-line">{{viewOrder.terms}}</div>
+              </div>
+            </div>
+
+            <!-- ── ADD / EDIT FORM ── -->
+            <div v-else-if="drawerMode!=='view'" class="cust-drawer-body">
+              <div class="cust-sec-label" style="margin-top:0">Order Details</div>
+              <div class="nim-grid-3 nim-mb">
+                <!-- Vendor typeahead -->
+                <div class="nim-field" style="position:relative">
+                  <label class="nim-label">Vendor <span class="nim-req">*</span></label>
+                  <input v-model="vendSearch" class="nim-input" placeholder="Search vendor..."
+                    autocomplete="off"
+                    @focus="showVendDrop=true"
+                    @blur="setTimeout(()=>showVendDrop=false,200)"
+                    @input="showVendDrop=true"/>
+                  <div v-if="showVendDrop && vendDropItems.length" class="qt-cust-drop">
+                    <div v-for="v in vendDropItems" :key="v.name" class="qt-drop-item"
+                      @mousedown.prevent="pickVendor(v)">
+                      <div style="font-weight:600;font-size:13px">{{v.supplier_name||v.name}}</div>
+                      <div v-if="v.name!==v.supplier_name" style="font-size:11px;color:#9ca3af">{{v.name}}</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Order Date <span class="nim-req">*</span></label>
+                  <input v-model="form.order_date" type="date" class="nim-input"/>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Expected By</label>
+                  <input v-model="form.expected_date" type="date" class="nim-input"/>
+                </div>
+              </div>
+
+              <div class="nim-grid-3 nim-mb">
+                <div class="nim-field">
+                  <label class="nim-label">Status</label>
+                  <select v-model="form.status" class="nim-select">
+                    <option>Draft</option><option>Sent</option>
+                    <option>Confirmed</option><option>Received</option>
+                  </select>
+                </div>
+                <div class="nim-field">
+                  <label class="nim-label">Vendor Reference No.</label>
+                  <input v-model="form.vendor_ref" class="nim-input" placeholder="Vendor's quote / ref no."/>
+                </div>
+                <div></div>
+              </div>
+
+              <div class="nim-mb">
+                <div class="nim-field">
+                  <label class="nim-label">Delivery Address</label>
+                  <textarea v-model="form.delivery_address" class="nim-input nim-textarea" rows="2"
+                    placeholder="Delivery / ship-to address..."></textarea>
+                </div>
+              </div>
+
+              <!-- Items -->
+              <div class="nim-section-header" style="margin-bottom:8px">
+                <div class="cust-sec-label" style="margin:0">Line Items</div>
+              </div>
+              <div class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th style="width:28%">Item / Service</th>
+                    <th style="width:25%">Description</th>
+                    <th style="width:10%;text-align:center">Qty</th>
+                    <th style="width:16%;text-align:right">Rate (₹)</th>
+                    <th style="width:16%;text-align:right">Amount (₹)</th>
+                    <th style="width:5%"></th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
+                      <!-- Item name with typeahead -->
+                      <td style="position:relative">
+                        <input v-model="item.item_name" class="nim-cell" placeholder="Item name"
+                          @input="itemSearch[i]=item.item_name;showItemDrop[i]=true"
+                          @focus="showItemDrop[i]=true"
+                          @blur="setTimeout(()=>showItemDrop[i]=false,200)"
+                          autocomplete="off"/>
+                        <div v-if="showItemDrop[i] && itemDropItems(i).length"
+                          style="position:absolute;top:100%;left:0;right:0;z-index:9999;background:#fff;border:1px solid #CDD5E0;border-radius:8px;max-height:160px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,.1)">
+                          <div v-for="it in itemDropItems(i)" :key="it.name"
+                            style="padding:8px 12px;cursor:pointer;font-size:13px;border-bottom:1px solid #F1F3F5"
+                            @mousedown.prevent="pickItem(i,it)"
+                            @mouseover="$event.target.style.background='#F8F9FC'"
+                            @mouseout="$event.target.style.background=''">
+                            <div style="font-weight:500">{{it.item_name||it.name}}</div>
+                            <div style="font-size:11px;color:#9ca3af">₹{{it.standard_rate||0}}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
+                      <td style="text-align:center">
+                        <input v-model.number="item.qty" type="number" min="0.01" step="0.01"
+                          class="nim-cell nim-num" style="text-align:center" @input="recalc"/>
+                      </td>
+                      <td style="text-align:right">
+                        <input v-model.number="item.rate" type="number" min="0" step="0.01"
+                          class="nim-cell nim-num" @input="recalc"/>
+                      </td>
+                      <td class="nim-amount" style="text-align:right;font-variant-numeric:tabular-nums">
+                        {{flt(item.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}
+                      </td>
+                      <td style="text-align:center">
+                        <button v-if="form.items.length>1" @click="removeRow(i)" class="nim-del-btn" v-html="icon('trash',13)"></button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div class="nim-table-footer">
+                  <button @click="addRow" class="nim-add-btn">
+                    <span v-html="icon('plus',12)"></span> Add Row
+                  </button>
+                </div>
+              </div>
+
+              <!-- Taxes -->
+              <div class="nim-section-header nim-mb-sm">
+                <div class="cust-sec-label" style="margin:0">Taxes</div>
+                <button @click="addTax" class="nim-add-btn">
+                  <span v-html="icon('plus',12)"></span> Add Tax
+                </button>
+              </div>
+              <div v-if="form.taxes.length" class="nim-table-wrap nim-mb">
+                <table class="nim-table">
+                  <thead><tr>
+                    <th style="width:20%">Type</th><th style="width:30%">Description</th>
+                    <th style="width:14%;text-align:center">Rate %</th>
+                    <th style="width:32%;text-align:right">Amount (₹)</th>
+                    <th style="width:4%"></th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(tax,i) in form.taxes" :key="i" class="nim-tr">
+                      <td>
+                        <select v-model="tax.tax_type" class="nim-cell"
+                          @change="tax.description=tax.tax_type;recalc()">
+                          <option>CGST</option><option>SGST</option><option>IGST</option>
+                          <option>Cess</option><option>Other</option>
+                        </select>
+                      </td>
+                      <td><input v-model="tax.description" class="nim-cell"/></td>
+                      <td style="text-align:center">
+                        <input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01"
+                          class="nim-cell nim-num" @input="recalc"/>
+                      </td>
+                      <td class="nim-amount" style="text-align:right;font-variant-numeric:tabular-nums">
+                        {{flt(tax.tax_amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}
+                      </td>
+                      <td style="text-align:center">
+                        <button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Totals + Terms -->
+              <div class="nim-bottom-row">
+                <div class="nim-field" style="flex:1">
+                  <label class="nim-label">Terms &amp; Conditions</label>
+                  <textarea v-model="form.terms" class="nim-input nim-textarea" rows="4"
+                    placeholder="Delivery terms, payment terms..."></textarea>
+                </div>
+                <div class="nim-totals">
+                  <div class="nim-total-row"><span class="nim-total-label">Subtotal</span><span class="nim-total-val">{{fmt(form.net_total)}}</span></div>
+                  <div v-for="tax in form.taxes" :key="tax.tax_type" class="nim-total-row nim-tax-row">
+                    <span class="nim-total-label">{{tax.description||tax.tax_type}} ({{tax.rate}}%)</span>
+                    <span class="nim-total-val">{{fmt(tax.tax_amount)}}</span>
+                  </div>
+                  <div class="nim-total-grand"><span>Grand Total</span><span>{{fmt(form.grand_total)}}</span></div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Footer -->
+            <div class="nim-footer">
+              <!-- View footer -->
+              <template v-if="drawerMode==='view' && viewOrder">
+                <div style="font-size:12px;color:#9ca3af">Created {{fmtDate(viewOrder.created_at)}}</div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="nim-btn nim-btn-ghost" @click="openEdit(viewOrder.name)">
+                    <span v-html="icon('edit',13)"></span> Edit
+                  </button>
+                  <button v-if="nextStatusMap[viewOrder.status]"
+                    class="nim-btn"
+                    :style="{background:nextColorMap[viewOrder.status],color:'#fff',borderColor:nextColorMap[viewOrder.status],height:'37px',padding:'0 14px',borderRadius:'8px',fontSize:'13.5px',fontWeight:'600',border:'none',cursor:'pointer'}"
+                    @click="advanceStatus(viewOrder.name, nextStatusMap[viewOrder.status])">
+                    {{nextLabelMap[viewOrder.status]}}
+                  </button>
+                  <button v-if="!['Billed','Cancelled'].includes(viewOrder.status)"
+                    class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700"
+                    @click="openConvert(viewOrder.name)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                    Create Bill
+                  </button>
+                </div>
+              </template>
+              <!-- Add/Edit footer -->
+              <template v-else-if="drawerMode!=='view'">
+                <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+                <div style="display:flex;gap:8px">
+                  <button class="nim-btn nim-btn-outline" style="border-color:#E67700;color:#E67700"
+                    @click="saveOrder('Draft')" :disabled="saving">
+                    Save as Draft
+                  </button>
+                  <button class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700"
+                    @click="saveOrder(drawerMode==='edit' ? form.status : 'Sent')" :disabled="saving">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+                    {{drawerMode==='edit' ? 'Save Changes' : 'Send to Vendor'}}
+                  </button>
+                </div>
+              </template>
+            </div>
+
+          </div>
+        </transition>
+      </div>
+    </transition>
+  </teleport>
+
+  <!-- Convert to Bill modal -->
+  <teleport to="body">
+    <div v-if="showConvert" class="nim-overlay" @click.self="showConvert=false">
+      <div class="nim-dialog" style="max-width:440px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#E67700,#C96200)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            </div>
+            <div class="nim-header-title">Create Purchase Bill?</div>
+          </div>
+          <button class="nim-close" @click="showConvert=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Create a Purchase Bill from <strong>{{convertTarget}}</strong>
+            for <strong>{{list.find(o=>o.name===convertTarget)?.vendor}}</strong>
+            — <strong>{{fmt(list.find(o=>o.name===convertTarget)?.grand_total)}}</strong>.<br><br>
+            This will mark the order as <strong>Billed</strong>.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showConvert=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700" @click="doConvert">
+            Create Bill
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Delete confirm modal -->
+  <teleport to="body">
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div>
+            <div class="nim-header-title">Delete Purchase Order?</div>
+          </div>
+          <button class="nim-close" @click="showDelete=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Delete order <strong>{{deleteTarget}}</strong>? This cannot be undone.
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button @click="doDelete" :disabled="deleting"
+            style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff;display:inline-flex;align-items:center;gap:7px">
+            <span v-if="deleting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{deleting ? 'Deleting…' : 'Yes, Delete'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+</div>`
+  });
+
+
+
   const Purchases = defineComponent({
     name: "Purchases",
     components: { PurchaseModal },
@@ -6745,13 +7544,14 @@
     ]},
     { section: "PURCHASES", items: [
       { to: "/vendors",           lbl: "Vendors",             icon: "vendors"   },
+      { to: "/purchase-orders",   lbl: "Purchase Orders",    icon: "order"     },
       { to: "/purchases",         lbl: "Purchase Bills",      icon: "purchase"  },
       { to: "/payments",          lbl: "Payments",            icon: "pay"       },
     ]},
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", "credit-notes":"Credit Notes", "payments-received":"Payments Received", "eway-bills":"E-Way Bills", vendors:"Vendors", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
+  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", "credit-notes":"Credit Notes", "payments-received":"Payments Received", "eway-bills":"E-Way Bills", vendors:"Vendors", "purchase-orders":"Purchase Orders", purchases:"Purchase Bills", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -7729,6 +8529,7 @@
 .b-badge-red{background:#fee2e2;color:#dc2626}
 .b-badge-blue{background:#eff6ff;color:#2563eb}
 .b-badge-muted{background:#f3f4f6;color:#6b7280}
+.b-badge-purple{background:#f3f0ff;color:#7048e8}
 /* PDF view */
 .zb-pdf-wrap{flex:1;overflow-y:auto;background:#f4f6fa;padding:20px;display:flex;flex-direction:column;align-items:center;gap:0}
 .zb-pdf-paper{background:#fff;width:100%;max-width:640px;padding:32px 36px;box-shadow:0 2px 16px rgba(0,0,0,.1);border-radius:4px}
@@ -8312,6 +9113,7 @@
       { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
       { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
       { path: "/vendors", component: Vendors, name: "vendors" },
+      { path: "/purchase-orders", component: PurchaseOrders, name: "purchase-orders" },
       { path: "/purchases", component: Purchases, name: "purchases" },
       { path: "/payments", component: Payments, name: "payments" },
       { path: "/banking", component: Banking, name: "banking" },
