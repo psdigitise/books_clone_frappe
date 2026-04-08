@@ -2942,7 +2942,7 @@
                   </select>
                 </div>
                 <div class="nim-field">
-                  <label class="nim-label">Credit Limit (₹)</label>
+                  <label class="nim-label">Credit Limit ({{ {'INR':'₹','USD':'$','EUR':'€','GBP':'£','AED':'د.إ','SGD':'S$'}[form.default_currency] || '₹' }})</label>
                   <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"/>
                 </div>
                 <div class="nim-field">
@@ -2999,7 +2999,12 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Country</label>
-                  <input v-model="form.country" class="nim-input" placeholder="India"/>
+                  <select v-model="form.country" class="nim-select">
+                    <option>India</option><option>United States</option><option>United Kingdom</option>
+                    <option>Canada</option><option>Australia</option><option>Singapore</option>
+                    <option>United Arab Emirates</option><option>Saudi Arabia</option>
+                    <option>Germany</option><option>France</option>
+                  </select>
                 </div>
               </div>
 
@@ -3473,7 +3478,12 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Country</label>
-                  <input v-model="form.country" class="nim-input" placeholder="India"/>
+                  <select v-model="form.country" class="nim-select">
+                    <option>India</option><option>United States</option><option>United Kingdom</option>
+                    <option>Canada</option><option>Australia</option><option>Singapore</option>
+                    <option>United Arab Emirates</option><option>Saudi Arabia</option>
+                    <option>Germany</option><option>France</option>
+                  </select>
                 </div>
               </div>
 

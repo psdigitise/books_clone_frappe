@@ -273,6 +273,7 @@
       const saving = ref(false);
       const company = ref(co());
       const customers = ref([]);
+      const allItems = ref([]);
       const accounts_ar = ref([]);
       const accounts_income = ref([]);
       const taxTemplates = ref([]);
@@ -281,8 +282,9 @@
         naming_series: "INV-.YYYY.-.#####",
         customer: "", customer_name: "",
         posting_date: today(), due_date: today(),
-        company: co(), currency: "INR",
+        currency: "INR",
         debit_to: "", income_account: "",
+        source_name: "", source_type: "",
         items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
         taxes: [],
         notes: "",
@@ -338,8 +340,30 @@
         // Load customers
         try {
           customers.value = await apiList("Customer", { fields: ["name"], limit: 50, order: "name asc" });
+          allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" });
         } catch { }
       }
+
+      watch(() => props.show, (v) => {
+        if(v) {
+          const m = localStorage.getItem("convert_to_invoice");
+          if(m) {
+            try {
+              const data = JSON.parse(m);
+              form.source_name = data.source_name;
+              form.source_type = data.source_type;
+              form.customer = data.customer;
+              form.posting_date = data.order_date || data.date || today();
+              form.due_date = data.delivery_date || data.expiry || data.order_date || data.date || today();
+              if (data.items) {
+                 form.items = data.items.map(i => ({...i}));
+              }
+              recalc();
+            } catch(e){}
+            localStorage.removeItem("convert_to_invoice");
+          }
+        }
+      });
 
       onMounted(loadDefaults);
       watch(() => props.show, v => { if (v) loadDefaults(); });
@@ -348,7 +372,7 @@
 
       async function save(andSubmit) {
         if (!form.customer) { toast("Please select a Customer", "error"); return; }
-        if (!form.items[0].item_name && !form.items[0].rate) { toast("Please add at least one item", "error"); return; }
+        if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) { toast("Please select at least one item", "error"); return; }
         if (!form.debit_to) { toast("Please set the Accounts Receivable (Debit To) account", "error"); return; }
         if (!form.income_account) { toast("Please set the Income Account", "error"); return; }
 
@@ -392,6 +416,20 @@
           } else {
             toast("Invoice " + saved.name + " saved as Draft");
           }
+          
+          if (form.source_name && form.source_type) {
+            const lkey = form.source_type === "Sales Order" ? "books_sales_orders" : "books_quotes";
+            try {
+               const stArr = JSON.parse(localStorage.getItem(lkey) || "[]");
+               const stIdx = stArr.findIndex(x => x.name === form.source_name);
+               if (stIdx >= 0) {
+                 stArr[stIdx].status = "Invoiced";
+                 if (form.source_type === "Sales Order") stArr[stIdx].billed_amount = stArr[stIdx].grand_total;
+                 localStorage.setItem(lkey, JSON.stringify(stArr));
+               }
+            } catch {}
+          }
+          
           emit("saved", saved.name);
           emit("close");
           // Navigation handled by parent via 'saved' event
@@ -404,9 +442,18 @@
         if (!form.due_date || form.due_date < form.posting_date)
           form.due_date = form.posting_date;
       }
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       return {
-        form, saving, customers, accounts_ar, accounts_income, taxTemplates, isSI,
-        recalc, addItem, removeItem, addTax, removeTax, onCustomer, applyTaxTemplate, save, fmt, flt, icon, toast, onPostingDateChange
+        form, saving, customers, allItems, accounts_ar, accounts_income, taxTemplates, isSI,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick, onCustomer, applyTaxTemplate, save, fmt, flt, icon, toast, onPostingDateChange
       };
     },
     template: `
@@ -487,7 +534,12 @@
           </thead>
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-              <td><input v-model="item.item_name" class="nim-cell" placeholder="Item name"/></td>
+              <td>
+                <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                  <option value="" disabled>Item name</option>
+                  <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                </select>
+              </td>
               <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
               <td style="text-align:center">
                 <input v-model.number="item.qty" type="number" min="0.01" step="0.01"
@@ -990,6 +1042,7 @@
     setup(props, { emit }) {
       const saving = ref(false);
       const suppliers = ref([]), accounts_ap = ref([]), accounts_exp = ref([]);
+      const allItems = ref([]);
 
       const form = reactive({
         naming_series: "PINV-.YYYY.-.#####",
@@ -1029,6 +1082,7 @@
           if (exp.length && !form.expense_account) form.expense_account = exp[0].name;
         } catch (e) { console.warn("Expense accounts failed:", e.message); }
         try { suppliers.value = await apiList("Supplier", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
       }
 
       onMounted(loadDefaults);
@@ -1074,7 +1128,16 @@
         finally { saving.value = false; }
       }
 
-      return { form, saving, suppliers, accounts_ap, accounts_exp, recalc, addItem, removeItem, onSupplier, save, fmt, flt, icon };
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
+      return { form, saving, suppliers, allItems, accounts_ap, accounts_exp, recalc, addItem, removeItem, onItemPick, onSupplier, save, fmt, flt, icon };
     },
     template: `
 <teleport to="body">
@@ -1142,7 +1205,12 @@
           </tr></thead>
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-              <td><input v-model="item.item_name" class="nim-cell" placeholder="Item name"/></td>
+              <td>
+                <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                  <option value="" disabled>Item name</option>
+                  <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                </select>
+              </td>
               <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="nim-cell nim-num" @input="recalc"/></td>
               <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="nim-cell nim-num" @input="recalc"/></td>
               <td class="nim-amount" style="text-align:right;font-variant-numeric:tabular-nums">{{flt(item.amount).toLocaleString("en-IN",{minimumFractionDigits:2})}}</td>
@@ -1663,7 +1731,12 @@
       const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(i => selected.value.has(i.name)));
 
       function onInvoiceSaved(name) { showNew.value = false; loadList(); router.push({ name: "invoice-detail", params: { name } }); }
-      onMounted(loadList);
+      onMounted(() => {
+        loadList();
+        if (localStorage.getItem("convert_to_invoice")) {
+          showNew.value = true;
+        }
+      });
       return {
         list, loading, active, showNew, search, filters, counts, filtered,
         selected, allSelected, sortKey,
@@ -1868,6 +1941,7 @@
       const inv = ref(null), detailLoading = ref(false), detailError = ref(null);
       const editing = ref(false), saving = ref(false), submitting = ref(false);
       const customers = ref([]), accounts_ar = ref([]), accounts_income = ref([]);
+      const allItems = ref([]);
       const form = reactive({
         customer: "", posting_date: "", due_date: "", debit_to: "", income_account: "",
         currency: "INR", notes: "", company: "",
@@ -1888,6 +1962,7 @@
 
       async function loadFormDefaults() {
         try { customers.value = await apiList("Customer", { fields: ["name"], limit: 100, order: "name asc" }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
         try { const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 }); accounts_ar.value = ar; } catch { }
         try { const inc = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Income Account", "Income"]], ["is_group", "=", 0]], limit: 50 }); accounts_income.value = inc; } catch { }
       }
@@ -2049,10 +2124,19 @@
         finally { recPaySaving.value = false; }
       }
 
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       return {
         list, listLoading, active, search, filters, counts, filtered, pillBadge, goInvoice, invName,
         inv, detailLoading, detailError, editing, saving, submitting, showSendEmail, showSendMenu, showCustMenu, showRecPay, recPay, recPaySaving, recPayAccounts, saveRecPay, openRecPay,
-        form, customers, accounts_ar, accounts_income,
+        form, customers, allItems, onItemPick, accounts_ar, accounts_income,
         statusBadgeCls, isDraft, paidAmt, paidPct, netTotal, totalTax, grandTotal,
         startEdit, saveEdit, submitInvoice, printPdf,
         addItem, removeItem, addTax, removeTax, recalc, toAmountWords,
@@ -2510,7 +2594,12 @@
             <tbody>
               <tr v-for="(item,i) in form.items" :key="i">
                 <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
-                <td><input v-model="item.item_name" class="zb-cell-input" placeholder="Item name" @input="recalc"/></td>
+                <td>
+                  <select v-model="item.item_name" class="zb-cell-input" @change="onItemPick(item)" style="padding-left:8px;background:transparent;min-height:32px">
+                    <option value="" disabled>Item name</option>
+                    <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                  </select>
+                </td>
                 <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
                 <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
                 <td><input v-model.number="item.rate" type="number" min="0" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
@@ -2621,7 +2710,7 @@
         name: "",
         customer_name: "", customer_type: "Company",
         tax_id: "", default_currency: "INR", credit_limit: 0,
-        email_id: "", mobile_no: "", phone: "", website: "",
+        email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
         address_line1: "", address_line2: "",
         city: "", state: "", pincode: "", country: "India",
         payment_terms: "", disabled: 0,
@@ -2666,7 +2755,7 @@
         Object.assign(form, {
           name:"", customer_name:"", customer_type:"Company",
           tax_id:"", default_currency:"INR", credit_limit:0,
-          email_id:"", mobile_no:"", phone:"", website:"",
+          email_id:"", mobile_code:"+91", mobile_no:"", phone:"", website:"",
           address_line1:"", address_line2:"",
           city:"", state:"", pincode:"", country:"India",
           payment_terms:"", disabled:0,
@@ -2694,7 +2783,8 @@
             default_currency: doc.default_currency || "INR",
             credit_limit: doc.credit_limit || 0,
             email_id: doc.email_id || "",
-            mobile_no: doc.mobile_no || "",
+            mobile_code: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.split(" ")[0] : "+91",
+            mobile_no: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.substring(doc.mobile_no.indexOf(" ")+1) : (doc.mobile_no || ""),
             phone: doc.phone || "",
             website: doc.website || "",
             address_line1: doc.address_line1 || "",
@@ -2726,7 +2816,7 @@
             default_currency: form.default_currency,
             credit_limit: parseFloat(form.credit_limit) || 0,
             email_id: form.email_id.trim(),
-            mobile_no: form.mobile_no.trim(),
+            mobile_no: form.mobile_no.trim() ? (form.mobile_code + " " + form.mobile_no.trim()) : "",
             phone: form.phone.trim(),
             website: form.website.trim(),
             address_line1: form.address_line1.trim(),
@@ -2738,11 +2828,12 @@
             payment_terms: form.payment_terms,
             disabled: form.disabled ? 1 : 0,
           };
+          let doc_to_save = doc;
           if (drawerMode.value === "edit") {
             const fresh = await apiGET("frappe.client.get", { doctype: "Customer", name: form.name });
-            doc.modified = fresh.modified;
+            doc_to_save = { ...fresh, ...doc };
           }
-          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc) });
+          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc_to_save) });
           toast(drawerMode.value === "edit" ? "Customer updated!" : "Customer created!");
           showDrawer.value = false;
           await load();
@@ -2942,7 +3033,7 @@
                   </select>
                 </div>
                 <div class="nim-field">
-                  <label class="nim-label">Credit Limit (₹)</label>
+                  <label class="nim-label">Credit Limit ({{ {'INR':'₹','USD':'$','EUR':'€','GBP':'£','AED':'د.إ','SGD':'S$'}[form.default_currency] || '₹' }})</label>
                   <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"/>
                 </div>
                 <div class="nim-field">
@@ -2963,7 +3054,14 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Mobile</label>
-                  <input v-model="form.mobile_no" class="nim-input" placeholder="+91 98765 43210"/>
+                  <div style="display:flex;">
+                    <select v-model="form.mobile_code" style="width:75px; border-right:none; border-top-right-radius:0; border-bottom-right-radius:0; text-align:center; background:#f9fafb; padding:0 5px;" class="nim-input">
+                      <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
+                      <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
+                      <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
+                    </select>
+                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"/>
+                  </div>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Phone</label>
@@ -2999,7 +3097,12 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Country</label>
-                  <input v-model="form.country" class="nim-input" placeholder="India"/>
+                  <select v-model="form.country" class="nim-select">
+                    <option>India</option><option>United States</option><option>United Kingdom</option>
+                    <option>Canada</option><option>Australia</option><option>Singapore</option>
+                    <option>United Arab Emirates</option><option>Saudi Arabia</option>
+                    <option>Germany</option><option>France</option>
+                  </select>
                 </div>
               </div>
 
@@ -3084,7 +3187,7 @@
         name: "",
         supplier_name: "", supplier_type: "Company",
         tax_id: "", default_currency: "INR", payment_terms: "",
-        email_id: "", mobile_no: "", phone: "", website: "",
+        email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
         address_line1: "", address_line2: "",
         city: "", state: "", pincode: "", country: "India",
         default_payable_account: "", disabled: 0,
@@ -3140,7 +3243,7 @@
         Object.assign(form, {
           name:"", supplier_name:"", supplier_type:"Company",
           tax_id:"", default_currency:"INR", payment_terms:"",
-          email_id:"", mobile_no:"", phone:"", website:"",
+          email_id:"", mobile_code:"+91", mobile_no:"", phone:"", website:"",
           address_line1:"", address_line2:"",
           city:"", state:"", pincode:"", country:"India",
           default_payable_account:"", disabled:0,
@@ -3168,7 +3271,8 @@
             default_currency: doc.default_currency || "INR",
             payment_terms: doc.payment_terms || "",
             email_id: doc.email_id || "",
-            mobile_no: doc.mobile_no || "",
+            mobile_code: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.split(" ")[0] : "+91",
+            mobile_no: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.substring(doc.mobile_no.indexOf(" ")+1) : (doc.mobile_no || ""),
             phone: doc.phone || "",
             website: doc.website || "",
             address_line1: doc.address_line1 || "",
@@ -3200,7 +3304,7 @@
             default_currency: form.default_currency,
             payment_terms: form.payment_terms,
             email_id: form.email_id.trim(),
-            mobile_no: form.mobile_no.trim(),
+            mobile_no: form.mobile_no.trim() ? (form.mobile_code + " " + form.mobile_no.trim()) : "",
             phone: form.phone.trim(),
             website: form.website.trim(),
             address_line1: form.address_line1.trim(),
@@ -3212,11 +3316,12 @@
             default_payable_account: form.default_payable_account,
             disabled: form.disabled ? 1 : 0,
           };
+          let doc_to_save = doc;
           if (drawerMode.value === "edit") {
             const fresh = await apiGET("frappe.client.get", { doctype: "Supplier", name: form.name });
-            doc.modified = fresh.modified;
+            doc_to_save = { ...fresh, ...doc };
           }
-          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc) });
+          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc_to_save) });
           toast(drawerMode.value === "edit" ? "Vendor updated!" : "Vendor created!");
           showDrawer.value = false;
           await load();
@@ -3437,7 +3542,14 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Mobile</label>
-                  <input v-model="form.mobile_no" class="nim-input" placeholder="+91 98765 43210"/>
+                  <div style="display:flex;">
+                    <select v-model="form.mobile_code" style="width:75px; border-right:none; border-top-right-radius:0; border-bottom-right-radius:0; text-align:center; background:#f9fafb; padding:0 5px;" class="nim-input">
+                      <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
+                      <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
+                      <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
+                    </select>
+                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"/>
+                  </div>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Phone</label>
@@ -3473,7 +3585,12 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Country</label>
-                  <input v-model="form.country" class="nim-input" placeholder="India"/>
+                  <select v-model="form.country" class="nim-select">
+                    <option>India</option><option>United States</option><option>United Kingdom</option>
+                    <option>Canada</option><option>Australia</option><option>Singapore</option>
+                    <option>United Arab Emirates</option><option>Saudi Arabia</option>
+                    <option>Germany</option><option>France</option>
+                  </select>
                 </div>
               </div>
 
@@ -3701,6 +3818,9 @@
       function saveQuote(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
+        if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) {
+          toast("Please select at least one item", "error"); return;
+        }
         const doc = {
           name: drawerMode.value === "edit" ? form.name : nextNum(),
           customer: cust, date: form.date, expiry: form.expiry,
@@ -3734,20 +3854,35 @@
       function doConvert() {
         const arr = readList();
         const idx = arr.findIndex(q => q.name === convertTarget.value.name);
-        if (idx >= 0) { arr[idx].status = "Converted"; storeList(arr); list.value = arr; }
-        toast("Quote converted to Invoice"); showConvert.value = false;
+        if (idx >= 0) {
+          const q = arr[idx];
+          q.source_type = "Quote";
+          q.source_name = q.name;
+          localStorage.setItem("convert_to_invoice", JSON.stringify(q));
+        }
+        toast("Drafting invoice — please save it to confirm", "info");
+        showConvert.value = false;
         router.push({ name: "invoices" });
+      }
+
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
       }
 
       onMounted(load);
 
       return {
-        list, loading, search, activeFilter, filtered, counts, summary, isExpired, displayStatus,
+        list, loading, allItems, customers, search, activeFilter, filtered, counts, summary, isExpired, displayStatus,
         showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop,
         custDropItems, netTotal, taxTotal, grandTotal,
-        recalc, addItem, removeItem, addTax, removeTax,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveQuote, openAdd, openEdit,
-        showConvert, convertTarget, doConvert,
+        showConvert, convertTarget, openConvert, doConvert,
         showDelete, deleteTarget, deleting, confirmDelete, doDelete,
         load, icon, fmt, fmtDate, flt,
       };
@@ -3929,7 +4064,12 @@
                   </tr></thead>
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td>
+                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                          <option value="" disabled>Item / Service</option>
+                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                        </select>
+                      </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                       <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -4068,6 +4208,7 @@
       // ── State ──
       const list        = ref([]);
       const customers   = ref([]);
+      const allItems    = ref([]);
       const loading     = ref(true);
       const search      = ref("");
       const activeFilter= ref("all");
@@ -4127,6 +4268,7 @@
         list.value = readList();
         loading.value = false;
         try { customers.value = await apiList("Customer", { fields:["name","customer_name"], filters:[["disabled","=",0]], order:"customer_name asc", limit:300 }); } catch {}
+        try { allItems.value  = await apiList("Item",     { fields:["name","item_name","item_code","standard_rate","description"], order:"item_name asc", limit:300 }); } catch {}
       }
 
       // ── Drawer ──
@@ -4218,6 +4360,9 @@
       function saveOrder(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
+        if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) {
+          toast("Please select at least one item", "error"); return;
+        }
         const existing = list.value.find(o => o.name === form.name);
         const doc = {
           name: drawerMode.value === "edit" ? form.name : nextNum(),
@@ -4262,8 +4407,12 @@
       function doConvert() {
         const arr = readList();
         const o = arr.find(x => x.name === convertTarget.value.name);
-        if (o) { o.status = "Invoiced"; o.billed_amount = o.grand_total; storeList(arr); list.value = arr; }
-        toast("Order invoiced — open Invoices to see it", "info");
+        if (o) { 
+          o.source_type = "Sales Order";
+          o.source_name = o.name;
+          localStorage.setItem("convert_to_invoice", JSON.stringify(o));
+        }
+        toast("Drafting invoice — please save it to confirm", "info");
         showConvert.value = false; showDrawer.value = false;
         router.push({ name:"invoices" });
       }
@@ -4280,16 +4429,25 @@
         toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
       }
 
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       onMounted(load);
 
       return {
-        list, customers, loading, search, activeFilter, filtered, counts, summary, billedPct,
+        list, customers, allItems, loading, search, activeFilter, filtered, counts, summary, billedPct,
         STATUS_CFG, STEPS, showDrawer, drawerMode, saving, viewOrder,
         form, selCustomer, custSearch, showCustDrop, custDropItems,
         netTotal, taxTotal, grandTotal,
-        recalc, addItem, removeItem, addTax, removeTax,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveOrder, advanceStatus, openAdd, openEdit, openView,
-        showConvert, convertTarget, doConvert,
+        showConvert, convertTarget, openConvert, doConvert,
         showDelete, deleteTarget, deleting, confirmDelete, doDelete,
         load, icon, fmt, fmtDate, flt,
       };
@@ -4541,7 +4699,7 @@
               <div class="nim-table-wrap nim-mb">
                 <table class="nim-table">
                   <thead><tr>
-                    <th style="width:28%">Item / Service</th><th style="width:25%">Description</th>
+                    <th style="width:28%">Item / Service <span class="nim-req">*</span></th><th style="width:25%">Description</th>
                     <th style="width:10%;text-align:center">Qty</th>
                     <th style="width:16%;text-align:right">Rate (₹)</th>
                     <th style="width:16%;text-align:right">Amount (₹)</th>
@@ -4549,7 +4707,12 @@
                   </tr></thead>
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td>
+                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                          <option value="" disabled>Item / Service</option>
+                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                        </select>
+                      </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                       <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -4653,8 +4816,7 @@
         <div class="nim-body" style="padding:20px 24px">
           <p style="font-size:14px;color:#374151;line-height:1.6">
             Create a Sales Invoice from order <strong>{{convertTarget?.name}}</strong> for
-            <strong>{{convertTarget?.customer}}</strong> — <strong>{{fmt(convertTarget?.grand_total)}}</strong>?<br><br>
-            This will mark the order as <strong>Invoiced</strong>.
+            <strong>{{convertTarget?.customer}}</strong> — <strong>{{fmt(convertTarget?.grand_total)}}</strong>?
           </p>
         </div>
         <div class="nim-footer">
@@ -4710,6 +4872,7 @@
 
       const list        = ref([]);
       const customers   = ref([]);
+      const allItems    = ref([]);
       const loading     = ref(true);
       const search      = ref("");
       const activeFilter= ref("all");
@@ -4933,16 +5096,26 @@
         list.value = readList();
         loading.value = false;
         try { customers.value = await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
       }
 
       onMounted(load);
 
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       return {
-        list, loading, search, activeFilter, filtered, counts, summary,
+        list, loading, search, allItems, activeFilter, filtered, counts, summary,
         FREQ_LABEL, getNextDue, daysUntil,
         showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop, custDropItems,
         netTotal, taxTotal, grandTotal, previewDates, todayStr,
-        recalc, addItem, removeItem, addTax, removeTax,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveSchedule, toggleStatus, openAdd, openEdit,
         showGenerate, generateTarget, openGenerate, doGenerate,
         showHistory, histTarget, openHistory,
@@ -5174,7 +5347,12 @@
                   </tr></thead>
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td>
+                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                          <option value="" disabled>Item / Service</option>
+                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                        </select>
+                      </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                       <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5349,6 +5527,7 @@
       const list         = ref([]);
       const allInvoices  = ref([]);
       const customers    = ref([]);
+      const allItems     = ref([]);
       const loading      = ref(true);
       const search       = ref("");
       const activeFilter = ref("all");
@@ -5472,7 +5651,16 @@
       }
       onMounted(load);
 
-      return { list, loading, search, activeFilter, filtered, counts, summary, STATUS_CFG, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
+      return { list, loading, search, allItems, onItemPick, activeFilter, filtered, counts, summary, STATUS_CFG, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
     },
     template: `
 <div class="b-page">
@@ -5603,7 +5791,12 @@
               <div class="nim-table-wrap nim-mb">
                 <table class="nim-table"><thead><tr><th style="width:30%">Item</th><th style="width:26%">Description</th><th style="width:10%;text-align:center">Qty</th><th style="width:16%;text-align:right">Rate (₹)</th><th style="width:14%;text-align:right">Amount</th><th style="width:4%"></th></tr></thead>
                 <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                  <td><input v-model="item.item_name" class="nim-cell" placeholder="Item"/></td>
+                  <td>
+                    <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                      <option value="" disabled>Item</option>
+                      <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                    </select>
+                  </td>
                   <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                   <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                   <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -8531,7 +8724,7 @@
 /* Footer */
 .nim-footer{
   display:flex;align-items:center;justify-content:space-between;
-  padding:14px 24px;border-top:1.5px solid #e4e8f0;
+  padding:14px 75px 14px 24px;border-top:1.5px solid #e4e8f0;
   background:#f8f9fc;flex-shrink:0;
 }
 .nim-btn{
@@ -8631,6 +8824,12 @@
 .nim-invoice-more{color:#9ca3af;font-size:12px;margin-top:5px;}
 
 /* ══ AI Automator FAB ══ */
+body:has(.nim-overlay) .ai-fab,
+body:has(.nim-overlay) .ai-panel,
+body:has(.cust-backdrop) .ai-fab,
+body:has(.cust-backdrop) .ai-panel {
+  display:none !important;
+}
 .ai-fab{
   position:fixed;bottom:24px;right:24px;
   display:flex;align-items:center;gap:8px;
