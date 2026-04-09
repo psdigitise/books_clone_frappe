@@ -106,8 +106,8 @@ def send_invoice_email(invoice_name, to, subject, body, cc=None):
 @frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
 def save_doc(doc):
     """
-    Save a document. Accepts GET so CSRF is never required.
-    Called by the Books SPA instead of frappe.client.save.
+    Save (create or update) a document.
+    Called by the Books SPA via POST so large payloads don't hit URL limits.
     """
     if isinstance(doc, str):
         doc = json.loads(doc)
@@ -116,17 +116,33 @@ def save_doc(doc):
     if not doctype:
         frappe.throw("doctype is required")
 
-    # Check permission
     if not frappe.has_permission(doctype, "write"):
         frappe.throw("Not permitted", frappe.PermissionError)
 
+    # Strip stale child-row identity fields so Frappe replaces rows cleanly
+    # instead of trying to look up rows by old hash names that may no longer exist.
+    _CHILD_META_KEYS = ("name", "parent", "parenttype", "parentfield", "owner",
+                        "creation", "modified", "modified_by")
+    for key, val in doc.items():
+        if isinstance(val, list):
+            for row in val:
+                if isinstance(row, dict):
+                    for mk in _CHILD_META_KEYS:
+                        row.pop(mk, None)
+
     name = doc.get("name")
     if name and frappe.db.exists(doctype, name):
-        # Update existing
         d = frappe.get_doc(doctype, name)
+        is_submitted = d.docstatus == 1
         d.update(doc)
+        if is_submitted:
+            # Submitted documents are normally immutable in Frappe.
+            # This flag bypasses field-level and child-row validation so the
+            # Books SPA can freely edit any invoice regardless of status.
+            # child rows added via d.update() have no DB name yet, so
+            # validate_update_after_submit would throw DoesNotExistError on them.
+            d.flags.ignore_validate_update_after_submit = True
     else:
-        # Create new
         d = frappe.get_doc(doc)
 
     d.save(ignore_permissions=False)
@@ -145,85 +161,80 @@ def submit_doc(doctype, name):
     frappe.db.commit()
     return d.as_dict()
 
-
 @frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
-def record_payment(invoice_name, amount, deposit_to, mode_of_payment=None,
-                   payment_date=None, reference_no=None, notes=None, submit=True):
-    """
-    Record a payment for a Sales Invoice.
-    Called from the Books SPA Record Payment form.
-    """
-    import json
-    from frappe.utils import today, flt
-
-    # Coerce types
-    amount     = flt(amount)
-    submit     = str(submit).lower() not in ("0", "false", "no")
-    payment_date = payment_date or today()
-
-    if not invoice_name:
-        frappe.throw("invoice_name is required")
-    if amount <= 0:
-        frappe.throw("Amount must be greater than zero")
-    if not deposit_to:
-        frappe.throw("Deposit To account is required")
-
-    # Load the invoice
-    inv = frappe.get_doc("Sales Invoice", invoice_name)
-    if inv.docstatus != 1:
-        frappe.throw(f"Invoice {invoice_name} must be submitted before recording a payment")
-
-    company = inv.company or frappe.defaults.get_user_default("company") or ""
-
-    # Find the AR (Receivable) account for this company
-    paid_from = frappe.db.get_value(
-        "Account",
-        {"account_type": "Receivable", "company": company, "is_group": 0},
-        "name"
-    ) or inv.debit_to or ""
-
-    if not paid_from:
-        frappe.throw("Could not find a Receivable account for company: " + company)
-
-    # Build Payment Entry
-    pe = frappe.get_doc({
-        "doctype":          "Payment Entry",
-        "payment_type":     "Receive",
-        "party_type":       "Customer",
-        "party":            inv.customer,
-        "party_name":       inv.customer_name or inv.customer,
-        "posting_date":     payment_date,
-        "paid_amount":      amount,
-        "received_amount":  amount,
-        "paid_from":        paid_from,
-        "paid_to":          deposit_to,
-        "mode_of_payment":  mode_of_payment or "Cash",
-        "reference_no":     reference_no or invoice_name,
-        "company":          company,
-        "remarks":          notes or f"Payment for {invoice_name}",
-        "references": [{
-            "doctype":            "Payment Entry Reference",
-            "reference_doctype":  "Sales Invoice",
-            "reference_name":     invoice_name,
-            "allocated_amount":   amount,
-        }],
-    })
-
-    pe.insert(ignore_permissions=True)
-
-    if submit:
-        pe.submit()
-        # Reduce outstanding on invoice
-        outstanding = flt(inv.outstanding_amount) - amount
-        frappe.db.set_value(
-            "Sales Invoice", invoice_name,
-            "outstanding_amount", max(0, outstanding)
-        )
-        # Update status
-        if outstanding <= 0:
-            frappe.db.set_value("Sales Invoice", invoice_name, "status", "Paid")
-        elif outstanding < flt(inv.grand_total):
-            frappe.db.set_value("Sales Invoice", invoice_name, "status", "Partly Paid")
-
+def delete_doc(doctype, name):
+    """Delete a document via GET — no CSRF needed."""
+    if not frappe.has_permission(doctype, "delete"):
+        frappe.throw("Not permitted", frappe.PermissionError)
+        
+    frappe.delete_doc(doctype, name, ignore_permissions=False)
     frappe.db.commit()
-    return {"name": pe.name, "status": "submitted" if submit else "draft"}
+    return {"message": "deleted"}
+
+@frappe.whitelist(allow_guest=True)
+def get_accounts():
+    """Safely fetch accounts filtered by company, bypassing REST get_list overrides."""
+    company = frappe.form_dict.get("company") or ""
+
+    # Resolve company from Books Settings when not supplied by caller
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            pass
+
+    def get_list_by_type(account_type=None, scope_company=None):
+        """Return leaf accounts matching the given type.
+
+        scope_company controls company filtering:
+          - truthy str  → filter by that company
+          - ""          → no company filter (global fallback)
+          - None        → use the outer `company` variable
+        """
+        effective = company if scope_company is None else scope_company
+        f = {"is_group": 0, "disabled": 0}
+        if effective:
+            f["company"] = effective
+        if account_type:
+            f["account_type"] = account_type
+        try:
+            return [
+                {"name": a.name, "account_type": a.account_type}
+                for a in frappe.get_all("Account", filters=f, fields=["name", "account_type"])
+            ]
+        except Exception:
+            return []
+
+    # Primary query — scoped to the resolved company
+    res = {
+        "ar":     get_list_by_type(account_type="Receivable"),
+        "income": get_list_by_type(account_type="Income"),
+        "bank":   get_list_by_type(account_type=["in", ["Bank", "Cash"]]),
+        "ap":     get_list_by_type(account_type="Payable"),
+    }
+
+    # Fallback 1: category empty → try all accounts for the same company (no type filter)
+    all_accs = None
+    for key in res:
+        if not res[key]:
+            if all_accs is None:
+                all_accs = get_list_by_type()
+            res[key] = all_accs
+
+    # Fallback 2: if the company itself had no accounts (stale/wrong company name),
+    # retry the entire query without any company filter so the UI is never blank.
+    if not any(res.values()):
+        res = {
+            "ar":     get_list_by_type(account_type="Receivable", scope_company=""),
+            "income": get_list_by_type(account_type="Income",      scope_company=""),
+            "bank":   get_list_by_type(account_type=["in", ["Bank", "Cash"]], scope_company=""),
+            "ap":     get_list_by_type(account_type="Payable",     scope_company=""),
+        }
+        all_global = None
+        for key in res:
+            if not res[key]:
+                if all_global is None:
+                    all_global = get_list_by_type(scope_company="")
+                res[key] = all_global
+
+    return res

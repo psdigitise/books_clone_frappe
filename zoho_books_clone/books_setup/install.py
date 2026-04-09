@@ -154,7 +154,13 @@ def seed_payment_terms():
 
 # ─── Chart of Accounts ───────────────────────────────────────────────────────
 def create_default_accounts():
-    company = frappe.db.get_single_value("Global Defaults", "default_company")
+    # Prefer Books Settings — our authoritative source — then fall back to Global Defaults
+    company = frappe.db.get_single_value("Books Settings", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Global Defaults", "default_company")
+        except Exception:
+            company = None
     if not company:
         return
 
@@ -200,7 +206,13 @@ def create_default_accounts():
 
 # ─── Cost Centers ────────────────────────────────────────────────────────────
 def seed_cost_centers():
-    company = frappe.db.get_single_value("Global Defaults", "default_company")
+    # Prefer Books Settings — our authoritative source — then fall back to Global Defaults
+    company = frappe.db.get_single_value("Books Settings", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Global Defaults", "default_company")
+        except Exception:
+            company = None
     if not company:
         return
     if not frappe.db.exists("Cost Center", {"cost_center_name": "Main", "company": company}):

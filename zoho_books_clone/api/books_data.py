@@ -140,7 +140,19 @@ def get_payment_defaults(invoice_name):
         fields=["name", "account_type"],
         order_by="account_type desc",
     )
-    payment_modes = frappe.get_all("Mode of Payment", fields=["name"], order_by="name")
+    # Prefer our own Books Payment Mode; fall back to Frappe's Mode of Payment
+    try:
+        payment_mode_docs = frappe.get_all(
+            "Books Payment Mode", filters={"enabled": 1}, fields=["mode_of_payment"], order_by="mode_of_payment"
+        )
+        payment_modes = [m.mode_of_payment for m in payment_mode_docs]
+    except Exception:
+        try:
+            payment_mode_docs = frappe.get_all("Mode of Payment", fields=["name"], order_by="name")
+            payment_modes = [m.name for m in payment_mode_docs]
+        except Exception:
+            payment_modes = ["Cash", "Bank Transfer", "UPI", "NEFT", "RTGS", "Cheque"]
+
     return {
         "invoice_name": inv.name,
         "customer_name": inv.customer_name or inv.customer,
@@ -151,19 +163,26 @@ def get_payment_defaults(invoice_name):
         "payment_number": str(next_num),
         "payment_date": nowdate(),
         "bank_accounts": bank_accounts,
-        "payment_modes": [m.name for m in payment_modes],
+        "payment_modes": payment_modes,
         "company": company,
     }
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
 def record_payment(
-    invoice_name, amount_received, payment_date,
+    invoice_name=None, amount_received=None, payment_date=None,
     payment_mode="Cash", deposit_to=None, bank_charges=0,
     reference_no=None, notes=None, tds_deducted=0, tds_amount=0, save_as_draft=False,
 ):
+    if not invoice_name:
+        frappe.throw("invoice_name is required to record a payment.")
+    if amount_received is None:
+        frappe.throw("amount_received is required.")
+    if not payment_date:
+        payment_date = frappe.utils.nowdate()
     if isinstance(save_as_draft, str):
         save_as_draft = save_as_draft.lower() in ("true", "1", "yes")
+
 
     amount_received = flt(amount_received)
     bank_charges    = flt(bank_charges)
@@ -186,12 +205,20 @@ def record_payment(
     if not deposit_to:
         frappe.throw("Could not find a Cash/Bank account. Please set one up under Accounts.")
 
-    debtors_account = (
-        getattr(inv, "debit_to", None)
-        or frappe.db.get_value("Company", company, "default_receivable_account")
+    # Resolve Accounts Receivable account from the invoice or from our Account DocType
+    debtors_account = getattr(inv, "debit_to", None) or frappe.db.get_value(
+        "Account",
+        {"account_type": "Receivable", "company": company, "is_group": 0},
+        "name",
     )
+    if not debtors_account:
+        frappe.throw(
+            f"No Receivable account found for company '{company}'. "
+            "Please ensure the Chart of Accounts is set up under Accounts."
+        )
+
     outstanding_amount = flt(getattr(inv, "outstanding_amount", None)) or (
-        flt(inv.grand_total) - flt(inv.advance_paid)
+        flt(inv.grand_total) - flt(getattr(inv, "advance_paid", 0))
     )
 
     pe = frappe.new_doc("Payment Entry")
@@ -227,9 +254,13 @@ def record_payment(
         charges_account = frappe.db.get_value(
             "Account", {"account_type": "Bank", "company": company, "is_group": 0}, "name"
         ) or debtors_account
+        # Resolve Cost Center from our own DocType — not the built-in Company DocType
+        cost_center = frappe.db.get_value(
+            "Cost Center", {"company": company, "is_group": 0}, "name"
+        )
         pe.append("deductions", {
             "account":     charges_account,
-            "cost_center": frappe.db.get_value("Company", company, "cost_center"),
+            "cost_center": cost_center or "",
             "amount":      bank_charges,
         })
 

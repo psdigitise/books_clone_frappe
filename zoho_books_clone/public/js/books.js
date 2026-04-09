@@ -5,7 +5,7 @@
     console.error("[Books] Vue/VueRouter not loaded"); return;
   }
 
-  const { createApp, ref, computed, onMounted, reactive, watch, defineComponent, nextTick } = Vue;
+  const { createApp, ref, computed, onMounted, onUnmounted, reactive, watch, defineComponent, nextTick } = Vue;
   const { createRouter, createWebHashHistory, useRoute, useRouter } = VueRouter;
 
   /* Expose URL helpers globally immediately so templates can use them */
@@ -54,8 +54,27 @@
 
   function _parseResponse(json, status) {
     if (json.exc || json.exc_type) {
-      const match = (json.exc || "").match(/frappe\.exceptions\.\w+: (.+)/);
-      throw new Error(match ? match[1] : (json.exc_type || json.message || "Server error " + status));
+      // Frappe double-escapes the traceback as a JSON-encoded list, so literal \n
+      // and \" survive the outer JSON.parse.  Normalise them before matching.
+      const excStr = (json.exc || "").replace(/\\n/g, "\n").replace(/\\"/g, '"');
+      // Capture just the human-readable part after "frappe.exceptions.SomeError: "
+      const match = excStr.match(/frappe\.exceptions\.\w+:\s*([^\n]+)/);
+      if (match && match[1].trim()) {
+        throw new Error(match[1].trim());
+      }
+      // Fall back to _server_messages (Frappe puts user-facing messages here)
+      if (json._server_messages) {
+        try {
+          const msgs = JSON.parse(json._server_messages);
+          const first = Array.isArray(msgs) ? msgs[0] : msgs;
+          const text = (typeof first === "object" ? first.message : String(first) || "")
+            .replace(/\\n/g, "").replace(/\\"/g, '"').replace(/^\s+|\s+$/g, "");
+          if (text) throw new Error(text);
+        } catch (inner) {
+          if (inner instanceof Error && !inner.message.startsWith("{")) throw inner;
+        }
+      }
+      throw new Error(json.exc_type || json.message || "Server error " + status);
     }
     return json.message;
   }
@@ -88,8 +107,8 @@
     }
     // 2. Try window.frappe.csrf_token if already set and valid
     if (window.frappe?.csrf_token &&
-        window.frappe.csrf_token !== "None" &&
-        window.frappe.csrf_token !== "{{ csrf_token }}") {
+      window.frappe.csrf_token !== "None" &&
+      window.frappe.csrf_token !== "{{ csrf_token }}") {
       return window.frappe.csrf_token;
     }
     // 3. Try cookie
@@ -117,10 +136,8 @@
     return "";
   }
 
-  /* POST — always fetches fresh CSRF token, sends via both header and body */
+  /* POST — reuses cached token when valid; fetches fresh only when needed */
   async function apiPOST(method, args) {
-    // Force-invalidate cached token so we always get a fresh one
-    if (window.frappe) window.frappe.csrf_token = null;
     const csrfToken = await refreshCsrfToken();
 
     const body = new URLSearchParams();
@@ -154,13 +171,17 @@
   }
 
   async function apiSave(doc) {
-    // Use our custom GET endpoint — no CSRF token needed
-    return await apiGET("zoho_books_clone.api.docs.save_doc", { doc: JSON.stringify(doc) });
+    // Use POST so the JSON payload doesn't blow the URL length limit
+    return await apiPOST("zoho_books_clone.api.docs.save_doc", { doc: JSON.stringify(doc) });
   }
 
   async function apiSubmit(doctype, name) {
     // Use our custom GET endpoint — no CSRF token needed
     return await apiGET("zoho_books_clone.api.docs.submit_doc", { doctype, name });
+  }
+
+  async function apiDelete(doctype, name) {
+    return await apiGET("zoho_books_clone.api.docs.delete_doc", { doctype, name });
   }
 
   async function apiList(dt, opts) {
@@ -273,6 +294,7 @@
       const saving = ref(false);
       const company = ref(co());
       const customers = ref([]);
+      const allItems = ref([]);
       const accounts_ar = ref([]);
       const accounts_income = ref([]);
       const taxTemplates = ref([]);
@@ -281,8 +303,9 @@
         naming_series: "INV-.YYYY.-.#####",
         customer: "", customer_name: "",
         posting_date: today(), due_date: today(),
-        company: co(), currency: "INR",
+        currency: "INR",
         debit_to: "", income_account: "",
+        source_name: "", source_type: "",
         items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
         taxes: [],
         notes: "",
@@ -324,22 +347,43 @@
         const c = await resolveCompany();
         form.company = c;
         // Query AR accounts exactly like Frappe desk does: account_type=Receivable, is_group=0
+        // Query AR and Income accounts via our robust wrapper
         try {
-          const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 });
-          accounts_ar.value = ar;
-          if (ar.length && !form.debit_to) form.debit_to = ar[0].name;
-        } catch (e) { console.warn("AR accounts failed:", e.message); }
-        // Income accounts
-        try {
-          const inc = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Income Account", "Income"]], ["is_group", "=", 0]], limit: 50 });
-          accounts_income.value = inc;
-          if (inc.length && !form.income_account) form.income_account = inc[0].name;
-        } catch (e) { console.warn("Income accounts failed:", e.message); }
+          const accs = await apiGET("zoho_books_clone.api.docs.get_accounts", { company: form.company });
+          accounts_ar.value = accs.ar || [];
+          accounts_income.value = accs.income || [];
+          if (accounts_ar.value.length && !form.debit_to) form.debit_to = accounts_ar.value[0].name;
+          if (accounts_income.value.length && !form.income_account) form.income_account = accounts_income.value[0].name;
+        } catch (e) {
+          console.warn("Account fetching failed:", e.message);
+        }
         // Load customers
         try {
           customers.value = await apiList("Customer", { fields: ["name"], limit: 50, order: "name asc" });
+          allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" });
         } catch { }
       }
+
+      watch(() => props.show, (v) => {
+        if (v) {
+          const m = localStorage.getItem("convert_to_invoice");
+          if (m) {
+            try {
+              const data = JSON.parse(m);
+              form.source_name = data.source_name;
+              form.source_type = data.source_type;
+              form.customer = data.customer;
+              form.posting_date = data.order_date || data.date || today();
+              form.due_date = data.delivery_date || data.expiry || data.order_date || data.date || today();
+              if (data.items) {
+                form.items = data.items.map(i => ({ ...i }));
+              }
+              recalc();
+            } catch (e) { }
+            localStorage.removeItem("convert_to_invoice");
+          }
+        }
+      });
 
       onMounted(loadDefaults);
       watch(() => props.show, v => { if (v) loadDefaults(); });
@@ -348,7 +392,7 @@
 
       async function save(andSubmit) {
         if (!form.customer) { toast("Please select a Customer", "error"); return; }
-        if (!form.items[0].item_name && !form.items[0].rate) { toast("Please add at least one item", "error"); return; }
+        if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) { toast("Please select at least one item", "error"); return; }
         if (!form.debit_to) { toast("Please set the Accounts Receivable (Debit To) account", "error"); return; }
         if (!form.income_account) { toast("Please set the Income Account", "error"); return; }
 
@@ -392,6 +436,20 @@
           } else {
             toast("Invoice " + saved.name + " saved as Draft");
           }
+
+          if (form.source_name && form.source_type) {
+            const lkey = form.source_type === "Sales Order" ? "books_sales_orders" : "books_quotes";
+            try {
+              const stArr = JSON.parse(localStorage.getItem(lkey) || "[]");
+              const stIdx = stArr.findIndex(x => x.name === form.source_name);
+              if (stIdx >= 0) {
+                stArr[stIdx].status = "Invoiced";
+                if (form.source_type === "Sales Order") stArr[stIdx].billed_amount = stArr[stIdx].grand_total;
+                localStorage.setItem(lkey, JSON.stringify(stArr));
+              }
+            } catch { }
+          }
+
           emit("saved", saved.name);
           emit("close");
           // Navigation handled by parent via 'saved' event
@@ -404,9 +462,18 @@
         if (!form.due_date || form.due_date < form.posting_date)
           form.due_date = form.posting_date;
       }
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       return {
-        form, saving, customers, accounts_ar, accounts_income, taxTemplates, isSI,
-        recalc, addItem, removeItem, addTax, removeTax, onCustomer, applyTaxTemplate, save, fmt, flt, icon, toast, onPostingDateChange
+        form, saving, customers, allItems, accounts_ar, accounts_income, taxTemplates, isSI,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick, onCustomer, applyTaxTemplate, save, fmt, flt, icon, toast, onPostingDateChange
       };
     },
     template: `
@@ -487,7 +554,12 @@
           </thead>
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-              <td><input v-model="item.item_name" class="nim-cell" placeholder="Item name"/></td>
+              <td>
+                <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                  <option value="" disabled>Item name</option>
+                  <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                </select>
+              </td>
               <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
               <td style="text-align:center">
                 <input v-model.number="item.qty" type="number" min="0.01" step="0.01"
@@ -655,8 +727,8 @@
           bccVal.value = "";
         }
       }
-      function onToBlur()  { addTagFromVal(toVal.value,  toTags);  toVal.value  = ""; }
-      function onCcBlur()  { addTagFromVal(ccVal.value,  ccTags);  ccVal.value  = ""; }
+      function onToBlur() { addTagFromVal(toVal.value, toTags); toVal.value = ""; }
+      function onCcBlur() { addTagFromVal(ccVal.value, ccTags); ccVal.value = ""; }
       function onBccBlur() { addTagFromVal(bccVal.value, bccTags); bccVal.value = ""; }
 
       // Rich text commands
@@ -681,7 +753,7 @@
         const taxRows = taxes.map(t => `
           <tr>
             <td colspan="3"></td>
-            <td style="padding:5px 14px;font-size:12.5px;color:#555;text-align:right">${t.tax_type || ""} ${t.rate ? "("+t.rate+"%)" : ""}</td>
+            <td style="padding:5px 14px;font-size:12.5px;color:#555;text-align:right">${t.tax_type || ""} ${t.rate ? "(" + t.rate + "%)" : ""}</td>
             <td style="padding:5px 14px;font-size:12.5px;text-align:right">${amt(t.tax_amount)}</td>
           </tr>`).join("");
 
@@ -990,6 +1062,7 @@
     setup(props, { emit }) {
       const saving = ref(false);
       const suppliers = ref([]), accounts_ap = ref([]), accounts_exp = ref([]);
+      const allItems = ref([]);
 
       const form = reactive({
         naming_series: "PINV-.YYYY.-.#####",
@@ -1029,6 +1102,7 @@
           if (exp.length && !form.expense_account) form.expense_account = exp[0].name;
         } catch (e) { console.warn("Expense accounts failed:", e.message); }
         try { suppliers.value = await apiList("Supplier", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
       }
 
       onMounted(loadDefaults);
@@ -1074,7 +1148,16 @@
         finally { saving.value = false; }
       }
 
-      return { form, saving, suppliers, accounts_ap, accounts_exp, recalc, addItem, removeItem, onSupplier, save, fmt, flt, icon };
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
+      return { form, saving, suppliers, allItems, accounts_ap, accounts_exp, recalc, addItem, removeItem, onItemPick, onSupplier, save, fmt, flt, icon };
     },
     template: `
 <teleport to="body">
@@ -1142,7 +1225,12 @@
           </tr></thead>
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-              <td><input v-model="item.item_name" class="nim-cell" placeholder="Item name"/></td>
+              <td>
+                <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                  <option value="" disabled>Item name</option>
+                  <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                </select>
+              </td>
               <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="nim-cell nim-num" @input="recalc"/></td>
               <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="nim-cell nim-num" @input="recalc"/></td>
               <td class="nim-amount" style="text-align:right;font-variant-numeric:tabular-nums">{{flt(item.amount).toLocaleString("en-IN",{minimumFractionDigits:2})}}</td>
@@ -1497,8 +1585,10 @@
       }
       onMounted(load);
       const router = useRouter();
-      return { kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc, flt,
-               onInvoiceSaved: (name) => { router.push({ name: "invoice-detail", params: { name } }); } };
+      return {
+        kpis, dash, aging, loading, kpiDefs, agingRows, agingMax, showSI, showPI, showPay, load, fmt, fmtDate, fmtShort, isOverdue, statusBadge, icon, openDoc, flt,
+        onInvoiceSaved: (name) => { router.push({ name: "invoice-detail", params: { name } }); }
+      };
     },
     template: `
 <div class="b-page">
@@ -1578,24 +1668,26 @@
       const sortKey = ref("posting_date"), sortDir = ref(-1);
 
       const filters = [
-        { k: "all",     lbl: "All Invoices" },
-        { k: "Draft",   lbl: "Draft" },
-        { k: "Unpaid",  lbl: "Unpaid" },
+        { k: "all", lbl: "All Invoices" },
+        { k: "Draft", lbl: "Draft" },
+        { k: "Unpaid", lbl: "Unpaid" },
         { k: "Overdue", lbl: "Overdue" },
-        { k: "Paid",    lbl: "Paid" }
+        { k: "Paid", lbl: "Paid" }
       ];
 
+      const isDraftRow = i => i.status === "Draft" || i.docstatus === 0 || String(i.docstatus) === "0";
       const counts = computed(() => ({
-        Draft:   list.value.filter(i => i.status === "Draft").length,
-        Unpaid:  list.value.filter(i => !isOverdue(i) && ["Submitted","Unpaid","Partly Paid"].includes(i.status)).length,
+        Draft: list.value.filter(isDraftRow).length,
+        Unpaid: list.value.filter(i => !isOverdue(i) && ["Submitted", "Unpaid", "Partly Paid"].includes(i.status)).length,
         Overdue: list.value.filter(isOverdue).length,
-        Paid:    list.value.filter(i => i.status === "Paid").length,
+        Paid: list.value.filter(i => i.status === "Paid").length,
       }));
 
       const filtered = computed(() => {
         let r = list.value;
         if (active.value === "Overdue") r = r.filter(isOverdue);
-        else if (active.value === "Unpaid") r = r.filter(i => !isOverdue(i) && ["Submitted","Unpaid","Partly Paid"].includes(i.status));
+        else if (active.value === "Unpaid") r = r.filter(i => !isOverdue(i) && ["Submitted", "Unpaid", "Partly Paid"].includes(i.status));
+        else if (active.value === "Draft") r = r.filter(isDraftRow);
         else if (active.value !== "all") r = r.filter(i => i.status === active.value);
         if (search.value) {
           const q = search.value.toLowerCase();
@@ -1608,14 +1700,17 @@
       });
 
       function pillCountCls(k) {
-        return { Draft:"zb-pc-muted", Unpaid:"zb-pc-amber", Overdue:"zb-pc-red", Paid:"zb-pc-green" }[k] || "zb-pc-muted";
+        return { Draft: "zb-pc-muted", Unpaid: "zb-pc-amber", Overdue: "zb-pc-red", Paid: "zb-pc-green" }[k] || "zb-pc-muted";
       }
 
       async function loadList() {
         loading.value = true;
         try {
           list.value = await apiList("Sales Invoice", {
-            fields: ["name","customer","customer_name","invoice_number","posting_date","due_date","grand_total","outstanding_amount","status","currency","docstatus"],
+            fields: ["name", "customer", "customer_name", "invoice_number", "posting_date", "due_date", "grand_total", "outstanding_amount", "status", "currency", "docstatus"],
+            // Explicitly include draft (0) and submitted (1); exclude only cancelled (2).
+            // Without this, some Frappe builds silently omit docstatus=0 invoices.
+            filters: [["docstatus", "!=", 2]],
             order: "posting_date desc",
             limit: 100
           });
@@ -1640,7 +1735,7 @@
         const s = row.status || "Draft";
         if (s === "Paid") return "zb-chip-paid";
         if (s === "Draft") return "zb-chip-draft";
-        if (["Submitted","Unpaid","Partly Paid"].includes(s)) return "zb-chip-partpaid";
+        if (["Submitted", "Unpaid", "Partly Paid"].includes(s)) return "zb-chip-partpaid";
         return "zb-chip-draft";
       }
       function statusLabel(row) {
@@ -1663,12 +1758,64 @@
       const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every(i => selected.value.has(i.name)));
 
       function onInvoiceSaved(name) { showNew.value = false; loadList(); router.push({ name: "invoice-detail", params: { name } }); }
-      onMounted(loadList);
+      function onDocClick() { showDotMenu.value = false; }
+      onMounted(() => {
+        loadList();
+        if (localStorage.getItem("convert_to_invoice")) {
+          showNew.value = true;
+        }
+        document.addEventListener("click", onDocClick);
+      });
+      onUnmounted(() => { document.removeEventListener("click", onDocClick); });
+      // ── Three-dot menu ──────────────────────────────────────────
+      const showDotMenu = ref(false);
+      function toggleDotMenu(e) { e.stopPropagation(); showDotMenu.value = !showDotMenu.value; }
+      function closeDotMenu() { showDotMenu.value = false; }
+
+      function exportCSV() {
+        showDotMenu.value = false;
+        const rows = filtered.value;
+        if (!rows.length) { toast("No invoices to export", "error"); return; }
+        const cols = ["name", "posting_date", "customer_name", "status", "due_date", "grand_total", "outstanding_amount", "currency"];
+        const headers = ["Invoice #", "Date", "Customer", "Status", "Due Date", "Amount", "Balance Due", "Currency"];
+        const escape = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+        const csv = [headers.join(","), ...rows.map(r => cols.map(c => escape(r[c])).join(","))].join("\n");
+        const blob = new Blob([csv], { type: "text/csv" });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `invoices-${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      async function deleteSelected() {
+        showDotMenu.value = false;
+        const names = [...selected.value];
+        if (!names.length) { toast("No invoices selected", "error"); return; }
+        const draftNames = names.filter(n => {
+          const row = list.value.find(i => i.name === n);
+          return row && isDraftRow(row);
+        });
+        if (!draftNames.length) { toast("Only draft invoices can be deleted", "error"); return; }
+        if (!confirm(`Delete ${draftNames.length} draft invoice(s)? This cannot be undone.`)) return;
+        let ok = 0, fail = 0;
+        for (const name of draftNames) {
+          try {
+            await apiPOST("frappe.client.delete", { doctype: "Sales Invoice", name });
+            ok++;
+          } catch { fail++; }
+        }
+        selected.value = new Set();
+        await loadList();
+        toast(ok ? `Deleted ${ok} invoice(s)${fail ? `, ${fail} failed` : ""}` : "Delete failed", fail ? "error" : "success");
+      }
+
       return {
         list, loading, active, showNew, search, filters, counts, filtered,
-        selected, allSelected, sortKey,
+        selected, allSelected, sortKey, showDotMenu,
         loadList, goToInvoice, statusChipCls, statusLabel, pillCountCls,
         toggleRow, toggleAll, sortBy, sortArrow, isOverdue, onInvoiceSaved,
+        toggleDotMenu, closeDotMenu, exportCSV, deleteSelected,
         fmt, fmtDate, flt, icon
       };
     },
@@ -1696,9 +1843,22 @@
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
       </button>
       <!-- Three-dot menu -->
-      <button style="background:none;border:none;cursor:pointer;color:#6b7280;padding:5px 8px;border-radius:5px;display:inline-flex;align-items:center">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
-      </button>
+      <div style="position:relative">
+        <button @click="toggleDotMenu" title="More options" style="background:none;border:1px solid #e8ecf0;cursor:pointer;color:#6b7280;padding:5px 8px;border-radius:5px;display:inline-flex;align-items:center">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg>
+        </button>
+        <div v-if="showDotMenu" style="position:absolute;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #e8ecf0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);min-width:180px;z-index:999;overflow:hidden">
+          <button @click="exportCSV" style="width:100%;text-align:left;padding:10px 14px;background:none;border:none;cursor:pointer;font-size:13px;color:#1a1d23;display:flex;align-items:center;gap:8px;font-family:inherit" onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='none'">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Export CSV
+          </button>
+          <div style="height:1px;background:#f0f0f0;margin:0 8px"></div>
+          <button @click="deleteSelected" style="width:100%;text-align:left;padding:10px 14px;background:none;border:none;cursor:pointer;font-size:13px;color:#dc2626;display:flex;align-items:center;gap:8px;font-family:inherit" onmouseover="this.style.background='#fff5f5'" onmouseout="this.style.background='none'">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
+            Delete Selected
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1823,39 +1983,55 @@
   // ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
   const InvoiceDetail = defineComponent({
     name: "InvoiceDetail",
-    components: { SendEmailModal, PaymentModal },
+    components: { SendEmailModal, PaymentModal, InvoiceModal },
     setup() {
       const route = useRoute();
       const router = useRouter();
       const invName = computed(() => route.params.name);
       const showSendEmail = ref(false);
       const showSendMenu = ref(false);
+      const showNew = ref(false);
+
+      function onInvoiceSaved(savedName) {
+        showNew.value = false;
+        router.push({ name: "invoice-detail", params: { name: savedName } });
+      }
 
       // ── List (sidebar) ──────────────────────────────────────────
       const list = ref([]), listLoading = ref(true), active = ref("all"), search = ref("");
       const filters = [
         { k: "all", lbl: "All Invoices" },
         { k: "Draft", lbl: "Draft" },
-        { k: "Submitted", lbl: "Unpaid" },
+        { k: "Unpaid", lbl: "Unpaid" },
         { k: "Overdue", lbl: "Overdue" },
         { k: "Paid", lbl: "Paid" }
       ];
+      const isDraftRow = i => i.status === "Draft" || i.docstatus === 0 || String(i.docstatus) === "0";
       const counts = computed(() => ({
-        Draft: list.value.filter(i => i.status === "Draft").length,
-        Submitted: list.value.filter(i => ["Submitted", "Partly Paid"].includes(i.status)).length,
+        Draft: list.value.filter(isDraftRow).length,
+        Unpaid: list.value.filter(i => !isOverdue(i) && ["Submitted", "Unpaid", "Partly Paid"].includes(i.status)).length,
         Overdue: list.value.filter(isOverdue).length,
         Paid: list.value.filter(i => i.status === "Paid").length,
       }));
       const filtered = computed(() => {
         let r = list.value;
         if (active.value === "Overdue") r = r.filter(isOverdue);
+        else if (active.value === "Draft") r = r.filter(isDraftRow);
+        else if (active.value === "Unpaid") r = r.filter(i => !isOverdue(i) && ["Submitted", "Unpaid", "Partly Paid"].includes(i.status));
         else if (active.value !== "all") r = r.filter(i => i.status === active.value);
         if (search.value) r = r.filter(i => (i.name + (i.customer || "")).toLowerCase().includes(search.value.toLowerCase()));
         return r;
       });
       async function loadList() {
         listLoading.value = true;
-        try { list.value = await apiList("Sales Invoice", { fields: ["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "outstanding_amount", "status"], order: "posting_date desc" }); }
+        try {
+          list.value = await apiList("Sales Invoice", {
+            fields: ["name", "customer", "customer_name", "posting_date", "due_date", "grand_total", "outstanding_amount", "status", "docstatus"],
+            filters: [["docstatus", "!=", 2]],
+            order: "posting_date desc",
+            limit: 100
+          });
+        }
         catch (e) { toast("Failed to load invoices", "error"); }
         finally { listLoading.value = false; }
       }
@@ -1868,6 +2044,7 @@
       const inv = ref(null), detailLoading = ref(false), detailError = ref(null);
       const editing = ref(false), saving = ref(false), submitting = ref(false);
       const customers = ref([]), accounts_ar = ref([]), accounts_income = ref([]);
+      const allItems = ref([]);
       const form = reactive({
         customer: "", posting_date: "", due_date: "", debit_to: "", income_account: "",
         currency: "INR", notes: "", company: "",
@@ -1888,21 +2065,34 @@
 
       async function loadFormDefaults() {
         try { customers.value = await apiList("Customer", { fields: ["name"], limit: 100, order: "name asc" }); } catch { }
-        try { const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 }); accounts_ar.value = ar; } catch { }
-        try { const inc = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Income Account", "Income"]], ["is_group", "=", 0]], limit: 50 }); accounts_income.value = inc; } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
+        try {
+          const accs = await apiGET("zoho_books_clone.api.docs.get_accounts", { company: form.company });
+          accounts_ar.value = accs.ar || [];
+          accounts_income.value = accs.income || [];
+        } catch { }
       }
-      function startEdit() {
+      async function startEdit() {
         if (!inv.value) return;
+        // Capture the invoice's own account values before loading defaults,
+        // so we can restore them if loadFormDefaults overwrites with an empty list.
+        const savedDebitTo = inv.value.debit_to || "";
+        const savedIncomeAcct = inv.value.income_account || "";
         Object.assign(form, {
           customer: inv.value.customer || "", posting_date: inv.value.posting_date || "",
-          due_date: inv.value.due_date || "", debit_to: inv.value.debit_to || "",
-          income_account: inv.value.income_account || "", currency: inv.value.currency || "INR",
+          due_date: inv.value.due_date || "", debit_to: savedDebitTo,
+          income_account: savedIncomeAcct, currency: inv.value.currency || "INR",
           notes: inv.value.notes || "", company: inv.value.company || "",
           items: (inv.value.items || []).map(i => ({ ...i })),
           taxes: (inv.value.taxes || []).map(t => ({ ...t })),
         });
         if (!form.items.length) form.items = [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }];
-        loadFormDefaults();
+        // Await account/customer lists so the dropdowns are populated before the form renders.
+        await loadFormDefaults();
+        // Restore the invoice's original account selections in case loadFormDefaults
+        // auto-selected defaults (it only auto-selects when the form value is empty).
+        if (savedDebitTo) form.debit_to = savedDebitTo;
+        if (savedIncomeAcct) form.income_account = savedIncomeAcct;
         editing.value = true;
       }
       function recalc() {
@@ -1937,7 +2127,7 @@
               rate: flt(t.rate), tax_amount: flt(t.tax_amount),
             })),
           };
-          const saved = await apiGET("zoho_books_clone.api.docs.save_doc", { doc: JSON.stringify(doc) });
+          const saved = await apiPOST("zoho_books_clone.api.docs.save_doc", { doc: JSON.stringify(doc) });
           inv.value = saved;
           const idx = list.value.findIndex(i => i.name === saved.name);
           if (idx > -1) Object.assign(list.value[idx], { grand_total: saved.grand_total, outstanding_amount: saved.outstanding_amount, status: saved.status, posting_date: saved.posting_date, due_date: saved.due_date });
@@ -1957,7 +2147,30 @@
         } catch (e) { toast("Submit failed: " + e.message, "error"); }
         finally { submitting.value = false; }
       }
-      function printPdf() { window.print(); }
+      function printPdf() {
+        const paper = document.getElementById("zb-inv-paper");
+        if (!paper) { window.print(); return; }
+        const cssHref = Array.from(document.styleSheets)
+          .map(s => { try { return s.href; } catch { return null; } })
+          .filter(h => h && h.includes("books.css"))[0] || "";
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+          <title>Invoice</title>
+          ${cssHref ? `<link rel="stylesheet" href="${cssHref}">` : ""}
+          <style>
+            @page { margin: 12mm; }
+            body { margin:0; background:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+            .zb-pdf-paper { box-shadow:none!important; max-width:100%!important; padding:20px!important; }
+            .zb-sent-ribbon,.zb-draft-ribbon { display:none!important; }
+          </style>
+        </head><body>
+          <div class="zb-pdf-paper">${paper.innerHTML}</div>
+          <script>window.onload=function(){window.print();window.close();}<\/script>
+        </body></html>`;
+        const w = window.open("", "_blank", "width=800,height=900");
+        if (!w) { toast("Allow pop-ups to print invoice", "error"); return; }
+        w.document.write(html);
+        w.document.close();
+      }
       function toAmountWords(n) {
         const a = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
         const b = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
@@ -1984,13 +2197,16 @@
         amount: 0, bank_charges: 0, tax_deducted: "no",
         payment_date: new Date().toISOString().slice(0, 10),
         received_on: "", mode: "Cash", deposit_to: "",
-        reference: "", notes: "", ref_no: "", send_thankyou: false
+        reference: "", notes: "", ref_no: "",
+        invoiceName: "",   // dedicated field — always the authoritative invoice name
+        send_thankyou: false
       });
 
       watch(() => inv.value, (v) => {
         if (v) {
           recPay.amount = flt(v.outstanding_amount) || flt(v.grand_total);
           recPay.ref_no = v.name;
+          recPay.invoiceName = v.name;   // keep invoiceName in sync whenever inv changes
         }
       });
 
@@ -2014,6 +2230,7 @@
         if (inv.value) {
           recPay.amount = flt(inv.value.outstanding_amount) || flt(inv.value.grand_total);
           recPay.ref_no = inv.value.name;
+          recPay.invoiceName = inv.value.name;   // authoritative invoice name for the POST
           recPay.payment_date = new Date().toISOString().slice(0, 10);
         }
         showRecPay.value = true;
@@ -2024,10 +2241,8 @@
         if (!recPay.deposit_to) { toast("Please select a Deposit To account", "error"); return; }
         recPaySaving.value = true;
         try {
-          // Force fresh CSRF token — prevents stale token 400 errors
-          if (window.frappe) window.frappe.csrf_token = null;
           const result = await apiPOST("zoho_books_clone.api.books_data.record_payment", {
-            invoice_name: inv.value?.name,
+            invoice_name: recPay.invoiceName || invName.value || inv.value?.name || "",
             amount_received: recPay.amount,
             deposit_to: recPay.deposit_to,
             payment_mode: recPay.mode || "Cash",
@@ -2049,10 +2264,19 @@
         finally { recPaySaving.value = false; }
       }
 
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       return {
         list, listLoading, active, search, filters, counts, filtered, pillBadge, goInvoice, invName,
-        inv, detailLoading, detailError, editing, saving, submitting, showSendEmail, showSendMenu, showCustMenu, showRecPay, recPay, recPaySaving, recPayAccounts, saveRecPay, openRecPay,
-        form, customers, accounts_ar, accounts_income,
+        inv, detailLoading, detailError, editing, saving, submitting, showSendEmail, showSendMenu, showCustMenu, showRecPay, recPay, recPaySaving, recPayAccounts, saveRecPay, openRecPay, showNew, onInvoiceSaved,
+        form, customers, allItems, onItemPick, accounts_ar, accounts_income,
         statusBadgeCls, isDraft, paidAmt, paidPct, netTotal, totalTax, grandTotal,
         startEdit, saveEdit, submitInvoice, printPdf,
         addItem, removeItem, addTax, removeTax, recalc, toAmountWords,
@@ -2060,7 +2284,7 @@
       };
     },
     template: `
-<div class="zb-master-detail no-sidebar-pad">
+<div class="zb-master-detail no-sidebar-pad" :class="{'zb-mob-hide-list': invName}">
 
   <!-- ══ LEFT: INVOICE SIDEBAR LIST ══ -->
   <div class="zb-list-pane no-print">
@@ -2074,7 +2298,7 @@
           <button class="zb-icon-btn" @click="$router.push('/invoices')" title="Back to list">
             <span v-html="icon('arrow-left',13)"></span>
           </button>
-          <button class="zb-icon-btn" @click="()=>{}" title="New Invoice">
+          <button class="zb-icon-btn" @click="showNew=true" title="New Invoice">
             <span v-html="icon('plus',13)"></span>
           </button>
         </div>
@@ -2129,6 +2353,13 @@
 
   <!-- ══ RIGHT: DETAIL AREA ══ -->
   <div class="zb-detail-area">
+    <!-- Mobile back button -->
+    <div class="zb-mob-back no-print" style="display:none;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e8ecf0;background:#fff;position:sticky;top:0;z-index:20">
+      <button @click="$router.push('/invoices')" style="display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;color:#2563eb;padding:4px 0;font-family:inherit">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        All Invoices
+      </button>
+    </div>
 
     <template v-if="showRecPay">
       <div style="display:flex;flex-direction:column;min-height:100%;flex:1;background:#fff;overflow:hidden">
@@ -2406,7 +2637,7 @@
           </div>
         </div>
 
-        <div class="zb-pdf-paper">
+        <div class="zb-pdf-paper" id="zb-inv-paper">
           <div class="zb-sent-ribbon" v-if="!isDraft">Sent</div>
           <div class="zb-draft-ribbon" v-else>Draft</div>
           <div class="zb-pdf-head">
@@ -2498,9 +2729,9 @@
             <div class="zb-form-field"><label class="zb-form-label">Due Date</label>
               <input type="date" v-model="form.due_date" class="zb-form-input"/></div>
             <div class="zb-form-field"><label class="zb-form-label">AR Account</label>
-              <select v-model="form.debit_to" class="zb-form-input"><option value="">— Select —</option><option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
+              <select v-model="form.debit_to" class="zb-form-input"><option value="">— Select —</option><option v-if="form.debit_to && !accounts_ar.some(a=>a.name===form.debit_to)" :value="form.debit_to">{{form.debit_to}}</option><option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
             <div class="zb-form-field"><label class="zb-form-label">Income Account</label>
-              <select v-model="form.income_account" class="zb-form-input"><option value="">— Select —</option><option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
+              <select v-model="form.income_account" class="zb-form-input"><option value="">— Select —</option><option v-if="form.income_account && !accounts_income.some(a=>a.name===form.income_account)" :value="form.income_account">{{form.income_account}}</option><option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
             <div class="zb-form-field"><label class="zb-form-label">Currency</label>
               <input v-model="form.currency" class="zb-form-input"/></div>
           </div>
@@ -2510,7 +2741,12 @@
             <tbody>
               <tr v-for="(item,i) in form.items" :key="i">
                 <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
-                <td><input v-model="item.item_name" class="zb-cell-input" placeholder="Item name" @input="recalc"/></td>
+                <td>
+                  <select v-model="item.item_name" class="zb-cell-input" @change="onItemPick(item)" style="padding-left:8px;background:transparent;min-height:32px">
+                    <option value="" disabled>Item name</option>
+                    <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                  </select>
+                </td>
                 <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
                 <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
                 <td><input v-model.number="item.rate" type="number" min="0" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
@@ -2594,6 +2830,7 @@
   </div><!-- /detail area -->
   
   <SendEmailModal :show="showSendEmail" :invoice-name="invName" :inv="inv" @close="showSendEmail=false" @sent="showSendEmail=false"/>
+  <InvoiceModal :show="showNew" @close="showNew=false" @saved="onInvoiceSaved"/>
 
 </div>
 `});
@@ -2605,45 +2842,45 @@
     name: "Customers",
     setup() {
       const router = useRouter();
-      const list        = ref([]);
-      const loading     = ref(true);
-      const search      = ref("");
-      const activeFilter= ref("all");
-      const showDrawer  = ref(false);
-      const drawerMode  = ref("add"); // "add" | "edit"
+      const list = ref([]);
+      const loading = ref(true);
+      const search = ref("");
+      const activeFilter = ref("all");
+      const showDrawer = ref(false);
+      const drawerMode = ref("add"); // "add" | "edit"
       const drawerLoading = ref(false);
-      const saving      = ref(false);
-      const showDelete  = ref(false);
-      const deleteTarget= ref(null);
-      const deleting    = ref(false);
+      const saving = ref(false);
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
 
       const form = reactive({
         name: "",
         customer_name: "", customer_type: "Company",
         tax_id: "", default_currency: "INR", credit_limit: 0,
-        email_id: "", mobile_no: "", phone: "", website: "",
+        email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
         address_line1: "", address_line2: "",
         city: "", state: "", pincode: "", country: "India",
         payment_terms: "", disabled: 0,
       });
 
       const counts = computed(() => ({
-        all:      list.value.length,
-        active:   list.value.filter(c => !c.disabled).length,
-        disabled: list.value.filter(c =>  c.disabled).length,
+        all: list.value.length,
+        active: list.value.filter(c => !c.disabled).length,
+        disabled: list.value.filter(c => c.disabled).length,
       }));
 
       const filtered = computed(() => {
         let r = list.value;
-        if (activeFilter.value === "active")   r = r.filter(c => !c.disabled);
-        if (activeFilter.value === "disabled") r = r.filter(c =>  c.disabled);
+        if (activeFilter.value === "active") r = r.filter(c => !c.disabled);
+        if (activeFilter.value === "disabled") r = r.filter(c => c.disabled);
         const q = search.value.toLowerCase().trim();
         if (q) r = r.filter(c =>
-          (c.customer_name||"").toLowerCase().includes(q) ||
-          (c.name||"").toLowerCase().includes(q) ||
-          (c.email_id||"").toLowerCase().includes(q) ||
-          (c.mobile_no||"").toLowerCase().includes(q) ||
-          (c.tax_id||"").toLowerCase().includes(q)
+          (c.customer_name || "").toLowerCase().includes(q) ||
+          (c.name || "").toLowerCase().includes(q) ||
+          (c.email_id || "").toLowerCase().includes(q) ||
+          (c.mobile_no || "").toLowerCase().includes(q) ||
+          (c.tax_id || "").toLowerCase().includes(q)
         );
         return r;
       });
@@ -2652,24 +2889,24 @@
         loading.value = true;
         try {
           const rows = await apiList("Customer", {
-            fields: ["name","customer_name","customer_type","email_id","mobile_no",
-                     "tax_id","city","state","disabled","default_currency","credit_limit"],
+            fields: ["name", "customer_name", "customer_type", "email_id", "mobile_no",
+              "tax_id", "city", "state", "disabled", "default_currency", "credit_limit"],
             order: "customer_name asc", limit: 300,
           });
           list.value = rows || [];
-        } catch(e) {
+        } catch (e) {
           toast("Failed to load customers: " + (e.message || e), "error");
         } finally { loading.value = false; }
       }
 
       function resetForm() {
         Object.assign(form, {
-          name:"", customer_name:"", customer_type:"Company",
-          tax_id:"", default_currency:"INR", credit_limit:0,
-          email_id:"", mobile_no:"", phone:"", website:"",
-          address_line1:"", address_line2:"",
-          city:"", state:"", pincode:"", country:"India",
-          payment_terms:"", disabled:0,
+          name: "", customer_name: "", customer_type: "Company",
+          tax_id: "", default_currency: "INR", credit_limit: 0,
+          email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
+          address_line1: "", address_line2: "",
+          city: "", state: "", pincode: "", country: "India",
+          payment_terms: "", disabled: 0,
         });
       }
 
@@ -2694,7 +2931,8 @@
             default_currency: doc.default_currency || "INR",
             credit_limit: doc.credit_limit || 0,
             email_id: doc.email_id || "",
-            mobile_no: doc.mobile_no || "",
+            mobile_code: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.split(" ")[0] : "+91",
+            mobile_no: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.substring(doc.mobile_no.indexOf(" ") + 1) : (doc.mobile_no || ""),
             phone: doc.phone || "",
             website: doc.website || "",
             address_line1: doc.address_line1 || "",
@@ -2706,8 +2944,8 @@
             payment_terms: doc.payment_terms || "",
             disabled: doc.disabled || 0,
           });
-        } catch(e) {
-          toast("Could not load customer: " + (e.message||e), "error");
+        } catch (e) {
+          toast("Could not load customer: " + (e.message || e), "error");
           showDrawer.value = false;
         } finally { drawerLoading.value = false; }
       }
@@ -2726,7 +2964,7 @@
             default_currency: form.default_currency,
             credit_limit: parseFloat(form.credit_limit) || 0,
             email_id: form.email_id.trim(),
-            mobile_no: form.mobile_no.trim(),
+            mobile_no: form.mobile_no.trim() ? (form.mobile_code + " " + form.mobile_no.trim()) : "",
             phone: form.phone.trim(),
             website: form.website.trim(),
             address_line1: form.address_line1.trim(),
@@ -2738,15 +2976,16 @@
             payment_terms: form.payment_terms,
             disabled: form.disabled ? 1 : 0,
           };
+          let doc_to_save = doc;
           if (drawerMode.value === "edit") {
             const fresh = await apiGET("frappe.client.get", { doctype: "Customer", name: form.name });
-            doc.modified = fresh.modified;
+            doc_to_save = { ...fresh, ...doc };
           }
-          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc) });
+          await apiSave(doc_to_save);
           toast(drawerMode.value === "edit" ? "Customer updated!" : "Customer created!");
           showDrawer.value = false;
           await load();
-        } catch(e) {
+        } catch (e) {
           toast(e.message || "Could not save customer", "error");
         } finally { saving.value = false; }
       }
@@ -2760,12 +2999,12 @@
         if (!deleteTarget.value) return;
         deleting.value = true;
         try {
-          await apiPOST("frappe.client.delete", { doctype: "Customer", name: deleteTarget.value.name });
+          await apiDelete("Customer", deleteTarget.value.name);
           toast("Customer deleted");
           showDelete.value = false;
           deleteTarget.value = null;
           await load();
-        } catch(e) {
+        } catch (e) {
           toast(e.message || "Could not delete customer", "error");
         } finally { deleting.value = false; }
       }
@@ -2948,7 +3187,7 @@
                 <div class="nim-field">
                   <label class="nim-label">Payment Terms</label>
                   <select v-model="form.payment_terms" class="nim-select">
-                    <option value="">— None —</option>
+                    <option value="">Select</option>
                     <option>Net 30</option><option>Net 15</option><option>Net 7</option>
                     <option>Due on Receipt</option><option>End of Month</option>
                   </select>
@@ -2963,7 +3202,14 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Mobile</label>
-                  <input v-model="form.mobile_no" class="nim-input" placeholder="+91 98765 43210"/>
+                  <div style="display:flex;">
+                    <select v-model="form.mobile_code" style="width:75px; border-right:none; border-top-right-radius:0; border-bottom-right-radius:0; text-align:center; background:#f9fafb; padding:0 5px;" class="nim-input">
+                      <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
+                      <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
+                      <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
+                    </select>
+                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"/>
+                  </div>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Phone</label>
@@ -3072,46 +3318,46 @@
   const Vendors = defineComponent({
     name: "Vendors",
     setup() {
-      const list          = ref([]);
-      const loading       = ref(true);
-      const search        = ref("");
-      const activeFilter  = ref("all");
-      const showDrawer    = ref(false);
-      const drawerMode    = ref("add"); // "add" | "edit"
+      const list = ref([]);
+      const loading = ref(true);
+      const search = ref("");
+      const activeFilter = ref("all");
+      const showDrawer = ref(false);
+      const drawerMode = ref("add"); // "add" | "edit"
       const drawerLoading = ref(false);
-      const saving        = ref(false);
-      const showDelete    = ref(false);
-      const deleteTarget  = ref(null);
-      const deleting      = ref(false);
-      const accounts      = ref([]);
+      const saving = ref(false);
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
+      const accounts = ref([]);
 
       const form = reactive({
         name: "",
         supplier_name: "", supplier_type: "Company",
         tax_id: "", default_currency: "INR", payment_terms: "",
-        email_id: "", mobile_no: "", phone: "", website: "",
+        email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
         address_line1: "", address_line2: "",
         city: "", state: "", pincode: "", country: "India",
         default_payable_account: "", disabled: 0,
       });
 
       const counts = computed(() => ({
-        all:      list.value.length,
-        active:   list.value.filter(v => !v.disabled).length,
-        disabled: list.value.filter(v =>  v.disabled).length,
+        all: list.value.length,
+        active: list.value.filter(v => !v.disabled).length,
+        disabled: list.value.filter(v => v.disabled).length,
       }));
 
       const filtered = computed(() => {
         let r = list.value;
-        if (activeFilter.value === "active")   r = r.filter(v => !v.disabled);
-        if (activeFilter.value === "disabled") r = r.filter(v =>  v.disabled);
+        if (activeFilter.value === "active") r = r.filter(v => !v.disabled);
+        if (activeFilter.value === "disabled") r = r.filter(v => v.disabled);
         const q = search.value.toLowerCase().trim();
         if (q) r = r.filter(v =>
-          (v.supplier_name||"").toLowerCase().includes(q) ||
-          (v.name||"").toLowerCase().includes(q) ||
-          (v.email_id||"").toLowerCase().includes(q) ||
-          (v.mobile_no||"").toLowerCase().includes(q) ||
-          (v.tax_id||"").toLowerCase().includes(q)
+          (v.supplier_name || "").toLowerCase().includes(q) ||
+          (v.name || "").toLowerCase().includes(q) ||
+          (v.email_id || "").toLowerCase().includes(q) ||
+          (v.mobile_no || "").toLowerCase().includes(q) ||
+          (v.tax_id || "").toLowerCase().includes(q)
         );
         return r;
       });
@@ -3120,12 +3366,12 @@
         loading.value = true;
         try {
           const rows = await apiList("Supplier", {
-            fields: ["name","supplier_name","supplier_type","email_id","mobile_no",
-                     "tax_id","city","state","disabled","default_currency"],
+            fields: ["name", "supplier_name", "supplier_type", "email_id", "mobile_no",
+              "tax_id", "city", "state", "disabled", "default_currency"],
             order: "supplier_name asc", limit: 300,
           });
           list.value = rows || [];
-        } catch(e) {
+        } catch (e) {
           toast("Failed to load vendors: " + (e.message || e), "error");
         } finally { loading.value = false; }
       }
@@ -3134,7 +3380,7 @@
         try {
           const rows = await apiList("Account", {
             fields: ["name"],
-            filters: [["account_type","=","Payable"],["is_group","=",0]],
+            filters: [["account_type", "=", "Payable"], ["is_group", "=", 0]],
             limit: 50,
           });
           accounts.value = rows || [];
@@ -3143,12 +3389,12 @@
 
       function resetForm() {
         Object.assign(form, {
-          name:"", supplier_name:"", supplier_type:"Company",
-          tax_id:"", default_currency:"INR", payment_terms:"",
-          email_id:"", mobile_no:"", phone:"", website:"",
-          address_line1:"", address_line2:"",
-          city:"", state:"", pincode:"", country:"India",
-          default_payable_account:"", disabled:0,
+          name: "", supplier_name: "", supplier_type: "Company",
+          tax_id: "", default_currency: "INR", payment_terms: "",
+          email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
+          address_line1: "", address_line2: "",
+          city: "", state: "", pincode: "", country: "India",
+          default_payable_account: "", disabled: 0,
         });
       }
 
@@ -3173,7 +3419,8 @@
             default_currency: doc.default_currency || "INR",
             payment_terms: doc.payment_terms || "",
             email_id: doc.email_id || "",
-            mobile_no: doc.mobile_no || "",
+            mobile_code: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.split(" ")[0] : "+91",
+            mobile_no: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.substring(doc.mobile_no.indexOf(" ") + 1) : (doc.mobile_no || ""),
             phone: doc.phone || "",
             website: doc.website || "",
             address_line1: doc.address_line1 || "",
@@ -3185,8 +3432,8 @@
             default_payable_account: doc.default_payable_account || "",
             disabled: doc.disabled || 0,
           });
-        } catch(e) {
-          toast("Could not load vendor: " + (e.message||e), "error");
+        } catch (e) {
+          toast("Could not load vendor: " + (e.message || e), "error");
           showDrawer.value = false;
         } finally { drawerLoading.value = false; }
       }
@@ -3205,7 +3452,7 @@
             default_currency: form.default_currency,
             payment_terms: form.payment_terms,
             email_id: form.email_id.trim(),
-            mobile_no: form.mobile_no.trim(),
+            mobile_no: form.mobile_no.trim() ? (form.mobile_code + " " + form.mobile_no.trim()) : "",
             phone: form.phone.trim(),
             website: form.website.trim(),
             address_line1: form.address_line1.trim(),
@@ -3217,15 +3464,16 @@
             default_payable_account: form.default_payable_account,
             disabled: form.disabled ? 1 : 0,
           };
+          let doc_to_save = doc;
           if (drawerMode.value === "edit") {
             const fresh = await apiGET("frappe.client.get", { doctype: "Supplier", name: form.name });
-            doc.modified = fresh.modified;
+            doc_to_save = { ...fresh, ...doc };
           }
-          await apiPOST("frappe.client.save", { doc: JSON.stringify(doc) });
+          await apiSave(doc_to_save);
           toast(drawerMode.value === "edit" ? "Vendor updated!" : "Vendor created!");
           showDrawer.value = false;
           await load();
-        } catch(e) {
+        } catch (e) {
           toast(e.message || "Could not save vendor", "error");
         } finally { saving.value = false; }
       }
@@ -3239,12 +3487,12 @@
         if (!deleteTarget.value) return;
         deleting.value = true;
         try {
-          await apiPOST("frappe.client.delete", { doctype: "Supplier", name: deleteTarget.value.name });
+          await apiDelete("Supplier", deleteTarget.value.name);
           toast("Vendor deleted");
           showDelete.value = false;
           deleteTarget.value = null;
           await load();
-        } catch(e) {
+        } catch (e) {
           toast(e.message || "Could not delete vendor", "error");
         } finally { deleting.value = false; }
       }
@@ -3427,7 +3675,7 @@
                 <div class="nim-field">
                   <label class="nim-label">Payment Terms</label>
                   <select v-model="form.payment_terms" class="nim-select">
-                    <option value="">— None —</option>
+                    <option value="">Select</option>
                     <option>Net 30</option><option>Net 15</option><option>Net 7</option>
                     <option>Due on Receipt</option><option>End of Month</option>
                   </select>
@@ -3442,7 +3690,14 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Mobile</label>
-                  <input v-model="form.mobile_no" class="nim-input" placeholder="+91 98765 43210"/>
+                  <div style="display:flex;">
+                    <select v-model="form.mobile_code" style="width:75px; border-right:none; border-top-right-radius:0; border-bottom-right-radius:0; text-align:center; background:#f9fafb; padding:0 5px;" class="nim-input">
+                      <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
+                      <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
+                      <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
+                    </select>
+                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"/>
+                  </div>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Phone</label>
@@ -3492,7 +3747,7 @@
                 <div class="nim-field">
                   <label class="nim-label">Default Payable Account</label>
                   <select v-model="form.default_payable_account" class="nim-select">
-                    <option value="">— None —</option>
+                    <option value="">Select</option>
                     <option v-for="a in accounts" :key="a.name" :value="a.name">{{a.name}}</option>
                   </select>
                 </div>
@@ -3563,78 +3818,80 @@
   const Quotes = defineComponent({
     name: "Quotes",
     setup() {
-      const router    = useRouter();
-      const list      = ref([]);
+      const router = useRouter();
+      const list = ref([]);
       const customers = ref([]);
-      const allItems  = ref([]);
-      const loading   = ref(true);
-      const search    = ref("");
+      const allItems = ref([]);
+      const loading = ref(true);
+      const search = ref("");
       const activeFilter = ref("all");
 
       // Summary
       const summary = computed(() => ({
-        total    : list.value.length,
-        sent     : list.value.filter(q => q.status === "Sent").length,
-        accepted : list.value.filter(q => q.status === "Accepted").length,
-        value    : list.value.reduce((s, q) => s + flt(q.grand_total), 0),
+        total: list.value.length,
+        sent: list.value.filter(q => q.status === "Sent").length,
+        accepted: list.value.filter(q => q.status === "Accepted").length,
+        value: list.value.reduce((s, q) => s + flt(q.grand_total), 0),
       }));
 
       function isExpired(q) {
         return q.status !== "Converted" && q.status !== "Accepted" &&
-               q.expiry && new Date(q.expiry) < new Date();
+          q.expiry && new Date(q.expiry) < new Date();
       }
       function displayStatus(q) {
         if (isExpired(q)) return { label: "Expired", cls: "b-badge-red" };
-        return { Draft: { label:"Draft", cls:"b-badge-muted" }, Sent: { label:"Sent", cls:"b-badge-blue" },
-                 Accepted: { label:"Accepted", cls:"b-badge-green" }, Declined: { label:"Declined", cls:"b-badge-red" },
-                 Converted: { label:"Converted", cls:"b-badge-green" }, Expired: { label:"Expired", cls:"b-badge-red" } }
-               [q.status] || { label: q.status, cls: "b-badge-muted" };
+        return {
+          Draft: { label: "Draft", cls: "b-badge-muted" }, Sent: { label: "Sent", cls: "b-badge-blue" },
+          Accepted: { label: "Accepted", cls: "b-badge-green" }, Declined: { label: "Declined", cls: "b-badge-red" },
+          Converted: { label: "Converted", cls: "b-badge-green" }, Expired: { label: "Expired", cls: "b-badge-red" }
+        }
+        [q.status] || { label: q.status, cls: "b-badge-muted" };
       }
 
       const counts = computed(() => ({
-        Draft    : list.value.filter(q => q.status==="Draft" && !isExpired(q)).length,
-        Sent     : list.value.filter(q => q.status==="Sent"  && !isExpired(q)).length,
-        Accepted : list.value.filter(q => q.status==="Accepted").length,
-        Expired  : list.value.filter(q => isExpired(q)).length,
-        Converted: list.value.filter(q => q.status==="Converted").length,
+        Draft: list.value.filter(q => q.status === "Draft" && !isExpired(q)).length,
+        Sent: list.value.filter(q => q.status === "Sent" && !isExpired(q)).length,
+        Accepted: list.value.filter(q => q.status === "Accepted").length,
+        Expired: list.value.filter(q => isExpired(q)).length,
+        Converted: list.value.filter(q => q.status === "Converted").length,
       }));
 
       const filtered = computed(() => {
         let r = list.value;
         const f = activeFilter.value;
-        if (f === "Draft")     r = r.filter(q => q.status==="Draft"     && !isExpired(q));
-        if (f === "Sent")      r = r.filter(q => q.status==="Sent"      && !isExpired(q));
-        if (f === "Accepted")  r = r.filter(q => q.status==="Accepted");
-        if (f === "Expired")   r = r.filter(q => isExpired(q));
-        if (f === "Converted") r = r.filter(q => q.status==="Converted");
+        if (f === "Draft") r = r.filter(q => q.status === "Draft" && !isExpired(q));
+        if (f === "Sent") r = r.filter(q => q.status === "Sent" && !isExpired(q));
+        if (f === "Accepted") r = r.filter(q => q.status === "Accepted");
+        if (f === "Expired") r = r.filter(q => isExpired(q));
+        if (f === "Converted") r = r.filter(q => q.status === "Converted");
         const q = search.value.toLowerCase().trim();
-        if (q) r = r.filter(x => (x.name+x.customer+(x.subject||"")).toLowerCase().includes(q));
+        if (q) r = r.filter(x => (x.name + x.customer + (x.subject || "")).toLowerCase().includes(q));
         return r;
       });
 
       // ── Drawer state ──
-      const showDrawer   = ref(false);
-      const drawerMode   = ref("add");
-      const saving       = ref(false);
-      const selCustomer  = ref("");
-      const custSearch   = ref("");
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const saving = ref(false);
+      const selCustomer = ref("");
+      const custSearch = ref("");
       const showCustDrop = ref(false);
       const custDropItems = computed(() => {
         const q = custSearch.value.toLowerCase();
         return customers.value.filter(c =>
-          (c.customer_name||c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
+          (c.customer_name || c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
         ).slice(0, 40);
       });
 
       const form = reactive({
         name: "", customer: "", date: "", expiry: "", subject: "",
         status: "Draft", terms: "", notes: "",
-        items: [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
         taxes: [],
       });
 
-      const netTotal   = computed(() => form.items.reduce((s,r) => s + flt(r.amount), 0));
-      const taxTotal   = computed(() => form.taxes.reduce((s,t) => s + flt(t.tax_amount), 0));
+      const netTotal = computed(() => form.items.reduce((s, r) => s + flt(r.amount), 0));
+      const taxTotal = computed(() => form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0));
       const grandTotal = computed(() => Math.round((netTotal.value + taxTotal.value) * 100) / 100);
 
       function recalc() {
@@ -3642,35 +3899,35 @@
         form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(netTotal.value * flt(t.rate) / 100 * 100) / 100 : 0; });
       }
 
-      function addItem() { form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 }); }
+      function addItem() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
       function removeItem(i) { if (form.items.length > 1) { form.items.splice(i, 1); recalc(); } }
-      function addTax()  { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
+      function addTax() { form.taxes.push({ tax_type: "CGST", description: "CGST", rate: 9, tax_amount: 0 }); recalc(); }
       function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
 
       // ── Convert modal ──
       const showConvert = ref(false);
       const convertTarget = ref(null);
       // ── Delete modal ──
-      const showDelete  = ref(false);
-      const deleteTarget= ref(null);
-      const deleting    = ref(false);
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
 
       // ── localStorage helpers ──
-      function storeList(q) { try { localStorage.setItem("books_quotes", JSON.stringify(q)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem("books_quotes") || "[]"); } catch { return []; } }
+      function storeList(q) { try { localStorage.setItem("books_quotes", JSON.stringify(q)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem("books_quotes") || "[]"); } catch { return []; } }
       function nextNum() {
-        const nums = readList().map(q => parseInt((q.name||"QT-0").replace(/\D/g,"")) || 0);
+        const nums = readList().map(q => parseInt((q.name || "QT-0").replace(/\D/g, "")) || 0);
         return "QT-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
-      function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
+      function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); }
 
       async function load() {
         loading.value = true;
         list.value = readList();
         loading.value = false;
-        try { customers.value = await apiList("Customer", { fields:["name","customer_name"], filters:[["disabled","=",0]], order:"customer_name asc", limit:300 }); } catch {}
-        try { allItems.value  = await apiList("Item",     { fields:["name","item_name","item_code","standard_rate","description"], limit:300 }); } catch {}
+        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300 }); } catch { }
       }
 
       function openAdd() {
@@ -3678,9 +3935,9 @@
         selCustomer.value = "";
         custSearch.value = "";
         Object.assign(form, {
-          name:"", customer:"", date:todayStr(), expiry:addDays(todayStr(),30),
-          subject:"", status:"Draft", terms:"", notes:"",
-          items:[{ item_name:"", description:"", qty:1, rate:0, amount:0 }], taxes:[],
+          name: "", customer: "", date: todayStr(), expiry: addDays(todayStr(), 30),
+          subject: "", status: "Draft", terms: "", notes: "",
+          items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }], taxes: [],
         });
         showDrawer.value = true;
       }
@@ -3690,38 +3947,41 @@
         if (!q) return;
         drawerMode.value = "edit";
         selCustomer.value = q.customer || "";
-        custSearch.value  = q.customer || "";
+        custSearch.value = q.customer || "";
         Object.assign(form, {
-          name: q.name, customer: q.customer||"", date: q.date||todayStr(),
-          expiry: q.expiry||"", subject: q.subject||"", status: q.status||"Draft",
-          terms: q.terms||"", notes: q.notes||"",
-          items: (q.items||[{ item_name:"", description:"", qty:1, rate:0, amount:0 }]).map(r=>({...r})),
-          taxes: (q.taxes||[]).map(t=>({...t})),
+          name: q.name, customer: q.customer || "", date: q.date || todayStr(),
+          expiry: q.expiry || "", subject: q.subject || "", status: q.status || "Draft",
+          terms: q.terms || "", notes: q.notes || "",
+          items: (q.items || [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }]).map(r => ({ ...r })),
+          taxes: (q.taxes || []).map(t => ({ ...t })),
         });
         showDrawer.value = true;
       }
 
       function pickCustomer(c) {
         selCustomer.value = c.name;
-        custSearch.value  = c.customer_name || c.name;
-        form.customer     = c.name;
+        custSearch.value = c.customer_name || c.name;
+        form.customer = c.name;
         showCustDrop.value = false;
       }
 
       function saveQuote(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
+        if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) {
+          toast("Please select at least one item", "error"); return;
+        }
         const doc = {
           name: drawerMode.value === "edit" ? form.name : nextNum(),
           customer: cust, date: form.date, expiry: form.expiry,
           subject: form.subject, status: status,
-          items: form.items.filter(r => r.item_name || r.rate).map(r=>({...r})),
-          taxes: form.taxes.map(t=>({...t})),
+          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
+          taxes: form.taxes.map(t => ({ ...t })),
           net_total: Math.round(netTotal.value * 100) / 100,
           grand_total: grandTotal.value,
           terms: form.terms, notes: form.notes,
           created_at: drawerMode.value === "edit"
-            ? (list.value.find(q => q.name===form.name)||{}).created_at || todayStr()
+            ? (list.value.find(q => q.name === form.name) || {}).created_at || todayStr()
             : todayStr(),
         };
         const arr = readList();
@@ -3744,20 +4004,35 @@
       function doConvert() {
         const arr = readList();
         const idx = arr.findIndex(q => q.name === convertTarget.value.name);
-        if (idx >= 0) { arr[idx].status = "Converted"; storeList(arr); list.value = arr; }
-        toast("Quote converted to Invoice"); showConvert.value = false;
+        if (idx >= 0) {
+          const q = arr[idx];
+          q.source_type = "Quote";
+          q.source_name = q.name;
+          localStorage.setItem("convert_to_invoice", JSON.stringify(q));
+        }
+        toast("Drafting invoice — please save it to confirm", "info");
+        showConvert.value = false;
         router.push({ name: "invoices" });
+      }
+
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
       }
 
       onMounted(load);
 
       return {
-        list, loading, search, activeFilter, filtered, counts, summary, isExpired, displayStatus,
+        list, loading, allItems, customers, search, activeFilter, filtered, counts, summary, isExpired, displayStatus,
         showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop,
         custDropItems, netTotal, taxTotal, grandTotal,
-        recalc, addItem, removeItem, addTax, removeTax,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveQuote, openAdd, openEdit,
-        showConvert, convertTarget, doConvert,
+        showConvert, convertTarget, openConvert, doConvert,
         showDelete, deleteTarget, deleting, confirmDelete, doDelete,
         load, icon, fmt, fmtDate, flt,
       };
@@ -3939,7 +4214,12 @@
                   </tr></thead>
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td>
+                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                          <option value="" disabled>Item / Service</option>
+                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                        </select>
+                      </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                       <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -4076,33 +4356,34 @@
       const router = useRouter();
 
       // ── State ──
-      const list        = ref([]);
-      const customers   = ref([]);
-      const loading     = ref(true);
-      const search      = ref("");
-      const activeFilter= ref("all");
+      const list = ref([]);
+      const customers = ref([]);
+      const allItems = ref([]);
+      const loading = ref(true);
+      const search = ref("");
+      const activeFilter = ref("all");
 
       // Summary
       const summary = computed(() => ({
-        total    : list.value.length,
+        total: list.value.length,
         confirmed: list.value.filter(o => o.status === "Confirmed").length,
-        progress : list.value.filter(o => o.status === "Processing").length,
-        value    : list.value.reduce((s, o) => s + flt(o.grand_total), 0),
+        progress: list.value.filter(o => o.status === "Processing").length,
+        value: list.value.reduce((s, o) => s + flt(o.grand_total), 0),
       }));
 
       const STATUS_CFG = {
-        Draft     : { cls:"b-badge-muted",  lbl:"Draft"      },
-        Confirmed : { cls:"b-badge-blue",   lbl:"Confirmed"  },
-        Processing: { cls:"b-badge-amber",  lbl:"Processing" },
-        Ready     : { cls:"b-badge-green",  lbl:"Ready"      },
-        Invoiced  : { cls:"b-badge-green",  lbl:"Invoiced"   },
-        Cancelled : { cls:"b-badge-red",    lbl:"Cancelled"  },
+        Draft: { cls: "b-badge-muted", lbl: "Draft" },
+        Confirmed: { cls: "b-badge-blue", lbl: "Confirmed" },
+        Processing: { cls: "b-badge-amber", lbl: "Processing" },
+        Ready: { cls: "b-badge-green", lbl: "Ready" },
+        Invoiced: { cls: "b-badge-green", lbl: "Invoiced" },
+        Cancelled: { cls: "b-badge-red", lbl: "Cancelled" },
       };
-      const STEPS = ["Draft","Confirmed","Processing","Ready","Invoiced"];
+      const STEPS = ["Draft", "Confirmed", "Processing", "Ready", "Invoiced"];
 
       const counts = computed(() => {
         const r = {};
-        ["Draft","Confirmed","Processing","Ready","Invoiced"].forEach(s => {
+        ["Draft", "Confirmed", "Processing", "Ready", "Invoiced"].forEach(s => {
           r[s] = list.value.filter(o => o.status === s).length;
         });
         return r;
@@ -4117,84 +4398,85 @@
         let r = list.value;
         if (activeFilter.value !== "all") r = r.filter(o => o.status === activeFilter.value);
         const q = search.value.toLowerCase().trim();
-        if (q) r = r.filter(o => (o.name + o.customer + (o.ref_quote||"")).toLowerCase().includes(q));
+        if (q) r = r.filter(o => (o.name + o.customer + (o.ref_quote || "")).toLowerCase().includes(q));
         return r;
       });
 
       // ── localStorage ──
       const LKEY = "books_sales_orders";
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
       function nextNum() {
-        const nums = readList().map(o => parseInt((o.name||"SO-0").replace(/\D/g,"")) || 0);
-        return "SO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4,"0");
+        const nums = readList().map(o => parseInt((o.name || "SO-0").replace(/\D/g, "")) || 0);
+        return "SO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
-      function addDays(d,n) { const dt=new Date(d); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
+      function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); }
 
       async function load() {
         loading.value = true;
         list.value = readList();
         loading.value = false;
-        try { customers.value = await apiList("Customer", { fields:["name","customer_name"], filters:[["disabled","=",0]], order:"customer_name asc", limit:300 }); } catch {}
+        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
       }
 
       // ── Drawer ──
-      const showDrawer  = ref(false);
-      const drawerMode  = ref("add"); // "add" | "edit" | "view"
-      const saving      = ref(false);
+      const showDrawer = ref(false);
+      const drawerMode = ref("add"); // "add" | "edit" | "view"
+      const saving = ref(false);
       const selCustomer = ref("");
-      const custSearch  = ref("");
-      const showCustDrop= ref(false);
+      const custSearch = ref("");
+      const showCustDrop = ref(false);
       const custDropItems = computed(() => {
         const q = custSearch.value.toLowerCase();
         return customers.value.filter(c =>
-          (c.customer_name||c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
+          (c.customer_name || c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
         ).slice(0, 40);
       });
 
       const form = reactive({
-        name:"", customer:"", order_date:"", delivery_date:"",
-        status:"Draft", ref_quote:"", po_number:"", shipping_address:"", terms:"",
-        items: [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        name: "", customer: "", order_date: "", delivery_date: "",
+        status: "Draft", ref_quote: "", po_number: "", shipping_address: "", terms: "",
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
         taxes: [],
-        net_total:0, total_tax:0, grand_total:0, billed_amount:0, created_at:"",
+        net_total: 0, total_tax: 0, grand_total: 0, billed_amount: 0, created_at: "",
       });
 
       const viewOrder = ref(null); // for read-only view
 
-      const netTotal   = computed(() => form.items.reduce((s,r) => s + flt(r.amount), 0));
-      const taxTotal   = computed(() => form.taxes.reduce((s,t) => s + flt(t.tax_amount), 0));
+      const netTotal = computed(() => form.items.reduce((s, r) => s + flt(r.amount), 0));
+      const taxTotal = computed(() => form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0));
       const grandTotal = computed(() => Math.round((netTotal.value + taxTotal.value) * 100) / 100);
 
       function recalc() {
         form.items.forEach(r => { r.amount = Math.round(flt(r.qty) * flt(r.rate) * 100) / 100; });
         form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(netTotal.value * flt(t.rate) / 100 * 100) / 100 : 0; });
       }
-      function addItem()    { form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 }); }
-      function removeItem(i){ if (form.items.length > 1) { form.items.splice(i,1); recalc(); } }
-      function addTax()     { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
-      function removeTax(i) { form.taxes.splice(i,1); recalc(); }
+      function addItem() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeItem(i) { if (form.items.length > 1) { form.items.splice(i, 1); recalc(); } }
+      function addTax() { form.taxes.push({ tax_type: "CGST", description: "CGST", rate: 9, tax_amount: 0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
 
       function resetForm(fromOrder) {
         const o = fromOrder || {};
         Object.assign(form, {
-          name: o.name||"",
-          customer: o.customer||"",
+          name: o.name || "",
+          customer: o.customer || "",
           order_date: o.order_date || todayStr(),
           delivery_date: o.delivery_date || addDays(todayStr(), 14),
           status: o.status || "Draft",
-          ref_quote: o.ref_quote||"",
-          po_number: o.po_number||"",
-          shipping_address: o.shipping_address||"",
-          terms: o.terms||"",
-          items: o.items?.length ? o.items.map(r=>({...r})) : [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
-          taxes: (o.taxes||[]).map(t=>({...t})),
-          billed_amount: o.billed_amount||0,
-          created_at: o.created_at||todayStr(),
+          ref_quote: o.ref_quote || "",
+          po_number: o.po_number || "",
+          shipping_address: o.shipping_address || "",
+          terms: o.terms || "",
+          items: o.items?.length ? o.items.map(r => ({ ...r })) : [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+          taxes: (o.taxes || []).map(t => ({ ...t })),
+          billed_amount: o.billed_amount || 0,
+          created_at: o.created_at || todayStr(),
         });
-        selCustomer.value  = o.customer||"";
-        custSearch.value   = o.customer||"";
+        selCustomer.value = o.customer || "";
+        custSearch.value = o.customer || "";
         showCustDrop.value = false;
       }
 
@@ -4213,21 +4495,24 @@
       function openView(name) {
         const o = list.value.find(x => x.name === name);
         if (!o) return;
-        viewOrder.value  = o;
+        viewOrder.value = o;
         drawerMode.value = "view";
         showDrawer.value = true;
       }
 
       function pickCustomer(c) {
-        selCustomer.value  = c.name;
-        custSearch.value   = c.customer_name || c.name;
-        form.customer      = c.name;
+        selCustomer.value = c.name;
+        custSearch.value = c.customer_name || c.name;
+        form.customer = c.name;
         showCustDrop.value = false;
       }
 
       function saveOrder(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
+        if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) {
+          toast("Please select at least one item", "error"); return;
+        }
         const existing = list.value.find(o => o.name === form.name);
         const doc = {
           name: drawerMode.value === "edit" ? form.name : nextNum(),
@@ -4239,8 +4524,8 @@
           po_number: form.po_number.trim(),
           shipping_address: form.shipping_address.trim(),
           terms: form.terms.trim(),
-          items: form.items.filter(r => r.item_name || r.rate).map(r=>({...r})),
-          taxes: form.taxes.map(t=>({...t})),
+          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
+          taxes: form.taxes.map(t => ({ ...t })),
           net_total: Math.round(netTotal.value * 100) / 100,
           total_tax: Math.round(taxTotal.value * 100) / 100,
           grand_total: grandTotal.value,
@@ -4266,22 +4551,26 @@
       }
 
       // ── Convert modal ──
-      const showConvert  = ref(false);
-      const convertTarget= ref(null);
+      const showConvert = ref(false);
+      const convertTarget = ref(null);
       function openConvert(o) { convertTarget.value = o; showConvert.value = true; }
       function doConvert() {
         const arr = readList();
         const o = arr.find(x => x.name === convertTarget.value.name);
-        if (o) { o.status = "Invoiced"; o.billed_amount = o.grand_total; storeList(arr); list.value = arr; }
-        toast("Order invoiced — open Invoices to see it", "info");
+        if (o) {
+          o.source_type = "Sales Order";
+          o.source_name = o.name;
+          localStorage.setItem("convert_to_invoice", JSON.stringify(o));
+        }
+        toast("Drafting invoice — please save it to confirm", "info");
         showConvert.value = false; showDrawer.value = false;
-        router.push({ name:"invoices" });
+        router.push({ name: "invoices" });
       }
 
       // ── Delete modal ──
-      const showDelete  = ref(false);
-      const deleteTarget= ref(null);
-      const deleting    = ref(false);
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
       function confirmDelete(o) { deleteTarget.value = o; showDelete.value = true; }
       function doDelete() {
         deleting.value = true;
@@ -4290,16 +4579,25 @@
         toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
       }
 
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       onMounted(load);
 
       return {
-        list, customers, loading, search, activeFilter, filtered, counts, summary, billedPct,
+        list, customers, allItems, loading, search, activeFilter, filtered, counts, summary, billedPct,
         STATUS_CFG, STEPS, showDrawer, drawerMode, saving, viewOrder,
         form, selCustomer, custSearch, showCustDrop, custDropItems,
         netTotal, taxTotal, grandTotal,
-        recalc, addItem, removeItem, addTax, removeTax,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveOrder, advanceStatus, openAdd, openEdit, openView,
-        showConvert, convertTarget, doConvert,
+        showConvert, convertTarget, openConvert, doConvert,
         showDelete, deleteTarget, deleting, confirmDelete, doDelete,
         load, icon, fmt, fmtDate, flt,
       };
@@ -4551,7 +4849,7 @@
               <div class="nim-table-wrap nim-mb">
                 <table class="nim-table">
                   <thead><tr>
-                    <th style="width:28%">Item / Service</th><th style="width:25%">Description</th>
+                    <th style="width:28%">Item / Service <span class="nim-req">*</span></th><th style="width:25%">Description</th>
                     <th style="width:10%;text-align:center">Qty</th>
                     <th style="width:16%;text-align:right">Rate (₹)</th>
                     <th style="width:16%;text-align:right">Amount (₹)</th>
@@ -4559,7 +4857,12 @@
                   </tr></thead>
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td>
+                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                          <option value="" disabled>Item / Service</option>
+                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                        </select>
+                      </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                       <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -4663,8 +4966,7 @@
         <div class="nim-body" style="padding:20px 24px">
           <p style="font-size:14px;color:#374151;line-height:1.6">
             Create a Sales Invoice from order <strong>{{convertTarget?.name}}</strong> for
-            <strong>{{convertTarget?.customer}}</strong> — <strong>{{fmt(convertTarget?.grand_total)}}</strong>?<br><br>
-            This will mark the order as <strong>Invoiced</strong>.
+            <strong>{{convertTarget?.customer}}</strong> — <strong>{{fmt(convertTarget?.grand_total)}}</strong>?
           </p>
         </div>
         <div class="nim-footer">
@@ -4715,41 +5017,42 @@
     name: "RecurringInvoices",
     setup() {
       const LKEY = "books_recurring";
-      const FREQ_DAYS  = { weekly:7, biweekly:14, monthly:30, quarterly:91, halfyearly:182, yearly:365 };
-      const FREQ_LABEL = { weekly:"Weekly", biweekly:"Every 2 Weeks", monthly:"Monthly", quarterly:"Quarterly", halfyearly:"Half Yearly", yearly:"Yearly" };
+      const FREQ_DAYS = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 91, halfyearly: 182, yearly: 365 };
+      const FREQ_LABEL = { weekly: "Weekly", biweekly: "Every 2 Weeks", monthly: "Monthly", quarterly: "Quarterly", halfyearly: "Half Yearly", yearly: "Yearly" };
 
-      const list        = ref([]);
-      const customers   = ref([]);
-      const loading     = ref(true);
-      const search      = ref("");
-      const activeFilter= ref("all");
+      const list = ref([]);
+      const customers = ref([]);
+      const allItems = ref([]);
+      const loading = ref(true);
+      const search = ref("");
+      const activeFilter = ref("all");
 
       // ── Storage ──
-      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
       function nextNum() {
-        const nums = readList().map(s => parseInt((s.name||"REC-0").replace(/\D/g,""))||0);
-        return "REC-" + String((nums.length?Math.max(...nums):0)+1).padStart(4,"0");
+        const nums = readList().map(s => parseInt((s.name || "REC-0").replace(/\D/g, "")) || 0);
+        return "REC-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       // ── Frequency helpers ──
       function addFreq(dateStr, freq) {
         const d = new Date(dateStr);
-        switch(freq) {
-          case "weekly":     d.setDate(d.getDate()+7); break;
-          case "biweekly":   d.setDate(d.getDate()+14); break;
-          case "monthly":    d.setMonth(d.getMonth()+1); break;
-          case "quarterly":  d.setMonth(d.getMonth()+3); break;
-          case "halfyearly": d.setMonth(d.getMonth()+6); break;
-          case "yearly":     d.setFullYear(d.getFullYear()+1); break;
+        switch (freq) {
+          case "weekly": d.setDate(d.getDate() + 7); break;
+          case "biweekly": d.setDate(d.getDate() + 14); break;
+          case "monthly": d.setMonth(d.getMonth() + 1); break;
+          case "quarterly": d.setMonth(d.getMonth() + 3); break;
+          case "halfyearly": d.setMonth(d.getMonth() + 6); break;
+          case "yearly": d.setFullYear(d.getFullYear() + 1); break;
         }
-        return d.toISOString().slice(0,10);
+        return d.toISOString().slice(0, 10);
       }
-      function getNextDates(start, freq, end, count=6) {
-        const dates=[]; let cur=start;
+      function getNextDates(start, freq, end, count = 6) {
+        const dates = []; let cur = start;
         const endD = end ? new Date(end) : null;
-        while(dates.length < count) {
+        while (dates.length < count) {
           const d = new Date(cur);
           if (endD && d > endD) break;
           dates.push(cur);
@@ -4762,7 +5065,7 @@
       function getNextDue(sched) {
         if (sched.status !== "Active") return null;
         const hist = sched.history || [];
-        const lastDate = hist.length ? hist[hist.length-1].date : null;
+        const lastDate = hist.length ? hist[hist.length - 1].date : null;
         const base = lastDate ? addFreq(lastDate, sched.frequency) : sched.start_date;
         const endD = sched.end_date ? new Date(sched.end_date) : null;
         if (endD && new Date(base) > endD) return null;
@@ -4770,59 +5073,59 @@
       }
       function daysUntil(dateStr) {
         if (!dateStr) return null;
-        return Math.round((new Date(dateStr) - new Date()) / (1000*60*60*24));
+        return Math.round((new Date(dateStr) - new Date()) / (1000 * 60 * 60 * 24));
       }
 
       // ── Summary ──
       const summary = computed(() => {
         const active = list.value.filter(s => s.status === "Active");
-        const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate()+7);
-        const due = active.filter(s => { const n=getNextDue(s); return n && new Date(n) <= weekEnd; });
-        const monthly = active.reduce((sum,s) => {
-          const d = FREQ_DAYS[s.frequency]||30;
-          return sum + flt(s.grand_total)*(30/d);
-        },0);
-        return { total:list.value.length, active:active.length, due:due.length, value:Math.round(monthly) };
+        const weekEnd = new Date(); weekEnd.setDate(weekEnd.getDate() + 7);
+        const due = active.filter(s => { const n = getNextDue(s); return n && new Date(n) <= weekEnd; });
+        const monthly = active.reduce((sum, s) => {
+          const d = FREQ_DAYS[s.frequency] || 30;
+          return sum + flt(s.grand_total) * (30 / d);
+        }, 0);
+        return { total: list.value.length, active: active.length, due: due.length, value: Math.round(monthly) };
       });
 
       const counts = computed(() => ({
-        Active: list.value.filter(s=>s.status==="Active").length,
-        Paused: list.value.filter(s=>s.status==="Paused").length,
-        Ended:  list.value.filter(s=>s.status==="Ended").length,
+        Active: list.value.filter(s => s.status === "Active").length,
+        Paused: list.value.filter(s => s.status === "Paused").length,
+        Ended: list.value.filter(s => s.status === "Ended").length,
       }));
 
       const filtered = computed(() => {
-        let r = activeFilter.value === "all" ? list.value : list.value.filter(s=>s.status===activeFilter.value);
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(s => s.status === activeFilter.value);
         const q = search.value.toLowerCase().trim();
-        if (q) r = r.filter(s => (s.name + s.customer + (s.schedule_name||"")).toLowerCase().includes(q));
+        if (q) r = r.filter(s => (s.name + s.customer + (s.schedule_name || "")).toLowerCase().includes(q));
         return r;
       });
 
       // ── Drawer ──
-      const showDrawer   = ref(false);
-      const drawerMode   = ref("add");
-      const saving       = ref(false);
-      const selCustomer  = ref("");
-      const custSearch   = ref("");
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const saving = ref(false);
+      const selCustomer = ref("");
+      const custSearch = ref("");
       const showCustDrop = ref(false);
       const custDropItems = computed(() => {
         const q = custSearch.value.toLowerCase();
         return customers.value.filter(c =>
-          (c.customer_name||c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
-        ).slice(0,40);
+          (c.customer_name || c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)
+        ).slice(0, 40);
       });
 
       const form = reactive({
-        name:"", customer:"", schedule_name:"",
-        frequency:"monthly", start_date:"", end_date:"",
-        payment_terms:"", status:"Active", notes:"",
-        items:[{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
-        taxes:[], history:[],
+        name: "", customer: "", schedule_name: "",
+        frequency: "monthly", start_date: "", end_date: "",
+        payment_terms: "", status: "Active", notes: "",
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+        taxes: [], history: [],
       });
 
-      const netTotal   = computed(() => form.items.reduce((s,r) => s+flt(r.amount), 0));
-      const taxTotal   = computed(() => form.taxes.reduce((s,t) => s+flt(t.tax_amount), 0));
-      const grandTotal = computed(() => Math.round((netTotal.value+taxTotal.value)*100)/100);
+      const netTotal = computed(() => form.items.reduce((s, r) => s + flt(r.amount), 0));
+      const taxTotal = computed(() => form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0));
+      const grandTotal = computed(() => Math.round((netTotal.value + taxTotal.value) * 100) / 100);
 
       const previewDates = computed(() => {
         if (!form.start_date) return [];
@@ -4830,34 +5133,34 @@
       });
 
       function recalc() {
-        form.items.forEach(r => { r.amount = Math.round(flt(r.qty)*flt(r.rate)*100)/100; });
-        form.taxes.forEach(t => { t.tax_amount = flt(t.rate)>0 ? Math.round(netTotal.value*flt(t.rate)/100*100)/100 : 0; });
+        form.items.forEach(r => { r.amount = Math.round(flt(r.qty) * flt(r.rate) * 100) / 100; });
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(netTotal.value * flt(t.rate) / 100 * 100) / 100 : 0; });
       }
-      function addItem()    { form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0}); }
-      function removeItem(i){ if(form.items.length>1){ form.items.splice(i,1); recalc(); } }
-      function addTax()     { form.taxes.push({tax_type:"CGST",description:"CGST",rate:9,tax_amount:0}); recalc(); }
-      function removeTax(i) { form.taxes.splice(i,1); recalc(); }
+      function addItem() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeItem(i) { if (form.items.length > 1) { form.items.splice(i, 1); recalc(); } }
+      function addTax() { form.taxes.push({ tax_type: "CGST", description: "CGST", rate: 9, tax_amount: 0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
 
       function pickCustomer(c) {
-        selCustomer.value  = c.name;
-        custSearch.value   = c.customer_name || c.name;
-        form.customer      = c.name;
+        selCustomer.value = c.name;
+        custSearch.value = c.customer_name || c.name;
+        form.customer = c.name;
         showCustDrop.value = false;
       }
 
       function resetForm(from) {
         const s = from || {};
         Object.assign(form, {
-          name: s.name||"", customer: s.customer||"", schedule_name: s.schedule_name||"",
-          frequency: s.frequency||"monthly", start_date: s.start_date||todayStr(),
-          end_date: s.end_date||"", payment_terms: s.payment_terms||"",
-          status: s.status||"Active", notes: s.notes||"",
-          items: s.items?.length ? s.items.map(r=>({...r})) : [{item_name:"",description:"",qty:1,rate:0,amount:0}],
-          taxes: (s.taxes||[]).map(t=>({...t})),
-          history: s.history||[],
+          name: s.name || "", customer: s.customer || "", schedule_name: s.schedule_name || "",
+          frequency: s.frequency || "monthly", start_date: s.start_date || todayStr(),
+          end_date: s.end_date || "", payment_terms: s.payment_terms || "",
+          status: s.status || "Active", notes: s.notes || "",
+          items: s.items?.length ? s.items.map(r => ({ ...r })) : [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+          taxes: (s.taxes || []).map(t => ({ ...t })),
+          history: s.history || [],
         });
-        selCustomer.value  = s.customer||"";
-        custSearch.value   = s.customer||"";
+        selCustomer.value = s.customer || "";
+        custSearch.value = s.customer || "";
         showCustDrop.value = false;
       }
 
@@ -4866,93 +5169,103 @@
         showDrawer.value = true;
       }
       function openEdit(name) {
-        const s = list.value.find(x=>x.name===name); if(!s)return;
+        const s = list.value.find(x => x.name === name); if (!s) return;
         drawerMode.value = "edit"; resetForm(s);
         showDrawer.value = true;
       }
 
       function saveSchedule(status) {
         const cust = selCustomer.value || custSearch.value.trim();
-        if (!cust) { toast("Please select a customer","error"); return; }
-        if (!form.start_date) { toast("Please set a Start Date","error"); return; }
-        const existing = list.value.find(s=>s.name===form.name);
+        if (!cust) { toast("Please select a customer", "error"); return; }
+        if (!form.start_date) { toast("Please set a Start Date", "error"); return; }
+        const existing = list.value.find(s => s.name === form.name);
         const doc = {
-          name: drawerMode.value==="edit" ? form.name : nextNum(),
+          name: drawerMode.value === "edit" ? form.name : nextNum(),
           customer: cust, schedule_name: form.schedule_name.trim(),
           frequency: form.frequency, start_date: form.start_date,
           end_date: form.end_date, payment_terms: form.payment_terms,
           status: status, notes: form.notes.trim(),
-          items: form.items.filter(r=>r.item_name||r.rate).map(r=>({...r})),
-          taxes: form.taxes.map(t=>({...t})),
-          net_total: Math.round(netTotal.value*100)/100,
-          total_tax: Math.round(taxTotal.value*100)/100,
+          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
+          taxes: form.taxes.map(t => ({ ...t })),
+          net_total: Math.round(netTotal.value * 100) / 100,
+          total_tax: Math.round(taxTotal.value * 100) / 100,
           grand_total: grandTotal.value,
           history: existing?.history || form.history || [],
           created_at: existing?.created_at || todayStr(),
         };
         const arr = readList();
-        const idx = arr.findIndex(s=>s.name===doc.name);
-        if (idx>=0) arr[idx]=doc; else arr.unshift(doc);
+        const idx = arr.findIndex(s => s.name === doc.name);
+        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
         storeList(arr); list.value = arr;
-        toast(status==="Active" ? (drawerMode.value==="edit"?"Schedule updated":"Schedule activated!") : "Schedule saved");
+        toast(status === "Active" ? (drawerMode.value === "edit" ? "Schedule updated" : "Schedule activated!") : "Schedule saved");
         showDrawer.value = false;
       }
 
       function toggleStatus(s) {
         const arr = readList();
-        const o = arr.find(x=>x.name===s.name); if(!o) return;
-        o.status = o.status==="Active" ? "Paused" : "Active";
+        const o = arr.find(x => x.name === s.name); if (!o) return;
+        o.status = o.status === "Active" ? "Paused" : "Active";
         storeList(arr); list.value = arr;
         toast("Schedule " + o.status.toLowerCase());
       }
 
       // ── Generate modal ──
-      const showGenerate  = ref(false);
-      const generateTarget= ref(null);
-      function openGenerate(s) { generateTarget.value=s; showGenerate.value=true; }
+      const showGenerate = ref(false);
+      const generateTarget = ref(null);
+      function openGenerate(s) { generateTarget.value = s; showGenerate.value = true; }
       function doGenerate() {
         const arr = readList();
-        const s = arr.find(x=>x.name===generateTarget.value.name); if(!s){ showGenerate.value=false; return; }
-        const entry = { date:todayStr(), amount:s.grand_total, inv_ref:"INV-AUTO-"+Date.now().toString(36).toUpperCase() };
-        s.history = (s.history||[]);
+        const s = arr.find(x => x.name === generateTarget.value.name); if (!s) { showGenerate.value = false; return; }
+        const entry = { date: todayStr(), amount: s.grand_total, inv_ref: "INV-AUTO-" + Date.now().toString(36).toUpperCase() };
+        s.history = (s.history || []);
         s.history.push(entry);
         storeList(arr); list.value = arr;
-        toast(`Invoice ${entry.inv_ref} generated for ${s.customer}`,"info");
+        toast(`Invoice ${entry.inv_ref} generated for ${s.customer}`, "info");
         showGenerate.value = false;
       }
 
       // ── History modal ──
-      const showHistory  = ref(false);
-      const histTarget   = ref(null);
-      function openHistory(s) { histTarget.value=s; showHistory.value=true; }
+      const showHistory = ref(false);
+      const histTarget = ref(null);
+      function openHistory(s) { histTarget.value = s; showHistory.value = true; }
 
       // ── Delete modal ──
-      const showDelete   = ref(false);
+      const showDelete = ref(false);
       const deleteTarget = ref(null);
-      const deleting     = ref(false);
-      function confirmDelete(s) { deleteTarget.value=s; showDelete.value=true; }
+      const deleting = ref(false);
+      function confirmDelete(s) { deleteTarget.value = s; showDelete.value = true; }
       function doDelete() {
-        deleting.value=true;
-        const arr = readList().filter(s=>s.name!==deleteTarget.value.name);
-        storeList(arr); list.value=arr;
-        toast("Schedule deleted"); showDelete.value=false; deleting.value=false;
+        deleting.value = true;
+        const arr = readList().filter(s => s.name !== deleteTarget.value.name);
+        storeList(arr); list.value = arr;
+        toast("Schedule deleted"); showDelete.value = false; deleting.value = false;
       }
 
       async function load() {
         loading.value = true;
         list.value = readList();
         loading.value = false;
-        try { customers.value = await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
+        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
       }
 
       onMounted(load);
 
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
       return {
-        list, loading, search, activeFilter, filtered, counts, summary,
+        list, loading, search, allItems, activeFilter, filtered, counts, summary,
         FREQ_LABEL, getNextDue, daysUntil,
         showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop, custDropItems,
         netTotal, taxTotal, grandTotal, previewDates, todayStr,
-        recalc, addItem, removeItem, addTax, removeTax,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveSchedule, toggleStatus, openAdd, openEdit,
         showGenerate, generateTarget, openGenerate, doGenerate,
         showHistory, histTarget, openHistory,
@@ -5143,7 +5456,7 @@
                 <div class="nim-field">
                   <label class="nim-label">Payment Terms</label>
                   <select v-model="form.payment_terms" class="nim-select">
-                    <option value="">— None —</option>
+                    <option value="">Select</option>
                     <option>Net 30</option><option>Net 15</option><option>Net 7</option><option>Due on Receipt</option>
                   </select>
                 </div>
@@ -5184,7 +5497,12 @@
                   </tr></thead>
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                      <td><input v-model="item.item_name" class="nim-cell" placeholder="Item / Service"/></td>
+                      <td>
+                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
+                          <option value="" disabled>Item / Service</option>
+                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                        </select>
+                      </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                       <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5356,133 +5674,151 @@
     name: "CreditNotes",
     setup() {
       const LKEY = "books_credit_notes";
-      const list         = ref([]);
-      const allInvoices  = ref([]);
-      const customers    = ref([]);
-      const loading      = ref(true);
-      const search       = ref("");
+      const list = ref([]);
+      const allInvoices = ref([]);
+      const customers = ref([]);
+      const allItems = ref([]);
+      const loading = ref(true);
+      const search = ref("");
       const activeFilter = ref("all");
 
-      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
       function nextNum() {
-        const n = readList().map(x=>parseInt((x.name||"CN-0").replace(/\D/g,""))||0);
-        return "CN-" + String((n.length?Math.max(...n):0)+1).padStart(4,"0");
+        const n = readList().map(x => parseInt((x.name || "CN-0").replace(/\D/g, "")) || 0);
+        return "CN-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(4, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       const STATUS_CFG = {
-        Draft:{ cls:"b-badge-muted", lbl:"Draft" },
-        Submitted:{ cls:"b-badge-blue", lbl:"Submitted" },
-        Applied:{ cls:"b-badge-green", lbl:"Applied" },
-        Cancelled:{ cls:"b-badge-red", lbl:"Cancelled" },
+        Draft: { cls: "b-badge-muted", lbl: "Draft" },
+        Submitted: { cls: "b-badge-blue", lbl: "Submitted" },
+        Applied: { cls: "b-badge-green", lbl: "Applied" },
+        Cancelled: { cls: "b-badge-red", lbl: "Cancelled" },
       };
 
       const summary = computed(() => ({
-        total:     list.value.length,
-        submitted: list.value.filter(n=>n.status==="Submitted").length,
-        applied:   list.value.filter(n=>n.status==="Applied").length,
-        value:     list.value.reduce((s,n)=>s+flt(n.grand_total),0),
+        total: list.value.length,
+        submitted: list.value.filter(n => n.status === "Submitted").length,
+        applied: list.value.filter(n => n.status === "Applied").length,
+        value: list.value.reduce((s, n) => s + flt(n.grand_total), 0),
       }));
 
       const counts = computed(() => ({
-        Draft:     list.value.filter(n=>n.status==="Draft").length,
-        Submitted: list.value.filter(n=>n.status==="Submitted").length,
-        Applied:   list.value.filter(n=>n.status==="Applied").length,
+        Draft: list.value.filter(n => n.status === "Draft").length,
+        Submitted: list.value.filter(n => n.status === "Submitted").length,
+        Applied: list.value.filter(n => n.status === "Applied").length,
       }));
 
       const filtered = computed(() => {
-        let r = activeFilter.value==="all" ? list.value : list.value.filter(n=>n.status===activeFilter.value);
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(n => n.status === activeFilter.value);
         const q = search.value.toLowerCase().trim();
-        if (q) r = r.filter(n=>(n.name+n.customer+(n.against_invoice||"")+(n.reason||"")).toLowerCase().includes(q));
+        if (q) r = r.filter(n => (n.name + n.customer + (n.against_invoice || "") + (n.reason || "")).toLowerCase().includes(q));
         return r;
       });
 
       // ── Drawer ──
-      const showDrawer  = ref(false);
-      const drawerMode  = ref("add");
-      const saving      = ref(false);
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const saving = ref(false);
       const selCustomer = ref("");
-      const custSearch  = ref("");
-      const showCustDrop= ref(false);
-      const selInvoice  = ref(null);
-      const invSearch   = ref("");
+      const custSearch = ref("");
+      const showCustDrop = ref(false);
+      const selInvoice = ref(null);
+      const invSearch = ref("");
       const showInvDrop = ref(false);
-      const viewNote    = ref(null);
+      const viewNote = ref(null);
 
       const custDropItems = computed(() => {
         const q = custSearch.value.toLowerCase();
-        return customers.value.filter(c=>(c.customer_name||c.name).toLowerCase().includes(q)||c.name.toLowerCase().includes(q)).slice(0,40);
+        return customers.value.filter(c => (c.customer_name || c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)).slice(0, 40);
       });
       const invDropItems = computed(() => {
-        const q = invSearch.value.toLowerCase();
-        return allInvoices.value.filter(i=>(selCustomer.value?i.customer===selCustomer.value:true) && (i.name.toLowerCase().includes(q)||((i.customer||"").toLowerCase().includes(q)))).slice(0,40);
+        const q = invSearch.value.toLowerCase().trim();
+        return allInvoices.value.filter(i =>
+          (selCustomer.value ? i.customer === selCustomer.value : true) &&
+          (!q || i.name.toLowerCase().includes(q) || (i.customer || "").toLowerCase().includes(q) || (i.customer_name || "").toLowerCase().includes(q))
+        ).slice(0, 50);
       });
 
       const form = reactive({
-        name:"", customer:"", against_invoice:"", date:"", reason:"",
-        status:"Draft", notes:"",
-        items:[{item_name:"",description:"",qty:1,rate:0,amount:0}],
-        taxes:[],
+        name: "", customer: "", against_invoice: "", date: "", reason: "",
+        status: "Draft", notes: "",
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+        taxes: [],
       });
 
-      const netTotal   = computed(()=>form.items.reduce((s,r)=>s+flt(r.amount),0));
-      const taxTotal   = computed(()=>form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
-      const grandTotal = computed(()=>Math.round((netTotal.value+taxTotal.value)*100)/100);
+      const netTotal = computed(() => form.items.reduce((s, r) => s + flt(r.amount), 0));
+      const taxTotal = computed(() => form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0));
+      const grandTotal = computed(() => Math.round((netTotal.value + taxTotal.value) * 100) / 100);
 
       function recalc() {
-        form.items.forEach(r=>{r.amount=Math.round(flt(r.qty)*flt(r.rate)*100)/100;});
-        form.taxes.forEach(t=>{t.tax_amount=flt(t.rate)>0?Math.round(netTotal.value*flt(t.rate)/100*100)/100:0;});
+        form.items.forEach(r => { r.amount = Math.round(flt(r.qty) * flt(r.rate) * 100) / 100; });
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(netTotal.value * flt(t.rate) / 100 * 100) / 100 : 0; });
       }
-      function addItem()    { form.items.push({item_name:"",description:"",qty:1,rate:0,amount:0}); }
-      function removeItem(i){ if(form.items.length>1){form.items.splice(i,1);recalc();} }
-      function addTax()     { form.taxes.push({tax_type:"CGST",description:"CGST",rate:9,tax_amount:0});recalc(); }
-      function removeTax(i) { form.taxes.splice(i,1);recalc(); }
+      function addItem() { form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }); }
+      function removeItem(i) { if (form.items.length > 1) { form.items.splice(i, 1); recalc(); } }
+      function addTax() { form.taxes.push({ tax_type: "CGST", description: "CGST", rate: 9, tax_amount: 0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
 
-      function pickCustomer(c) { selCustomer.value=c.name; custSearch.value=c.customer_name||c.name; form.customer=c.name; showCustDrop.value=false; selInvoice.value=null; invSearch.value=""; }
+      function pickCustomer(c) { selCustomer.value = c.name; custSearch.value = c.customer_name || c.name; form.customer = c.name; showCustDrop.value = false; selInvoice.value = null; invSearch.value = ""; }
       function pickInvoice(inv) {
-        selInvoice.value=inv; invSearch.value=inv.name; form.against_invoice=inv.name;
-        if (!form.items[0].item_name && !form.items[0].rate) { form.items[0]={item_name:"Credit Adjustment",description:"Credit against "+inv.name,qty:1,rate:flt(inv.grand_total),amount:flt(inv.grand_total)}; recalc(); }
-        showInvDrop.value=false;
+        selInvoice.value = inv; invSearch.value = inv.name; form.against_invoice = inv.name;
+        if (!form.items[0].item_name && !form.items[0].rate) { form.items[0] = { item_name: "Credit Adjustment", description: "Credit against " + inv.name, qty: 1, rate: flt(inv.grand_total), amount: flt(inv.grand_total) }; recalc(); }
+        showInvDrop.value = false;
       }
 
       function resetForm(from) {
-        const s=from||{};
-        Object.assign(form,{name:s.name||"",customer:s.customer||"",against_invoice:s.against_invoice||"",date:s.date||todayStr(),reason:s.reason||"",status:s.status||"Draft",notes:s.notes||"",items:s.items?.length?s.items.map(r=>({...r})):[{item_name:"",description:"",qty:1,rate:0,amount:0}],taxes:(s.taxes||[]).map(t=>({...t}))});
-        selCustomer.value=s.customer||""; custSearch.value=s.customer||""; selInvoice.value=null; invSearch.value=s.against_invoice||""; showCustDrop.value=false; showInvDrop.value=false;
+        const s = from || {};
+        Object.assign(form, { name: s.name || "", customer: s.customer || "", against_invoice: s.against_invoice || "", date: s.date || todayStr(), reason: s.reason || "", status: s.status || "Draft", notes: s.notes || "", items: s.items?.length ? s.items.map(r => ({ ...r })) : [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }], taxes: (s.taxes || []).map(t => ({ ...t })) });
+        selCustomer.value = s.customer || ""; custSearch.value = s.customer || ""; selInvoice.value = null; invSearch.value = s.against_invoice || ""; showCustDrop.value = false; showInvDrop.value = false;
       }
 
-      function openAdd()  { drawerMode.value="add";  resetForm();   showDrawer.value=true; }
-      function openEdit(n){ const s=list.value.find(x=>x.name===n); if(!s)return; drawerMode.value="edit"; resetForm(s); showDrawer.value=true; }
-      function openView(n){ const s=list.value.find(x=>x.name===n); if(!s)return; viewNote.value=s; drawerMode.value="view"; showDrawer.value=true; }
+      function openAdd() { drawerMode.value = "add"; resetForm(); showDrawer.value = true; }
+      function openEdit(n) { const s = list.value.find(x => x.name === n); if (!s) return; drawerMode.value = "edit"; resetForm(s); showDrawer.value = true; }
+      function openView(n) { const s = list.value.find(x => x.name === n); if (!s) return; viewNote.value = s; drawerMode.value = "view"; showDrawer.value = true; }
 
       function saveNote(status) {
-        const cust=selCustomer.value||custSearch.value.trim();
-        if(!cust){toast("Please select a customer","error");return;}
-        const existing=list.value.find(s=>s.name===form.name);
-        const doc={name:drawerMode.value==="edit"?form.name:nextNum(),customer:cust,against_invoice:invSearch.value.trim(),date:form.date||todayStr(),reason:form.reason,status,notes:form.notes,items:form.items.filter(r=>r.item_name||r.rate).map(r=>({...r})),taxes:form.taxes.map(t=>({...t})),net_total:Math.round(netTotal.value*100)/100,total_tax:Math.round(taxTotal.value*100)/100,grand_total:grandTotal.value,created_at:existing?.created_at||todayStr()};
-        const arr=readList(); const idx=arr.findIndex(s=>s.name===doc.name);
-        if(idx>=0)arr[idx]=doc; else arr.unshift(doc);
-        storeList(arr); list.value=arr;
-        toast(status==="Submitted"?"Credit note submitted!":"Credit note saved as Draft");
-        showDrawer.value=false;
+        const cust = selCustomer.value || custSearch.value.trim();
+        if (!cust) { toast("Please select a customer", "error"); return; }
+        // Validate: every item row must have an item selected
+        const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
+        if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
+        if (!form.items.length) { toast("Please add at least one item", "error"); return; }
+        const existing = list.value.find(s => s.name === form.name);
+        const doc = { name: drawerMode.value === "edit" ? form.name : nextNum(), customer: cust, against_invoice: invSearch.value.trim(), date: form.date || todayStr(), reason: form.reason, status, notes: form.notes, items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })), taxes: form.taxes.map(t => ({ ...t })), net_total: Math.round(netTotal.value * 100) / 100, total_tax: Math.round(taxTotal.value * 100) / 100, grand_total: grandTotal.value, created_at: existing?.created_at || todayStr() };
+        const arr = readList(); const idx = arr.findIndex(s => s.name === doc.name);
+        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
+        storeList(arr); list.value = arr;
+        toast(status === "Submitted" ? "Credit note submitted!" : "Credit note saved as Draft");
+        showDrawer.value = false;
       }
 
       // ── Delete ──
-      const showDelete  = ref(false);
-      const deleteTarget= ref(null);
-      const deleting    = ref(false);
-      function confirmDelete(n){ deleteTarget.value=n; showDelete.value=true; }
-      function doDelete(){ deleting.value=true; const arr=readList().filter(s=>s.name!==deleteTarget.value.name); storeList(arr); list.value=arr; toast("Credit note deleted"); showDelete.value=false; deleting.value=false; }
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
+      function confirmDelete(n) { deleteTarget.value = n; showDelete.value = true; }
+      function doDelete() { deleting.value = true; const arr = readList().filter(s => s.name !== deleteTarget.value.name); storeList(arr); list.value = arr; toast("Credit note deleted"); showDelete.value = false; deleting.value = false; }
 
       async function load() {
-        loading.value=true; list.value=readList(); loading.value=false;
-        try { customers.value=await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
-        try { allInvoices.value=await apiList("Sales Invoice",{fields:["name","customer","posting_date","grand_total","outstanding_amount"],filters:[["docstatus","=",1]],order:"posting_date desc",limit:300}); } catch {}
+        loading.value = true; list.value = readList(); loading.value = false;
+        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
+        try { allInvoices.value = await apiList("Sales Invoice", { fields: ["name", "customer", "customer_name", "posting_date", "grand_total", "outstanding_amount"], filters: [["docstatus", "=", 1]], order: "posting_date desc", limit: 300 }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
       }
       onMounted(load);
 
-      return { list, loading, search, activeFilter, filtered, counts, summary, STATUS_CFG, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
+      function onItemPick(row) {
+        const matching = allItems.value.find(it => it.item_name === row.item_name);
+        if (matching) {
+          row.rate = matching.standard_rate || 0;
+          row.description = matching.description || "";
+          recalc();
+        }
+      }
+
+      return { list, loading, search, allItems, onItemPick, activeFilter, filtered, counts, summary, STATUS_CFG, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
     },
     template: `
 <div class="b-page">
@@ -5597,11 +5933,31 @@
                 </div>
                 <div class="nim-field" style="position:relative">
                   <label class="nim-label">Against Invoice</label>
-                  <input v-model="invSearch" class="nim-input" placeholder="Search invoice…" autocomplete="off" @focus="showInvDrop=true" @blur="setTimeout(()=>showInvDrop=false,200)" @input="showInvDrop=true"/>
-                  <div v-if="showInvDrop && invDropItems.length" class="qt-cust-drop">
-                    <div v-for="inv in invDropItems" :key="inv.name" class="qt-drop-item" @mousedown.prevent="pickInvoice(inv)">
-                      <div style="font-weight:600;font-size:13px">{{inv.name}}</div>
-                      <div style="font-size:11px;color:#9ca3af">{{inv.customer}} · {{fmt(inv.grand_total)}}</div>
+                  <div style="position:relative">
+                    <input v-model="invSearch" class="nim-input" placeholder="Search invoice…" autocomplete="off"
+                      style="padding-right:32px"
+                      @focus="showInvDrop=true" @blur="setTimeout(()=>showInvDrop=false,250)" @input="showInvDrop=true"/>
+                    <span @mousedown.prevent="showInvDrop=!showInvDrop" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;color:#6b7280;pointer-events:all">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>
+                    </span>
+                  </div>
+                  <div v-if="showInvDrop" style="position:absolute;left:0;right:0;top:100%;background:#fff;border:1px solid #e8ecf0;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.12);z-index:999;max-height:220px;overflow-y:auto">
+                    <div v-if="!invDropItems.length" style="padding:12px 14px;font-size:13px;color:#9ca3af">
+                      {{selCustomer ? 'No submitted invoices for this customer' : 'No submitted invoices found'}}
+                    </div>
+                    <div v-for="inv in invDropItems" :key="inv.name"
+                      @mousedown.prevent="pickInvoice(inv)"
+                      style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #f3f4f6;display:flex;justify-content:space-between;align-items:center"
+                      onmouseover="this.style.background='#f8f9fa'" onmouseout="this.style.background='#fff'">
+                      <div>
+                        <div style="font-weight:600;font-size:13px;color:#2563eb;font-family:monospace">{{inv.name}}</div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:1px">{{inv.customer}} · {{fmtDate(inv.posting_date)}}</div>
+                      </div>
+                      <div style="text-align:right;flex-shrink:0;margin-left:12px">
+                        <div style="font-size:13px;font-weight:700;color:#1a1d23">{{fmt(inv.grand_total)}}</div>
+                        <div style="font-size:11px;color:#e03131" v-if="flt(inv.outstanding_amount)>0">{{fmt(inv.outstanding_amount)}} due</div>
+                        <div style="font-size:11px;color:#059669" v-else>Paid</div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -5611,9 +5967,22 @@
               </div>
               <div class="nim-section-header" style="margin-bottom:8px"><div class="cust-sec-label" style="margin:0">Items</div></div>
               <div class="nim-table-wrap nim-mb">
-                <table class="nim-table"><thead><tr><th style="width:30%">Item</th><th style="width:26%">Description</th><th style="width:10%;text-align:center">Qty</th><th style="width:16%;text-align:right">Rate (₹)</th><th style="width:14%;text-align:right">Amount</th><th style="width:4%"></th></tr></thead>
-                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
-                  <td><input v-model="item.item_name" class="nim-cell" placeholder="Item"/></td>
+                <table class="nim-table"><thead><tr>
+                  <th style="width:30%">Item <span style="color:#e03131">*</span></th>
+                  <th style="width:26%">Description</th>
+                  <th style="width:10%;text-align:center">Qty</th>
+                  <th style="width:16%;text-align:right">Rate (₹)</th>
+                  <th style="width:14%;text-align:right">Amount</th>
+                  <th style="width:4%"></th>
+                </tr></thead>
+                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr" :style="!item.item_name ? 'background:#fff5f5' : ''">
+                  <td>
+                    <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)" required
+                      :style="!item.item_name ? 'border:1.5px solid #e03131;color:#9ca3af;font-style:italic' : 'color:#1a1d23'">
+                      <option value="" disabled selected>— Select Item —</option>
+                      <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
+                    </select>
+                  </td>
                   <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                   <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
                   <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5683,104 +6052,104 @@
     name: "PaymentsReceived",
     setup() {
       const LKEY = "books_payments_received";
-      const list         = ref([]);
-      const customers    = ref([]);
-      const loading      = ref(true);
-      const search       = ref("");
+      const list = ref([]);
+      const customers = ref([]);
+      const loading = ref(true);
+      const search = ref("");
       const activeFilter = ref("all");
 
-      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
       function nextNum() {
-        const n=readList().map(x=>parseInt((x.name||"PAY-0").replace(/\D/g,""))||0);
-        return "PAY-" + String((n.length?Math.max(...n):0)+1).padStart(4,"0");
+        const n = readList().map(x => parseInt((x.name || "PAY-0").replace(/\D/g, "")) || 0);
+        return "PAY-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(4, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
 
-      const MODES = ["Cash","Bank Transfer","UPI","Cheque","Card","Other"];
-      const MODE_CSS = { Cash:"#f0fff4|#276539", "Bank Transfer":"#eff6ff|#2563eb", UPI:"#f3e8ff|#7c3aed", Cheque:"#fefce8|#854d0e", Card:"#fdf2f8|#9d174d", Other:"#f3f4f6|#374151" };
+      const MODES = ["Cash", "Bank Transfer", "UPI", "Cheque", "Card", "Other"];
+      const MODE_CSS = { Cash: "#f0fff4|#276539", "Bank Transfer": "#eff6ff|#2563eb", UPI: "#f3e8ff|#7c3aed", Cheque: "#fefce8|#854d0e", Card: "#fdf2f8|#9d174d", Other: "#f3f4f6|#374151" };
 
       const summary = computed(() => {
-        const total = list.value.reduce((s,p)=>s+flt(p.amount),0);
-        const now = new Date(); const mo = now.getFullYear()+"-"+String(now.getMonth()+1).padStart(2,"0");
-        const moTotal = list.value.filter(p=>(p.date||"").startsWith(mo)).reduce((s,p)=>s+flt(p.amount),0);
-        const avg = list.value.length ? Math.round(total/list.value.length) : 0;
-        return { total, moTotal, count:list.value.length, avg };
+        const total = list.value.reduce((s, p) => s + flt(p.amount), 0);
+        const now = new Date(); const mo = now.getFullYear() + "-" + String(now.getMonth() + 1).padStart(2, "0");
+        const moTotal = list.value.filter(p => (p.date || "").startsWith(mo)).reduce((s, p) => s + flt(p.amount), 0);
+        const avg = list.value.length ? Math.round(total / list.value.length) : 0;
+        return { total, moTotal, count: list.value.length, avg };
       });
 
       const counts = computed(() => {
-        const r={};
-        MODES.forEach(m=>{ r[m]=list.value.filter(p=>p.mode===m).length; });
+        const r = {};
+        MODES.forEach(m => { r[m] = list.value.filter(p => p.mode === m).length; });
         return r;
       });
 
       const filtered = computed(() => {
-        let r = activeFilter.value==="all" ? list.value : list.value.filter(p=>p.mode===activeFilter.value);
-        const q=search.value.toLowerCase().trim();
-        if(q) r=r.filter(p=>(p.name+p.customer+(p.ref||"")+(p.mode||"")).toLowerCase().includes(q));
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(p => p.mode === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(p => (p.name + p.customer + (p.ref || "") + (p.mode || "")).toLowerCase().includes(q));
         return r;
       });
 
       // Drawer
-      const showDrawer   = ref(false);
-      const drawerMode   = ref("add");
-      const saving       = ref(false);
-      const selCustomer  = ref("");
-      const custSearch   = ref("");
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const saving = ref(false);
+      const selCustomer = ref("");
+      const custSearch = ref("");
       const showCustDrop = ref(false);
-      const showCheque   = ref(false);
+      const showCheque = ref(false);
 
       const custDropItems = computed(() => {
-        const q=custSearch.value.toLowerCase();
-        return customers.value.filter(c=>(c.customer_name||c.name).toLowerCase().includes(q)||c.name.toLowerCase().includes(q)).slice(0,40);
+        const q = custSearch.value.toLowerCase();
+        return customers.value.filter(c => (c.customer_name || c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)).slice(0, 40);
       });
 
-      const form = reactive({ name:"", customer:"", date:"", mode:"Bank Transfer", amount:0, ref:"", remarks:"", cheque_no:"", cheque_date:"", bank_name:"" });
+      const form = reactive({ name: "", customer: "", date: "", mode: "Bank Transfer", amount: 0, ref: "", remarks: "", cheque_no: "", cheque_date: "", bank_name: "" });
 
-      function pickCustomer(c) { selCustomer.value=c.name; custSearch.value=c.customer_name||c.name; form.customer=c.name; showCustDrop.value=false; }
+      function pickCustomer(c) { selCustomer.value = c.name; custSearch.value = c.customer_name || c.name; form.customer = c.name; showCustDrop.value = false; }
 
       function resetForm(from) {
-        const s=from||{};
-        Object.assign(form,{name:s.name||"",customer:s.customer||"",date:s.date||todayStr(),mode:s.mode||"Bank Transfer",amount:s.amount||0,ref:s.ref||"",remarks:s.remarks||"",cheque_no:s.cheque_no||"",cheque_date:s.cheque_date||"",bank_name:s.bank_name||""});
-        selCustomer.value=s.customer||""; custSearch.value=s.customer||""; showCustDrop.value=false; showCheque.value=(s.mode==="Cheque");
+        const s = from || {};
+        Object.assign(form, { name: s.name || "", customer: s.customer || "", date: s.date || todayStr(), mode: s.mode || "Bank Transfer", amount: s.amount || 0, ref: s.ref || "", remarks: s.remarks || "", cheque_no: s.cheque_no || "", cheque_date: s.cheque_date || "", bank_name: s.bank_name || "" });
+        selCustomer.value = s.customer || ""; custSearch.value = s.customer || ""; showCustDrop.value = false; showCheque.value = (s.mode === "Cheque");
       }
 
-      function openAdd()  { drawerMode.value="add";  resetForm();   showDrawer.value=true; }
-      function openEdit(n){ const s=list.value.find(x=>x.name===n); if(!s)return; drawerMode.value="edit"; resetForm(s); showDrawer.value=true; }
+      function openAdd() { drawerMode.value = "add"; resetForm(); showDrawer.value = true; }
+      function openEdit(n) { const s = list.value.find(x => x.name === n); if (!s) return; drawerMode.value = "edit"; resetForm(s); showDrawer.value = true; }
 
       function savePayment() {
-        const cust=selCustomer.value||custSearch.value.trim();
-        if(!cust){toast("Please select a customer","error");return;}
-        if(!flt(form.amount)){toast("Please enter an amount","error");return;}
-        const existing=list.value.find(s=>s.name===form.name);
-        const doc={name:drawerMode.value==="edit"?form.name:nextNum(),customer:cust,date:form.date||todayStr(),mode:form.mode,amount:flt(form.amount),ref:form.ref.trim(),remarks:form.remarks.trim(),cheque_no:form.cheque_no,cheque_date:form.cheque_date,bank_name:form.bank_name,created_at:existing?.created_at||todayStr()};
-        const arr=readList(); const idx=arr.findIndex(s=>s.name===doc.name);
-        if(idx>=0)arr[idx]=doc; else arr.unshift(doc);
-        storeList(arr); list.value=arr;
-        toast("Payment recorded!"); showDrawer.value=false;
+        const cust = selCustomer.value || custSearch.value.trim();
+        if (!cust) { toast("Please select a customer", "error"); return; }
+        if (!flt(form.amount)) { toast("Please enter an amount", "error"); return; }
+        const existing = list.value.find(s => s.name === form.name);
+        const doc = { name: drawerMode.value === "edit" ? form.name : nextNum(), customer: cust, date: form.date || todayStr(), mode: form.mode, amount: flt(form.amount), ref: form.ref.trim(), remarks: form.remarks.trim(), cheque_no: form.cheque_no, cheque_date: form.cheque_date, bank_name: form.bank_name, created_at: existing?.created_at || todayStr() };
+        const arr = readList(); const idx = arr.findIndex(s => s.name === doc.name);
+        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
+        storeList(arr); list.value = arr;
+        toast("Payment recorded!"); showDrawer.value = false;
       }
 
       // Receipt modal
       const showReceipt = ref(false);
       const receiptData = ref(null);
-      function openReceipt(n){ receiptData.value=list.value.find(x=>x.name===n); showReceipt.value=true; }
+      function openReceipt(n) { receiptData.value = list.value.find(x => x.name === n); showReceipt.value = true; }
 
       // Delete
-      const showDelete  = ref(false);
-      const deleteTarget= ref(null);
-      const deleting    = ref(false);
-      function confirmDelete(n){ deleteTarget.value=n; showDelete.value=true; }
-      function doDelete(){ deleting.value=true; const arr=readList().filter(s=>s.name!==deleteTarget.value.name); storeList(arr); list.value=arr; toast("Payment deleted"); showDelete.value=false; deleting.value=false; }
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
+      function confirmDelete(n) { deleteTarget.value = n; showDelete.value = true; }
+      function doDelete() { deleting.value = true; const arr = readList().filter(s => s.name !== deleteTarget.value.name); storeList(arr); list.value = arr; toast("Payment deleted"); showDelete.value = false; deleting.value = false; }
 
       async function load() {
-        loading.value=true; list.value=readList(); loading.value=false;
+        loading.value = true; list.value = readList(); loading.value = false;
         try {
-          const frappe = await apiList("Payment Entry",{fields:["name","party","posting_date","mode_of_payment","paid_amount","reference_no","remarks","docstatus"],filters:[["payment_type","=","Receive"],["docstatus","=",1]],order:"posting_date desc",limit:300});
-          const existing = new Set(list.value.filter(p=>p.from_frappe).map(p=>p.frappe_ref));
-          const newFromFrappe = (frappe||[]).filter(r=>!existing.has(r.name)).map(r=>({name:nextNum(),frappe_ref:r.name,from_frappe:true,customer:r.party,date:r.posting_date,mode:r.mode_of_payment||"Bank Transfer",amount:r.paid_amount,ref:r.reference_no||"",remarks:r.remarks||"",created_at:r.posting_date}));
-          if(newFromFrappe.length){ const arr=[...readList(),...newFromFrappe]; storeList(arr); list.value=arr; }
-        } catch {}
-        try { customers.value=await apiList("Customer",{fields:["name","customer_name"],filters:[["disabled","=",0]],order:"customer_name asc",limit:300}); } catch {}
+          const frappe = await apiList("Payment Entry", { fields: ["name", "party", "posting_date", "mode_of_payment", "paid_amount", "reference_no", "remarks", "docstatus"], filters: [["payment_type", "=", "Receive"], ["docstatus", "=", 1]], order: "posting_date desc", limit: 300 });
+          const existing = new Set(list.value.filter(p => p.from_frappe).map(p => p.frappe_ref));
+          const newFromFrappe = (frappe || []).filter(r => !existing.has(r.name)).map(r => ({ name: nextNum(), frappe_ref: r.name, from_frappe: true, customer: r.party, date: r.posting_date, mode: r.mode_of_payment || "Bank Transfer", amount: r.paid_amount, ref: r.reference_no || "", remarks: r.remarks || "", created_at: r.posting_date }));
+          if (newFromFrappe.length) { const arr = [...readList(), ...newFromFrappe]; storeList(arr); list.value = arr; }
+        } catch { }
+        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
       }
       onMounted(load);
 
@@ -5943,104 +6312,104 @@
     name: "EwayBills",
     setup() {
       const LKEY = "books_eway_bills";
-      const list         = ref([]);
-      const loading      = ref(true);
-      const search       = ref("");
+      const list = ref([]);
+      const loading = ref(true);
+      const search = ref("");
       const activeFilter = ref("all");
 
-      function storeList(d) { try { localStorage.setItem(LKEY,JSON.stringify(d)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY)||"[]"); } catch { return []; } }
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
       function nextNum() {
-        const n=readList().map(x=>parseInt((x.name||"EWB-0").replace(/\D/g,""))||0);
-        return "EWB-" + String((n.length?Math.max(...n):0)+1).padStart(6,"0");
+        const n = readList().map(x => parseInt((x.name || "EWB-0").replace(/\D/g, "")) || 0);
+        return "EWB-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(6, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       function calcValidDays(dist, vehicleType) {
-        const d=parseInt(dist)||0;
-        if(vehicleType==="Over Dimensional Cargo") return 20;
-        if(d<100) return 1; if(d<300) return 3; if(d<500) return 5;
-        if(d<1000) return 10; return 15;
+        const d = parseInt(dist) || 0;
+        if (vehicleType === "Over Dimensional Cargo") return 20;
+        if (d < 100) return 1; if (d < 300) return 3; if (d < 500) return 5;
+        if (d < 1000) return 10; return 15;
       }
       function calcExpiry(genDate, dist, vehicleType) {
-        if(!genDate) return "";
-        const dt=new Date(genDate); dt.setDate(dt.getDate()+calcValidDays(dist,vehicleType));
-        return dt.toISOString().slice(0,10);
+        if (!genDate) return "";
+        const dt = new Date(genDate); dt.setDate(dt.getDate() + calcValidDays(dist, vehicleType));
+        return dt.toISOString().slice(0, 10);
       }
       function isExpired(b) {
-        if(b.status==="Cancelled") return false;
+        if (b.status === "Cancelled") return false;
         return b.expiry_date && new Date(b.expiry_date) < new Date();
       }
-      function effectiveStatus(b) { return isExpired(b)?"Expired":b.status||"Active"; }
+      function effectiveStatus(b) { return isExpired(b) ? "Expired" : b.status || "Active"; }
 
-      const STATUS_CFG = { Active:{cls:"b-badge-green",lbl:"Active"}, Expired:{cls:"b-badge-red",lbl:"Expired"}, Cancelled:{cls:"b-badge-muted",lbl:"Cancelled"} };
+      const STATUS_CFG = { Active: { cls: "b-badge-green", lbl: "Active" }, Expired: { cls: "b-badge-red", lbl: "Expired" }, Cancelled: { cls: "b-badge-muted", lbl: "Cancelled" } };
 
       const summary = computed(() => {
-        const active=list.value.filter(b=>effectiveStatus(b)==="Active").length;
-        const expiring=list.value.filter(b=>{ if(effectiveStatus(b)!=="Active")return false; const d=Math.round((new Date(b.expiry_date)-new Date())/(1000*60*60*24)); return d>=0&&d<=2; }).length;
-        const value=list.value.reduce((s,b)=>s+flt(b.taxable_value),0);
-        return { total:list.value.length, active, expiring, value };
+        const active = list.value.filter(b => effectiveStatus(b) === "Active").length;
+        const expiring = list.value.filter(b => { if (effectiveStatus(b) !== "Active") return false; const d = Math.round((new Date(b.expiry_date) - new Date()) / (1000 * 60 * 60 * 24)); return d >= 0 && d <= 2; }).length;
+        const value = list.value.reduce((s, b) => s + flt(b.taxable_value), 0);
+        return { total: list.value.length, active, expiring, value };
       });
 
       const counts = computed(() => ({
-        Active:    list.value.filter(b=>effectiveStatus(b)==="Active").length,
-        Expired:   list.value.filter(b=>effectiveStatus(b)==="Expired").length,
-        Cancelled: list.value.filter(b=>b.status==="Cancelled").length,
+        Active: list.value.filter(b => effectiveStatus(b) === "Active").length,
+        Expired: list.value.filter(b => effectiveStatus(b) === "Expired").length,
+        Cancelled: list.value.filter(b => b.status === "Cancelled").length,
       }));
 
       const filtered = computed(() => {
-        let r = activeFilter.value==="all" ? list.value : list.value.filter(b=>effectiveStatus(b)===activeFilter.value);
-        const q=search.value.toLowerCase().trim();
-        if(q) r=r.filter(b=>(b.name+(b.from_gstin||"")+(b.to_gstin||"")+(b.vehicle_no||"")+(b.invoice_no||"")).toLowerCase().includes(q));
+        let r = activeFilter.value === "all" ? list.value : list.value.filter(b => effectiveStatus(b) === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(b => (b.name + (b.from_gstin || "") + (b.to_gstin || "") + (b.vehicle_no || "") + (b.invoice_no || "")).toLowerCase().includes(q));
         return r;
       });
 
       // Drawer
       const showDrawer = ref(false);
       const drawerMode = ref("add");
-      const saving     = ref(false);
-      const viewBill   = ref(null);
+      const saving = ref(false);
+      const viewBill = ref(null);
 
-      const form = reactive({ name:"", ewb_no:"", invoice_no:"", invoice_date:"", doc_type:"Tax Invoice", supply_type:"Outward", from_gstin:"", from_name:"", from_address:"", to_gstin:"", to_name:"", to_address:"", taxable_value:0, igst:0, cgst:0, sgst:0, cess:0, hsn_code:"", description:"", quantity:0, unit:"NOS", transport_mode:"Road", distance:0, transporter_id:"", transporter_name:"", vehicle_no:"", vehicle_type:"Regular", generated_date:"", expiry_date:"", status:"Active" });
+      const form = reactive({ name: "", ewb_no: "", invoice_no: "", invoice_date: "", doc_type: "Tax Invoice", supply_type: "Outward", from_gstin: "", from_name: "", from_address: "", to_gstin: "", to_name: "", to_address: "", taxable_value: 0, igst: 0, cgst: 0, sgst: 0, cess: 0, hsn_code: "", description: "", quantity: 0, unit: "NOS", transport_mode: "Road", distance: 0, transporter_id: "", transporter_name: "", vehicle_no: "", vehicle_type: "Regular", generated_date: "", expiry_date: "", status: "Active" });
 
-      function updateExpiry() { if(form.generated_date&&form.distance) form.expiry_date=calcExpiry(form.generated_date,form.distance,form.vehicle_type); }
+      function updateExpiry() { if (form.generated_date && form.distance) form.expiry_date = calcExpiry(form.generated_date, form.distance, form.vehicle_type); }
 
       function resetForm(from) {
-        const s=from||{};
-        Object.assign(form,{name:s.name||"",ewb_no:s.ewb_no||"",invoice_no:s.invoice_no||"",invoice_date:s.invoice_date||todayStr(),doc_type:s.doc_type||"Tax Invoice",supply_type:s.supply_type||"Outward",from_gstin:s.from_gstin||"",from_name:s.from_name||"",from_address:s.from_address||"",to_gstin:s.to_gstin||"",to_name:s.to_name||"",to_address:s.to_address||"",taxable_value:s.taxable_value||0,igst:s.igst||0,cgst:s.cgst||0,sgst:s.sgst||0,cess:s.cess||0,hsn_code:s.hsn_code||"",description:s.description||"",quantity:s.quantity||0,unit:s.unit||"NOS",transport_mode:s.transport_mode||"Road",distance:s.distance||0,transporter_id:s.transporter_id||"",transporter_name:s.transporter_name||"",vehicle_no:s.vehicle_no||"",vehicle_type:s.vehicle_type||"Regular",generated_date:s.generated_date||todayStr(),expiry_date:s.expiry_date||calcExpiry(todayStr(),s.distance||0,s.vehicle_type||"Regular"),status:s.status||"Active"});
+        const s = from || {};
+        Object.assign(form, { name: s.name || "", ewb_no: s.ewb_no || "", invoice_no: s.invoice_no || "", invoice_date: s.invoice_date || todayStr(), doc_type: s.doc_type || "Tax Invoice", supply_type: s.supply_type || "Outward", from_gstin: s.from_gstin || "", from_name: s.from_name || "", from_address: s.from_address || "", to_gstin: s.to_gstin || "", to_name: s.to_name || "", to_address: s.to_address || "", taxable_value: s.taxable_value || 0, igst: s.igst || 0, cgst: s.cgst || 0, sgst: s.sgst || 0, cess: s.cess || 0, hsn_code: s.hsn_code || "", description: s.description || "", quantity: s.quantity || 0, unit: s.unit || "NOS", transport_mode: s.transport_mode || "Road", distance: s.distance || 0, transporter_id: s.transporter_id || "", transporter_name: s.transporter_name || "", vehicle_no: s.vehicle_no || "", vehicle_type: s.vehicle_type || "Regular", generated_date: s.generated_date || todayStr(), expiry_date: s.expiry_date || calcExpiry(todayStr(), s.distance || 0, s.vehicle_type || "Regular"), status: s.status || "Active" });
       }
 
-      function openAdd()  { drawerMode.value="add";  resetForm();   showDrawer.value=true; }
-      function openView(n){ const b=list.value.find(x=>x.name===n); if(!b)return; viewBill.value=b; drawerMode.value="view"; showDrawer.value=true; }
-      function openEdit(n){ const b=list.value.find(x=>x.name===n); if(!b)return; drawerMode.value="edit"; resetForm(b); showDrawer.value=true; }
+      function openAdd() { drawerMode.value = "add"; resetForm(); showDrawer.value = true; }
+      function openView(n) { const b = list.value.find(x => x.name === n); if (!b) return; viewBill.value = b; drawerMode.value = "view"; showDrawer.value = true; }
+      function openEdit(n) { const b = list.value.find(x => x.name === n); if (!b) return; drawerMode.value = "edit"; resetForm(b); showDrawer.value = true; }
 
       function saveEWB() {
-        if(!form.invoice_no.trim()){toast("Please enter Invoice No.","error");return;}
-        const existing=list.value.find(s=>s.name===form.name);
-        const doc={...form,name:drawerMode.value==="edit"?form.name:nextNum(),created_at:existing?.created_at||todayStr()};
-        const arr=readList(); const idx=arr.findIndex(s=>s.name===doc.name);
-        if(idx>=0)arr[idx]=doc; else arr.unshift(doc);
-        storeList(arr); list.value=arr; toast("E-Way Bill saved!"); showDrawer.value=false;
+        if (!form.invoice_no.trim()) { toast("Please enter Invoice No.", "error"); return; }
+        const existing = list.value.find(s => s.name === form.name);
+        const doc = { ...form, name: drawerMode.value === "edit" ? form.name : nextNum(), created_at: existing?.created_at || todayStr() };
+        const arr = readList(); const idx = arr.findIndex(s => s.name === doc.name);
+        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
+        storeList(arr); list.value = arr; toast("E-Way Bill saved!"); showDrawer.value = false;
       }
 
       function cancelBill(b) {
-        const arr=readList(); const o=arr.find(x=>x.name===b.name); if(!o)return;
-        o.status="Cancelled"; storeList(arr); list.value=arr; toast("E-Way Bill cancelled"); showDrawer.value=false;
+        const arr = readList(); const o = arr.find(x => x.name === b.name); if (!o) return;
+        o.status = "Cancelled"; storeList(arr); list.value = arr; toast("E-Way Bill cancelled"); showDrawer.value = false;
       }
 
       // Delete
-      const showDelete  = ref(false);
-      const deleteTarget= ref(null);
-      const deleting    = ref(false);
-      function confirmDelete(b){ deleteTarget.value=b; showDelete.value=true; }
-      function doDelete(){ deleting.value=true; const arr=readList().filter(s=>s.name!==deleteTarget.value.name); storeList(arr); list.value=arr; toast("E-Way Bill deleted"); showDelete.value=false; deleting.value=false; }
+      const showDelete = ref(false);
+      const deleteTarget = ref(null);
+      const deleting = ref(false);
+      function confirmDelete(b) { deleteTarget.value = b; showDelete.value = true; }
+      function doDelete() { deleting.value = true; const arr = readList().filter(s => s.name !== deleteTarget.value.name); storeList(arr); list.value = arr; toast("E-Way Bill deleted"); showDelete.value = false; deleting.value = false; }
 
       function daysLeft(b) {
-        if(!b.expiry_date||effectiveStatus(b)!=="Active") return null;
-        return Math.round((new Date(b.expiry_date)-new Date())/(1000*60*60*24));
+        if (!b.expiry_date || effectiveStatus(b) !== "Active") return null;
+        return Math.round((new Date(b.expiry_date) - new Date()) / (1000 * 60 * 60 * 24));
       }
 
-      async function load() { loading.value=true; list.value=readList(); loading.value=false; }
+      async function load() { loading.value = true; list.value = readList(); loading.value = false; }
       onMounted(load);
 
       return { list, loading, search, activeFilter, filtered, counts, summary, STATUS_CFG, effectiveStatus, daysLeft, showDrawer, drawerMode, saving, viewBill, form, updateExpiry, resetForm, saveEWB, cancelBill, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
@@ -6251,88 +6620,88 @@
     setup() {
       const router = useRouter();
       const LKEY = "books_purchase_orders";
-      const STEPS = ["Draft","Sent","Confirmed","Received","Billed"];
+      const STEPS = ["Draft", "Sent", "Confirmed", "Received", "Billed"];
 
       /* ── localStorage helpers ── */
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch {} }
-      function readList()   { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
+      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
+      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
       function nextNum() {
-        const nums = readList().map(o => parseInt((o.name||"PO-0").replace(/\D/g,""))||0);
-        return "PO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4,"0");
+        const nums = readList().map(o => parseInt((o.name || "PO-0").replace(/\D/g, "")) || 0);
+        return "PO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
       }
-      function todayStr() { return new Date().toISOString().slice(0,10); }
-      function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
+      function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); }
 
       /* ── State ── */
-      const list         = ref([]);
-      const vendors      = ref([]);
-      const allItems     = ref([]);
-      const loading      = ref(true);
-      const search       = ref("");
+      const list = ref([]);
+      const vendors = ref([]);
+      const allItems = ref([]);
+      const loading = ref(true);
+      const search = ref("");
       const activeFilter = ref("all");
 
       /* ── Drawer state ── */
-      const showDrawer   = ref(false);
-      const drawerMode   = ref("add"); // "add" | "edit" | "view"
-      const saving       = ref(false);
-      const viewOrder    = ref(null);
+      const showDrawer = ref(false);
+      const drawerMode = ref("add"); // "add" | "edit" | "view"
+      const saving = ref(false);
+      const viewOrder = ref(null);
 
-      const selVendor    = ref("");
-      const vendSearch   = ref("");
+      const selVendor = ref("");
+      const vendSearch = ref("");
       const showVendDrop = ref(false);
-      const itemSearch   = ref([]);  // per-row item search state
+      const itemSearch = ref([]);  // per-row item search state
       const showItemDrop = ref([]);  // per-row dropdown visibility
 
       const form = reactive({
         name: "", vendor: "", order_date: "", expected_date: "",
         status: "Draft", vendor_ref: "", delivery_address: "", terms: "",
-        items: [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
         taxes: [],
         net_total: 0, total_tax: 0, grand_total: 0,
         received_value: 0, created_at: "",
       });
 
       /* ── Confirm modals ── */
-      const showConvert  = ref(false);
-      const convertTarget= ref(null);
-      const showDelete   = ref(false);
+      const showConvert = ref(false);
+      const convertTarget = ref(null);
+      const showDelete = ref(false);
       const deleteTarget = ref(null);
-      const deleting     = ref(false);
+      const deleting = ref(false);
 
       /* ── Summary ── */
       const summary = computed(() => {
-        const pending   = list.value.filter(o => ["Sent","Confirmed"].includes(o.status)).length;
-        const received  = list.value.filter(o => o.status === "Received").length;
-        const value     = list.value.reduce((s,o) => s + flt(o.grand_total), 0);
+        const pending = list.value.filter(o => ["Sent", "Confirmed"].includes(o.status)).length;
+        const received = list.value.filter(o => o.status === "Received").length;
+        const value = list.value.reduce((s, o) => s + flt(o.grand_total), 0);
         return { total: list.value.length, pending, received, value };
       });
 
       const STATUS_CFG = {
-        Draft:     { cls: "b-badge-muted",  lbl: "Draft"     },
-        Sent:      { cls: "b-badge-blue",   lbl: "Sent"      },
-        Confirmed: { cls: "b-badge-amber",  lbl: "Confirmed" },
-        Received:  { cls: "b-badge-green",  lbl: "Received"  },
-        Billed:    { cls: "b-badge-purple", lbl: "Billed"    },
-        Cancelled: { cls: "b-badge-red",    lbl: "Cancelled" },
+        Draft: { cls: "b-badge-muted", lbl: "Draft" },
+        Sent: { cls: "b-badge-blue", lbl: "Sent" },
+        Confirmed: { cls: "b-badge-amber", lbl: "Confirmed" },
+        Received: { cls: "b-badge-green", lbl: "Received" },
+        Billed: { cls: "b-badge-purple", lbl: "Billed" },
+        Cancelled: { cls: "b-badge-red", lbl: "Cancelled" },
       };
 
       const counts = computed(() => {
         const r = {};
-        ["Draft","Sent","Confirmed","Received","Billed"].forEach(s => {
+        ["Draft", "Sent", "Confirmed", "Received", "Billed"].forEach(s => {
           r[s] = list.value.filter(o => o.status === s).length;
         });
         return r;
       });
 
       const pillCls = (k) => ({
-        Draft:"zb-pc-muted", Sent:"b-badge-blue", Confirmed:"zb-pc-amber",
-        Received:"zb-pc-green", Billed:"zb-pc-muted"
+        Draft: "zb-pc-muted", Sent: "b-badge-blue", Confirmed: "zb-pc-amber",
+        Received: "zb-pc-green", Billed: "zb-pc-muted"
       })[k] || "zb-pc-muted";
 
       const filtered = computed(() => {
         let r = activeFilter.value === "all" ? list.value : list.value.filter(o => o.status === activeFilter.value);
         const q = search.value.toLowerCase().trim();
-        if (q) r = r.filter(o => (o.name + o.vendor + (o.vendor_ref||"")).toLowerCase().includes(q));
+        if (q) r = r.filter(o => (o.name + o.vendor + (o.vendor_ref || "")).toLowerCase().includes(q));
         return r;
       });
 
@@ -6346,15 +6715,15 @@
         loading.value = true;
         list.value = readList();
         loading.value = false;
-        try { vendors.value = await apiList("Supplier", { fields:["name","supplier_name"], filters:[["disabled","=",0]], order:"supplier_name asc", limit:300 }); } catch {}
-        try { allItems.value = await apiGET("zoho_books_clone.api.books_data.get_items", {}) || []; } catch {}
+        try { vendors.value = await apiList("Supplier", { fields: ["name", "supplier_name"], filters: [["disabled", "=", 0]], order: "supplier_name asc", limit: 300 }); } catch { }
+        try { allItems.value = await apiGET("zoho_books_clone.api.books_data.get_items", {}) || []; } catch { }
       }
 
       /* ── Vendor dropdown helpers ── */
       const vendDropItems = computed(() => {
         const q = vendSearch.value.toLowerCase();
         return vendors.value.filter(v =>
-          (v.supplier_name||"").toLowerCase().includes(q) || v.name.toLowerCase().includes(q)
+          (v.supplier_name || "").toLowerCase().includes(q) || v.name.toLowerCase().includes(q)
         ).slice(0, 40);
       });
       function pickVendor(v) {
@@ -6367,14 +6736,14 @@
       /* ── Item dropdown helpers ── */
       function itemDropItems(i) {
         const q = (itemSearch.value[i] || "").toLowerCase();
-        return allItems.value.filter(it => (it.item_name||"").toLowerCase().includes(q)).slice(0, 25);
+        return allItems.value.filter(it => (it.item_name || "").toLowerCase().includes(q)).slice(0, 25);
       }
       function pickItem(i, it) {
-        form.items[i].item_name  = it.item_name || it.name;
-        form.items[i].rate       = flt(it.standard_rate);
+        form.items[i].item_name = it.item_name || it.name;
+        form.items[i].rate = flt(it.standard_rate);
         form.items[i].description = it.description || "";
         recalc();
-        showItemDrop.value = showItemDrop.value.map((v,idx) => idx === i ? false : v);
+        showItemDrop.value = showItemDrop.value.map((v, idx) => idx === i ? false : v);
       }
 
       /* ── Recalc ── */
@@ -6382,13 +6751,13 @@
         form.items.forEach(r => { r.amount = Math.round(flt(r.qty) * flt(r.rate) * 100) / 100; });
         const net = form.items.reduce((s, r) => s + flt(r.amount), 0);
         form.taxes.forEach(t => { t.tax_amount = flt(t.rate) > 0 ? Math.round(net * flt(t.rate) / 100 * 100) / 100 : 0; });
-        form.net_total   = Math.round(net * 100) / 100;
-        form.total_tax   = Math.round(form.taxes.reduce((s,t) => s + flt(t.tax_amount), 0) * 100) / 100;
+        form.net_total = Math.round(net * 100) / 100;
+        form.total_tax = Math.round(form.taxes.reduce((s, t) => s + flt(t.tax_amount), 0) * 100) / 100;
         form.grand_total = Math.round((net + form.total_tax) * 100) / 100;
       }
 
       function addRow() {
-        form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 });
+        form.items.push({ item_name: "", description: "", qty: 1, rate: 0, amount: 0 });
         itemSearch.value.push("");
         showItemDrop.value.push(false);
       }
@@ -6400,28 +6769,28 @@
           recalc();
         }
       }
-      function addTax()    { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
-      function removeTax(i){ form.taxes.splice(i, 1); recalc(); }
+      function addTax() { form.taxes.push({ tax_type: "CGST", description: "CGST", rate: 9, tax_amount: 0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i, 1); recalc(); }
 
       /* ── Reset form ── */
       function resetForm(from) {
         const s = from || {};
         Object.assign(form, {
-          name:             s.name            || "",
-          vendor:           s.vendor          || "",
-          order_date:       s.order_date      || todayStr(),
-          expected_date:    s.expected_date   || addDays(todayStr(), 14),
-          status:           s.status          || "Draft",
-          vendor_ref:       s.vendor_ref      || "",
+          name: s.name || "",
+          vendor: s.vendor || "",
+          order_date: s.order_date || todayStr(),
+          expected_date: s.expected_date || addDays(todayStr(), 14),
+          status: s.status || "Draft",
+          vendor_ref: s.vendor_ref || "",
           delivery_address: s.delivery_address || "",
-          terms:            s.terms           || "",
-          items: s.items?.length ? s.items.map(r => ({...r})) : [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
-          taxes: (s.taxes||[]).map(t => ({...t})),
-          net_total:      flt(s.net_total),
-          total_tax:      flt(s.total_tax),
-          grand_total:    flt(s.grand_total),
+          terms: s.terms || "",
+          items: s.items?.length ? s.items.map(r => ({ ...r })) : [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
+          taxes: (s.taxes || []).map(t => ({ ...t })),
+          net_total: flt(s.net_total),
+          total_tax: flt(s.total_tax),
+          grand_total: flt(s.grand_total),
           received_value: flt(s.received_value),
-          created_at:     s.created_at || todayStr(),
+          created_at: s.created_at || todayStr(),
         });
         selVendor.value = s.vendor || "";
         vendSearch.value = s.vendor || "";
@@ -6456,21 +6825,21 @@
         recalc();
         const existing = list.value.find(o => o.name === form.name);
         const doc = {
-          name:             form.name || nextNum(),
+          name: form.name || nextNum(),
           vendor,
-          order_date:       form.order_date || todayStr(),
-          expected_date:    form.expected_date,
+          order_date: form.order_date || todayStr(),
+          expected_date: form.expected_date,
           status,
-          vendor_ref:       form.vendor_ref.trim(),
+          vendor_ref: form.vendor_ref.trim(),
           delivery_address: form.delivery_address.trim(),
-          items:            form.items.filter(r => r.item_name || r.rate).map(r => ({...r})),
-          taxes:            form.taxes.map(t => ({...t})),
-          net_total:        form.net_total,
-          total_tax:        form.total_tax,
-          grand_total:      form.grand_total,
-          received_value:   existing?.received_value || 0,
-          terms:            form.terms.trim(),
-          created_at:       existing?.created_at || todayStr(),
+          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
+          taxes: form.taxes.map(t => ({ ...t })),
+          net_total: form.net_total,
+          total_tax: form.total_tax,
+          grand_total: form.grand_total,
+          received_value: existing?.received_value || 0,
+          terms: form.terms.trim(),
+          created_at: existing?.created_at || todayStr(),
         };
         const arr = readList();
         const idx = arr.findIndex(o => o.name === doc.name);
@@ -6512,9 +6881,9 @@
         toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
       }
 
-      const nextStatusMap = { Draft:"Sent", Sent:"Confirmed", Confirmed:"Received", Received:"Billed" };
-      const nextLabelMap  = { Draft:"Mark Sent", Sent:"Confirm Order", Confirmed:"Mark Received", Received:"Mark Billed" };
-      const nextColorMap  = { Draft:"#E67700", Sent:"#E67700", Confirmed:"#2F9E44", Received:"#7048E8" };
+      const nextStatusMap = { Draft: "Sent", Sent: "Confirmed", Confirmed: "Received", Received: "Billed" };
+      const nextLabelMap = { Draft: "Mark Sent", Sent: "Confirm Order", Confirmed: "Mark Received", Received: "Mark Billed" };
+      const nextColorMap = { Draft: "#E67700", Sent: "#E67700", Confirmed: "#2F9E44", Received: "#7048E8" };
 
       onMounted(load);
 
@@ -7051,11 +7420,11 @@
       const showNew = ref(false);
 
       const filters = [
-        { k: "all",     lbl: "All Bills"  },
-        { k: "Draft",   lbl: "Draft"      },
-        { k: "Unpaid",  lbl: "Unpaid"     },
-        { k: "Overdue", lbl: "Overdue"    },
-        { k: "Paid",    lbl: "Paid"       },
+        { k: "all", lbl: "All Bills" },
+        { k: "Draft", lbl: "Draft" },
+        { k: "Unpaid", lbl: "Unpaid" },
+        { k: "Overdue", lbl: "Overdue" },
+        { k: "Paid", lbl: "Paid" },
       ];
 
       function isOverdue(b) {
@@ -7073,10 +7442,10 @@
       });
 
       const counts = computed(() => ({
-        Draft:   list.value.filter(b => b.status === "Draft").length,
-        Unpaid:  list.value.filter(b => ["Submitted","Unpaid","Partly Paid"].includes(b.status)).length,
+        Draft: list.value.filter(b => b.status === "Draft").length,
+        Unpaid: list.value.filter(b => ["Submitted", "Unpaid", "Partly Paid"].includes(b.status)).length,
         Overdue: list.value.filter(isOverdue).length,
-        Paid:    list.value.filter(b => b.status === "Paid").length,
+        Paid: list.value.filter(b => b.status === "Paid").length,
       }));
 
       const pillCountCls = (k) => ({
@@ -7086,12 +7455,12 @@
 
       const filtered = computed(() => {
         let r = list.value;
-        if (activeFilter.value === "Draft")   r = r.filter(b => b.status === "Draft");
-        if (activeFilter.value === "Unpaid")  r = r.filter(b => ["Submitted","Unpaid","Partly Paid"].includes(b.status) && !isOverdue(b));
+        if (activeFilter.value === "Draft") r = r.filter(b => b.status === "Draft");
+        if (activeFilter.value === "Unpaid") r = r.filter(b => ["Submitted", "Unpaid", "Partly Paid"].includes(b.status) && !isOverdue(b));
         if (activeFilter.value === "Overdue") r = r.filter(isOverdue);
-        if (activeFilter.value === "Paid")    r = r.filter(b => b.status === "Paid");
+        if (activeFilter.value === "Paid") r = r.filter(b => b.status === "Paid");
         const q = search.value.toLowerCase().trim();
-        if (q) r = r.filter(b => (b.name + (b.supplier||"") + (b.bill_no||"")).toLowerCase().includes(q));
+        if (q) r = r.filter(b => (b.name + (b.supplier || "") + (b.bill_no || "")).toLowerCase().includes(q));
         return r;
       });
 
@@ -7112,7 +7481,7 @@
         loading.value = true;
         try {
           list.value = await apiList("Purchase Invoice", {
-            fields: ["name","supplier","bill_no","posting_date","due_date","grand_total","outstanding_amount","status","docstatus"],
+            fields: ["name", "supplier", "bill_no", "posting_date", "due_date", "grand_total", "outstanding_amount", "status", "docstatus"],
             order: "posting_date desc", limit: 300
           });
         } catch (e) { toast("Failed to load bills: " + e.message, "error"); }
@@ -7129,7 +7498,7 @@
       async function doCancel() {
         cancelling.value = true;
         try {
-          await apiPOST("frappe.client.delete", { doctype: "Purchase Invoice", name: cancelTarget.value });
+          await apiDelete("Purchase Invoice", cancelTarget.value);
           toast("Bill cancelled");
           closeCancelModal();
           await load();
@@ -7322,14 +7691,14 @@
     setup() {
       const LKEY = "books_debit_notes";
       const REASONS = [
-        { val: "Goods Returned",  lbl: "Goods Returned to Vendor" },
-        { val: "Overcharged",     lbl: "Overcharged by Vendor" },
-        { val: "Damaged Goods",    lbl: "Damaged / Defective Goods" },
-        { val: "Quantity Shortage",lbl: "Quantity Shortage" },
-        { val: "Quality Issues",   lbl: "Quality Issues" },
-        { val: "Duplicate Bill",   lbl: "Duplicate Bill" },
+        { val: "Goods Returned", lbl: "Goods Returned to Vendor" },
+        { val: "Overcharged", lbl: "Overcharged by Vendor" },
+        { val: "Damaged Goods", lbl: "Damaged / Defective Goods" },
+        { val: "Quantity Shortage", lbl: "Quantity Shortage" },
+        { val: "Quality Issues", lbl: "Quality Issues" },
+        { val: "Duplicate Bill", lbl: "Duplicate Bill" },
         { val: "Post-purchase Discount", lbl: "Post-purchase Discount" },
-        { val: "Other",            lbl: "Other" }
+        { val: "Other", lbl: "Other" }
       ];
 
       const list = ref([]), vendors = ref([]), allBills = ref([]), loading = ref(true);
@@ -7346,7 +7715,7 @@
       const showDelete = ref(false), deleteTarget = ref(null);
 
       // Helpers
-      const store = (d) => { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch {} };
+      const store = (d) => { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } };
       const loadLocal = () => { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } };
       const nextNum = () => {
         const n = loadLocal().map(x => parseInt((x.name || "DN-0").replace(/\D/g, "")) || 0);
@@ -7357,7 +7726,7 @@
         const issued = list.value.reduce((s, n) => s + flt(n.debit_amount), 0);
         const pending = list.value.filter(n => n.status === "Submitted").reduce((s, n) => s + flt(n.debit_amount), 0);
         const applied = list.value.filter(n => n.status === "Applied").reduce((s, n) => s + flt(n.debit_amount), 0);
-        return { total: list.value.length, issued, pending, applied};
+        return { total: list.value.length, issued, pending, applied };
       });
 
       const counts = computed(() => ({
@@ -7861,27 +8230,31 @@
   ═══════════════════════════════════════════════════════════════ */
   const NAV = [
     { section: "MAIN", items: [{ to: "/", lbl: "Dashboard", icon: "grid" }] },
-    { section: "INVOICING", items: [
-      { to: "/customers",         lbl: "Customers",          icon: "users"     },
-      { to: "/quotes",            lbl: "Quotes",              icon: "quote"     },
-      { to: "/sales-orders",      lbl: "Sales Orders",        icon: "order"     },
-      { to: "/invoices",          lbl: "Sales Invoices",      icon: "file"      },
-      { to: "/recurring",         lbl: "Recurring",           icon: "recurring" },
-      { to: "/credit-notes",      lbl: "Credit Notes",        icon: "creditnote"},
-      { to: "/payments-received", lbl: "Payments Received",   icon: "pay"       },
-      { to: "/eway-bills",        lbl: "E-Way Bills",         icon: "truck"     },
-    ]},
-    { section: "PURCHASES", items: [
-      { to: "/vendors",           lbl: "Vendors",             icon: "vendors"   },
-      { to: "/purchase-orders",   lbl: "Purchase Orders",    icon: "order"     },
-      { to: "/purchases",         lbl: "Purchase Bills",      icon: "purchase"  },
-      { to: "/debit-notes",       lbl: "Debit Notes",         icon: "creditnote"},
-      { to: "/payments",          lbl: "Payments",            icon: "pay"       },
-    ]},
+    {
+      section: "INVOICING", items: [
+        { to: "/customers", lbl: "Customers", icon: "users" },
+        { to: "/quotes", lbl: "Quotes", icon: "quote" },
+        { to: "/sales-orders", lbl: "Sales Orders", icon: "order" },
+        { to: "/invoices", lbl: "Sales Invoices", icon: "file" },
+        { to: "/recurring", lbl: "Recurring", icon: "recurring" },
+        { to: "/credit-notes", lbl: "Credit Notes", icon: "creditnote" },
+        { to: "/payments-received", lbl: "Payments Received", icon: "pay" },
+        { to: "/eway-bills", lbl: "E-Way Bills", icon: "truck" },
+      ]
+    },
+    {
+      section: "PURCHASES", items: [
+        { to: "/vendors", lbl: "Vendors", icon: "vendors" },
+        { to: "/purchase-orders", lbl: "Purchase Orders", icon: "order" },
+        { to: "/purchases", lbl: "Purchase Bills", icon: "purchase" },
+        { to: "/debit-notes", lbl: "Debit Notes", icon: "creditnote" },
+        { to: "/payments", lbl: "Payments", icon: "pay" },
+      ]
+    },
     { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
     { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
   ];
-  const TITLES = { dashboard:"Dashboard", customers:"Customers", quotes:"Quotes", "sales-orders":"Sales Orders", invoices:"Sales Invoices", recurring:"Recurring Invoices", "credit-notes":"Credit Notes", "payments-received":"Payments Received", "eway-bills":"E-Way Bills", vendors:"Vendors", "purchase-orders":"Purchase Orders", purchases:"Purchase Bills", "debit-notes":"Debit Notes", payments:"Payments", banking:"Banking", accounts:"Chart of Accounts", reports:"Reports" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", banking: "Banking", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -7902,12 +8275,12 @@
       const aiResult = reactive({ status: "", message: "", type: "", actions: [], data: null });
 
       const COMMANDS = [
-        { icon: "file",    label: "Create invoice for [customer] ₹[amount]",    hint: "Create invoice for Prasath ₹80,000" },
-        { icon: "fileplus",label: "Create invoice for [customer] [item] ₹[rate]",hint: "Create invoice for hari laptop ₹50,000" },
-        { icon: "payment", label: "Record payment for [invoice]",                hint: "Record payment for INV-2026-00005" },
-        { icon: "alert",   label: "Show overdue invoices",                       hint: "Show overdue invoices" },
-        { icon: "search",  label: "Find invoices for [customer]",                hint: "Find invoices for hari" },
-        { icon: "rupee",   label: "Show total outstanding",                      hint: "Show total outstanding" },
+        { icon: "file", label: "Create invoice for [customer] ₹[amount]", hint: "Create invoice for Prasath ₹80,000" },
+        { icon: "fileplus", label: "Create invoice for [customer] [item] ₹[rate]", hint: "Create invoice for hari laptop ₹50,000" },
+        { icon: "payment", label: "Record payment for [invoice]", hint: "Record payment for INV-2026-00005" },
+        { icon: "alert", label: "Show overdue invoices", hint: "Show overdue invoices" },
+        { icon: "search", label: "Find invoices for [customer]", hint: "Find invoices for hari" },
+        { icon: "rupee", label: "Show total outstanding", hint: "Show total outstanding" },
       ];
 
       const filteredCommands = computed(() => {
@@ -8001,7 +8374,7 @@
         if (action === "show_overdue" || raw.toLowerCase().includes("overdue")) {
           aiResult.message = "Fetching overdue invoices…";
           const list = await apiList("Sales Invoice", {
-            fields: ["name","customer_name","due_date","outstanding_amount","status"],
+            fields: ["name", "customer_name", "due_date", "outstanding_amount", "status"],
             order: "due_date asc", limit: 50,
           });
           const overdue = list.filter(i => i.outstanding_amount > 0 && i.due_date && new Date(i.due_date) < new Date());
@@ -8018,8 +8391,8 @@
           aiResult.message = "Searching invoices…";
           const customer = parsed.customer || raw.replace(/find invoices for/i, "").trim();
           const list = await apiList("Sales Invoice", {
-            fields: ["name","customer_name","posting_date","grand_total","outstanding_amount","status"],
-            filters: [["customer_name","like",`%${customer}%`]],
+            fields: ["name", "customer_name", "posting_date", "grand_total", "outstanding_amount", "status"],
+            filters: [["customer_name", "like", `%${customer}%`]],
             order: "posting_date desc", limit: 20,
           });
           const total = list.reduce((s, i) => s + parseFloat(i.grand_total || 0), 0);
@@ -8034,8 +8407,8 @@
         if (action === "show_outstanding" || raw.toLowerCase().includes("outstanding")) {
           aiResult.message = "Calculating…";
           const list = await apiList("Sales Invoice", {
-            fields: ["name","customer_name","outstanding_amount"],
-            filters: [["outstanding_amount",">",0]], limit: 200,
+            fields: ["name", "customer_name", "outstanding_amount"],
+            filters: [["outstanding_amount", ">", 0]], limit: 200,
           });
           const total = list.reduce((s, i) => s + parseFloat(i.outstanding_amount || 0), 0);
           aiResult.status = "info";
@@ -8056,12 +8429,12 @@
 
       function aiIcon(name) {
         const icons = {
-          file:     '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+          file: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
           fileplus: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>',
-          payment:  '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
-          alert:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
-          search:   '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
-          rupee:    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
+          payment: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>',
+          alert: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+          search: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>',
+          rupee: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>',
         };
         return icons[name] || icons.file;
       }
@@ -8075,8 +8448,10 @@
       }
       function closeMobile() { mobileOpen.value = false; }
 
-      return { cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
-               aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt };
+      return {
+        cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
+        aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt, route
+      };
     },
     template: `
 <div :class="{'books-root':true, collapsed:collapsed, 'mobile-open':mobileOpen}">
@@ -8092,7 +8467,7 @@
       <template v-for="group in NAV" :key="group.section">
         <div v-if="group.section" class="b-nav-section">{{group.section}}</div>
         <router-link v-for="n in group.items" :key="n.to" :to="n.to" custom v-slot="{navigate,isActive}">
-          <div class="b-nav-item" :class="{active:isActive}" @click="()=>{navigate();closeMobile();}">
+          <div class="b-nav-item" :class="{active: isActive || route.path.startsWith(n.to + '/')}" @click="()=>{navigate();closeMobile();}">
             <span class="b-nav-icon" v-html="icon(n.icon,16)"></span>
             <span class="b-nav-label">{{n.lbl}}</span>
           </div>
@@ -8541,7 +8916,7 @@
 /* Footer */
 .nim-footer{
   display:flex;align-items:center;justify-content:space-between;
-  padding:14px 24px;border-top:1.5px solid #e4e8f0;
+  padding:14px 75px 14px 24px;border-top:1.5px solid #e4e8f0;
   background:#f8f9fc;flex-shrink:0;
 }
 .nim-btn{
@@ -8641,6 +9016,12 @@
 .nim-invoice-more{color:#9ca3af;font-size:12px;margin-top:5px;}
 
 /* ══ AI Automator FAB ══ */
+body:has(.nim-overlay) .ai-fab,
+body:has(.nim-overlay) .ai-panel,
+body:has(.cust-backdrop) .ai-fab,
+body:has(.cust-backdrop) .ai-panel {
+  display:none !important;
+}
 .ai-fab{
   position:fixed;bottom:24px;right:24px;
   display:flex;align-items:center;gap:8px;
@@ -8890,21 +9271,21 @@
 .b-badge-muted{background:#f3f4f6;color:#6b7280}
 .b-badge-purple{background:#f3f0ff;color:#7048e8}
 /* PDF view */
-.zb-pdf-wrap{flex:1;overflow-y:auto;background:#f4f6fa;padding:20px;display:flex;flex-direction:column;align-items:center;gap:0}
-.zb-pdf-paper{background:#fff;width:100%;max-width:640px;padding:32px 36px;box-shadow:0 2px 16px rgba(0,0,0,.1);border-radius:4px}
+.zb-pdf-wrap{flex:1;overflow-y:auto;overflow-x:hidden;background:#f4f6fa;padding:16px;display:flex;flex-direction:column;align-items:center;gap:0;min-width:0}
+.zb-pdf-paper{background:#fff;width:100%;max-width:640px;padding:24px 28px;box-shadow:0 2px 16px rgba(0,0,0,.1);border-radius:4px;overflow-x:auto}
 .zb-sent-ribbon{position:absolute;top:12px;right:-28px;background:#059669;color:#fff;font-size:10px;font-weight:800;padding:4px 32px;transform:rotate(45deg);letter-spacing:.08em}
 .zb-draft-ribbon{position:absolute;top:12px;right:-28px;background:#9ca3af;color:#fff;font-size:10px;font-weight:800;padding:4px 32px;transform:rotate(45deg);letter-spacing:.08em}
 .zb-pdf-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #111827}
 .zb-pdf-co-name{font-size:18px;font-weight:800;color:#111827;letter-spacing:-.01em}
 .zb-pdf-co-meta{font-size:11px;color:#6b7280;margin-top:2px}
 .zb-pdf-inv-title{font-size:22px;font-weight:900;color:#111827;letter-spacing:.04em;text-transform:uppercase}
-.zb-pdf-info-table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}
-.zb-pdf-info-table th{background:#f8f9fc;padding:7px 10px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;border:1px solid #e4e8f0}
-.zb-pdf-info-table td{padding:7px 10px;border:1px solid #e4e8f0;color:#374151}
+.zb-pdf-info-table{width:100%;min-width:380px;border-collapse:collapse;margin-bottom:16px;font-size:12px}
+.zb-pdf-info-table th{background:#f8f9fc;padding:6px 8px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;border:1px solid #e4e8f0;white-space:nowrap}
+.zb-pdf-info-table td{padding:6px 8px;border:1px solid #e4e8f0;color:#374151;white-space:nowrap}
 .zb-pdf-bill-section{margin-bottom:16px}
 .zb-pdf-bill-label{font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
 .zb-pdf-bill-name{font-size:14px;font-weight:700;color:#2563eb}
-.zb-pdf-items{width:100%;border-collapse:collapse;margin-bottom:0}
+.zb-pdf-items{width:100%;min-width:420px;border-collapse:collapse;margin-bottom:0}
 .zb-pdf-th{padding:8px 10px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;background:#f8f9fc;border-bottom:2px solid #e4e8f0;text-align:left}
 .zb-pdf-item-row{border-bottom:1px solid #f1f3f7}
 .zb-pdf-item-row:hover{background:#f8f9fc}
@@ -8912,7 +9293,7 @@
 .zb-pdf-words-block{flex:1;padding:12px 10px;border-right:1px solid #e4e8f0;font-size:11px}
 .zb-pdf-words-lbl{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:3px}
 .zb-pdf-words-val{font-size:11px;color:#374151;line-height:1.5}
-.zb-pdf-totals-block{width:240px;padding:8px 12px;display:flex;flex-direction:column;gap:0}
+.zb-pdf-totals-block{width:200px;min-width:160px;padding:8px 12px;display:flex;flex-direction:column;gap:0}
 .zb-pdf-total-row{display:flex;justify-content:space-between;font-size:12px;color:#6b7280;padding:4px 0;border-bottom:1px solid #f1f3f7}
 .zb-pdf-total-row:last-child{border-bottom:none}
 .zb-pdf-total-bold{font-weight:800;font-size:14px;color:#111827;padding:7px 0}
@@ -8921,7 +9302,7 @@
 .zb-pdf-sig-box{width:180px;text-align:center;border-top:1px solid #9ca3af;padding-top:5px;font-size:10px;color:#9ca3af}
 .zb-pdf-footer{text-align:right;font-size:10px;color:#9ca3af;border-top:1px solid #e4e8f0;padding-top:8px;margin-top:2px}
 /* Right panel */
-.zb-right-panel{width:260px;flex-shrink:0;border-left:1px solid #e4e8f0;background:#fafbfd;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.zb-right-panel{width:220px;flex-shrink:0;border-left:1px solid #e4e8f0;background:#fafbfd;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:10px}
 .zb-panel-card{border:1px solid #e4e8f0;border-radius:8px;padding:12px;background:#fff}
 .zb-panel-title{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:10px}
 .zb-panel-row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;font-size:12px;color:#6b7280;border-bottom:1px solid #f1f3f7}
@@ -9063,18 +9444,91 @@
 .books-root.collapsed .b-logout-btn{justify-content:center}
 /* Responsive */
 @media(max-width:900px){.b-kpi-grid{grid-template-columns:repeat(2,1fr)!important}.b-mid-grid{grid-template-columns:1fr!important}}
+/* ── Invoice list table responsive ── */
+@media(max-width:900px){
+  .qt-summary{grid-template-columns:repeat(2,1fr)}
+  .zb-inv-summary-grid{grid-template-columns:repeat(2,1fr)!important}
+}
+
+/* ── Invoice detail: collapse right panel below ~1100px ── */
+@media(max-width:1100px){
+  .zb-right-panel{width:190px!important;padding:8px!important;font-size:11px!important}
+  .zb-panel-row{font-size:11px!important}
+}
+@media(max-width:950px){
+  /* Stack right panel below PDF */
+  .zb-detail-area > div[style*="display:flex;flex:1"]{flex-direction:column!important;overflow-y:auto!important}
+  .zb-right-panel{width:100%!important;border-left:none!important;border-top:1px solid #e4e8f0;flex-direction:row!important;flex-wrap:wrap!important;gap:8px!important;overflow-y:visible!important}
+  .zb-panel-card{flex:1;min-width:180px}
+  .zb-pdf-wrap{padding:10px!important}
+  .zb-pdf-paper{padding:18px 16px!important}
+}
+
+@media(max-width:768px){
+  /* Invoice list: hide low-priority columns */
+  table th:nth-child(3),table td:nth-child(3){display:none}
+  .zb-pdf-wrap{padding:8px!important}
+  .zb-pdf-paper{padding:14px 12px!important}
+  /* Invoice detail: stack instead of split */
+  .zb-master-detail{flex-direction:column!important}
+  .zb-split-list{width:100%!important;max-height:42vh;border-right:none!important;border-bottom:1px solid #e4e8f0}
+  .zb-detail-area{min-height:0;flex:1;overflow-y:auto}
+  /* Action buttons wrap */
+  .zb-ab-bar{flex-wrap:wrap!important;gap:6px!important;padding:8px 12px!important}
+  .zb-ab-btn{font-size:12px!important;padding:6px 10px!important}
+  /* Right info panel stack */
+  .zb-info-col{width:100%!important;border-left:none!important;border-top:1px solid #e8ecf0}
+  /* NIM modals full screen */
+  .nim-modal{width:100vw!important;max-width:100vw!important;
+    height:100dvh!important;max-height:100dvh!important;
+    border-radius:0!important;top:0!important;left:0!important;transform:none!important;margin:0!important;position:fixed!important;}
+  .nim-modal-scroll{max-height:calc(100dvh - 130px)!important;overflow-y:auto}
+  .nim-grid-3{grid-template-columns:1fr 1fr!important}
+  .nim-grid-2{grid-template-columns:1fr!important}
+  .nim-footer{padding:10px 14px!important}
+  /* Cust/vendor toolbar */
+  .cust-toolbar{flex-direction:column!important;align-items:stretch!important}
+  .cust-toolbar-left,.cust-toolbar-right{justify-content:space-between!important;width:100%}
+}
 @media(max-width:640px){
+  /* Show mobile back button in detail view */
+  .zb-mob-back{display:flex!important}
   .b-hamburger{display:inline-flex!important}.b-mob-close{display:block!important}
   .books-root{grid-template-columns:1fr!important}
-  .b-sidebar{position:fixed;left:-240px;top:0;bottom:0;z-index:50;width:240px!important;transition:left .25s ease}
+  .b-sidebar{position:fixed;left:-260px;top:0;bottom:0;z-index:50;width:260px!important;transition:left .25s ease}
   .books-root.mobile-open .b-sidebar{left:0!important;box-shadow:4px 0 24px rgba(0,0,0,.25)}
   .books-root.mobile-open .b-mob-overlay{display:block!important}
-  .b-right{width:100vw}.b-topbar{padding:0 14px}.b-search{display:none}
-  .b-main{padding:14px}.b-kpi-grid{grid-template-columns:1fr 1fr!important;gap:10px}
-  .zb-th:nth-child(3),.zb-td:nth-child(3),.zb-th:nth-child(4),.zb-td:nth-child(4){display:none}
-  .zb-list-pane{width:100%!important}.zb-detail-area{display:none!important}.zb-master-detail{flex-direction:column}
+  .b-right{width:100vw}.b-topbar{padding:0 12px}.b-search{display:none!important}
+  .b-main{padding:10px}.b-kpi-grid{grid-template-columns:1fr 1fr!important;gap:8px}
+  /* Invoice list page */
+  .no-sidebar-pad{overflow-x:hidden}
+  /* Pill tabs scroll horizontally */
+  .zb-split-pills{flex-wrap:nowrap!important;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+  .zb-split-pills::-webkit-scrollbar{display:none}
+  /* NIM form grids: full single column */
+  .nim-grid-3,.nim-grid-2{grid-template-columns:1fr!important}
+  /* NIM footer buttons stack */
+  .nim-footer{flex-direction:column-reverse!important;gap:8px!important}
+  .nim-footer .nim-btn,.nim-footer button{width:100%!important;justify-content:center!important}
+  /* Tables: horizontal scroll */
+  .cust-table-wrap{overflow-x:auto!important;-webkit-overflow-scrolling:touch}
+  .cust-table{min-width:580px}
+  .nim-table-wrap{overflow-x:auto!important}
+  .nim-table{min-width:460px}
+  /* Invoice split view: mobile nav */
+  .zb-master-detail{flex-direction:column!important;overflow-y:auto!important}
+  .zb-split-list{width:100%!important;max-height:none!important;border-right:none!important}
+  .zb-detail-area{width:100%!important}
+  /* hide detail panel list column on very small - detail is full screen when navigated */
+  .zb-mob-hide-list .zb-split-list{display:none!important}
+  .zb-mob-hide-list .zb-detail-area{display:flex!important}
 }
-@media(max-width:400px){.b-kpi-grid{grid-template-columns:1fr!important}}
+@media(max-width:400px){
+  .b-kpi-grid{grid-template-columns:1fr!important}
+  .b-kpi-value{font-size:20px!important}
+  .nim-modal-body,.nim-modal-scroll{padding:10px!important}
+  .zb-pdf-paper{padding:10px 8px!important}
+}
 `;
 
   if (!document.getElementById("books-modal-css")) {
@@ -9462,12 +9916,12 @@
     routes: [
       { path: "/", component: Dashboard, name: "dashboard" },
       { path: "/customers", component: Customers, name: "customers" },
-      { path: "/quotes",       component: Quotes,       name: "quotes"       },
-      { path: "/sales-orders", component: SalesOrders,       name: "sales-orders" },
-      { path: "/recurring",         component: RecurringInvoices, name: "recurring"          },
-      { path: "/credit-notes",      component: CreditNotes,       name: "credit-notes"       },
-      { path: "/payments-received", component: PaymentsReceived,  name: "payments-received"  },
-      { path: "/eway-bills",        component: EwayBills,         name: "eway-bills"         },
+      { path: "/quotes", component: Quotes, name: "quotes" },
+      { path: "/sales-orders", component: SalesOrders, name: "sales-orders" },
+      { path: "/recurring", component: RecurringInvoices, name: "recurring" },
+      { path: "/credit-notes", component: CreditNotes, name: "credit-notes" },
+      { path: "/payments-received", component: PaymentsReceived, name: "payments-received" },
+      { path: "/eway-bills", component: EwayBills, name: "eway-bills" },
       { path: "/invoices", component: Invoices, name: "invoices" },
       { path: "/invoices/:name", component: InvoiceDetail, name: "invoice-detail" },
       { path: "/template-editor", component: TemplateEditor, name: "template-editor" },
@@ -9551,9 +10005,8 @@
         window.frappe.csrf_token = hdr;
         return hdr;
       }
-    } catch {}
+    } catch { }
 
-    console.warn("[Books] CSRF token not found — read operations will work but POSTs may fail");
     return "";
   }
 
