@@ -269,6 +269,21 @@
     payment: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/><line x1="6" y1="15" x2="10" y2="15"/>',
     rupee: '<path d="M18 7H6M18 11H6M12 7v10M6 11c0 3.31 2.69 6 6 6s6-2.69 6-6"/>',
     alert: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    coa: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>',
+    journal: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>',
+    opening: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+    costcenter: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/>',
+    fiscal: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M17 12h.01M7 12h.01"/>',
+    info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    eye: '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+    cancel: '<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+    chevD: '<polyline points="6 9 12 15 18 9"/>',
+    chevR: '<polyline points="9 18 15 12 9 6"/>',
+    chevL: '<polyline points="15 18 9 12 15 6"/>',
+    chevU: '<polyline points="18 15 12 9 6 15"/>',
+    balance: '<path d="M12 3v18M3 9l9-6 9 6M3 15l9 6 9-6"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -280,6 +295,148 @@
       Reconciled: "b-badge-green"
     }[s] || "b-badge-muted";
   }
+
+  /* ═══════════════════════════════════════════════════════════════
+     SEARCHABLE SELECT — reusable autocomplete dropdown
+     Props:
+       modelValue  — bound value (v-model)
+       options     — Array of strings | {name} | {value,label} | custom
+       valueKey    — field used as value (default "name", fallback "value")
+       labelKey    — field shown as label (default "name", fallback "label")
+       placeholder — empty-state text
+       compact     — true for table-cell mode (smaller padding)
+       disabled    — disables interaction
+     Emits: update:modelValue
+  ═══════════════════════════════════════════════════════════════ */
+  const SearchableSelect = defineComponent({
+    name: "SearchableSelect",
+    props: {
+      modelValue: { default: "" },
+      options:    { type: Array, default: () => [] },
+      valueKey:   { type: String, default: "" },
+      labelKey:   { type: String, default: "" },
+      placeholder:{ type: String, default: "— Select —" },
+      compact:    { type: Boolean, default: false },
+      disabled:   { type: Boolean, default: false },
+    },
+    emits: ["update:modelValue"],
+    setup(props, { emit }) {
+      const q        = ref("");
+      const open     = ref(false);
+      const inputEl  = ref(null);
+      const trigEl   = ref(null);           // the visible trigger button
+      const dropStyle= ref({});             // fixed-position style for teleported drop
+
+      // Normalise any option shape → {value, label}
+      const normalized = computed(() => {
+        const vk = props.valueKey;
+        const lk = props.labelKey;
+        return (props.options || []).map(o => {
+          if (typeof o === "string") return { value: o, label: o };
+          const v = vk ? o[vk] : (o.value !== undefined ? o.value : (o.name !== undefined ? o.name : String(o)));
+          const l = lk ? o[lk] : (o.label !== undefined ? o.label : (o.name !== undefined ? o.name : String(o)));
+          return { value: v ?? "", label: l ?? v ?? "" };
+        });
+      });
+
+      const displayLabel = computed(() => {
+        if (!props.modelValue && props.modelValue !== 0) return "";
+        const found = normalized.value.find(o => String(o.value) === String(props.modelValue));
+        return found ? found.label : props.modelValue;
+      });
+
+      // Prefix-priority + contains fallback
+      const filtered = computed(() => {
+        const qv = q.value.toLowerCase().trim();
+        if (!qv) return normalized.value.slice(0, 150);
+        const pre = [], con = [];
+        normalized.value.forEach(o => {
+          const l = String(o.label || "").toLowerCase();
+          if (l.startsWith(qv)) pre.push(o);
+          else if (l.includes(qv)) con.push(o);
+        });
+        return [...pre, ...con].slice(0, 100);
+      });
+
+      // Calculate fixed position from the trigger's bounding rect
+      function calcDropStyle() {
+        if (!trigEl.value) return;
+        const r = trigEl.value.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - r.bottom;
+        const goUp = spaceBelow < 260 && r.top > 260;
+        dropStyle.value = {
+          position: "fixed",
+          left:  r.left  + "px",
+          width: r.width + "px",
+          zIndex: 99999,
+          ...(goUp ? { bottom: (window.innerHeight - r.top + 4) + "px" }
+                   : { top:    (r.bottom + 4) + "px" })
+        };
+      }
+
+      function openDD() {
+        if (props.disabled) return;
+        calcDropStyle();
+        open.value = true;
+        q.value = "";
+        nextTick(() => inputEl.value && inputEl.value.focus());
+      }
+
+      function pick(opt) {
+        emit("update:modelValue", opt.value);
+        open.value = false;
+        q.value = "";
+      }
+
+      // Close on outside pointer-down (teleported drop included)
+      function onDoc(e) {
+        if (!open.value) return;
+        const trig = trigEl.value;
+        const drop = document.querySelector(".ss-drop-teleport");
+        if (trig && !trig.contains(e.target) && drop && !drop.contains(e.target)) {
+          open.value = false;
+        }
+      }
+
+      onMounted(() => document.addEventListener("pointerdown", onDoc, true));
+      onUnmounted(() => document.removeEventListener("pointerdown", onDoc, true));
+
+      return { q, open, inputEl, trigEl, dropStyle, displayLabel, filtered, openDD, pick, icon };
+    },
+    template: `
+<div class="ss-wrap">
+  <div ref="trigEl" class="ss-trigger"
+    :class="{'open': open, 'ss-disabled': disabled, 'ss-compact': compact}"
+    @click="openDD" tabindex="0"
+    @keydown.enter.prevent="openDD"
+    @keydown.space.prevent="openDD">
+    <span class="ss-display" :class="{'ss-ph': !modelValue && modelValue !== 0}">
+      {{(modelValue || modelValue === 0) ? displayLabel : placeholder}}
+    </span>
+    <span class="ss-caret" v-html="icon('chevD',11)"></span>
+  </div>
+  <teleport to="body">
+    <div v-if="open" class="ss-drop ss-drop-teleport" :style="dropStyle">
+      <div class="ss-search-row">
+        <input ref="inputEl" v-model="q" class="ss-search-input"
+          placeholder="Type to search…"
+          @keydown.escape="open=false"
+          @keydown.enter.prevent="filtered.length && pick(filtered[0])"/>
+      </div>
+      <div class="ss-opts">
+        <div v-if="!filtered.length" class="ss-no-match">
+          {{normalized.length ? 'No matches for "'+q+'"' : 'No options available'}}
+        </div>
+        <div v-for="o in filtered" :key="o.value"
+          class="ss-opt" :class="{'ss-opt-sel': String(o.value)===String(modelValue)}"
+          @mousedown.prevent="pick(o)">
+          {{o.label}}
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
 
   /* ═══════════════════════════════════════════════════════════════
      INLINE NEW INVOICE MODAL
@@ -503,10 +660,7 @@
       <div class="nim-grid-3 nim-mb">
         <div class="nim-field nim-span-1">
           <label class="nim-label">Customer <span class="nim-req">*</span></label>
-          <select v-model="form.customer" @change="onCustomer" class="nim-select">
-            <option value="">Select customer…</option>
-            <option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option>
-          </select>
+          <searchable-select v-model="form.customer" :options="customers" placeholder="Select customer…" @update:modelValue="onCustomer"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Invoice Date <span class="nim-req">*</span></label>
@@ -522,17 +676,11 @@
       <div class="nim-grid-2 nim-mb">
         <div class="nim-field">
           <label class="nim-label">AR Account <span class="nim-req">*</span></label>
-          <select v-model="form.debit_to" class="nim-select">
-            <option value="">Select account…</option>
-            <option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <searchable-select v-model="form.debit_to" :options="accounts_ar" placeholder="Select account…"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Income Account <span class="nim-req">*</span></label>
-          <select v-model="form.income_account" class="nim-select">
-            <option value="">Select account…</option>
-            <option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <searchable-select v-model="form.income_account" :options="accounts_income" placeholder="Select account…"/>
         </div>
       </div>
 
@@ -555,10 +703,7 @@
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
               <td>
-                <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                  <option value="" disabled>Item name</option>
-                  <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                </select>
+                <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
               </td>
               <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
               <td style="text-align:center">
@@ -1182,10 +1327,7 @@
       <div class="nim-grid-3 nim-mb">
         <div class="nim-field" style="grid-column:span 2">
           <label class="nim-label">Supplier <span class="nim-req">*</span></label>
-          <select v-model="form.supplier" @change="onSupplier" class="nim-select">
-            <option value="">Select supplier…</option>
-            <option v-for="s in suppliers" :key="s.name" :value="s.name">{{s.name}}</option>
-          </select>
+          <searchable-select v-model="form.supplier" :options="suppliers" placeholder="Select supplier…" @update:modelValue="onSupplier"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Supplier Invoice No</label>
@@ -1199,17 +1341,11 @@
         </div>
         <div class="nim-field">
           <label class="nim-label">AP Account <span class="nim-req">*</span></label>
-          <select v-model="form.credit_to" class="nim-select">
-            <option value="">Select account…</option>
-            <option v-for="a in accounts_ap" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <searchable-select v-model="form.credit_to" :options="accounts_ap" placeholder="Select account…"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Expense Account <span class="nim-req">*</span></label>
-          <select v-model="form.expense_account" class="nim-select">
-            <option value="">Select account…</option>
-            <option v-for="a in accounts_exp" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <searchable-select v-model="form.expense_account" :options="accounts_exp" placeholder="Select account…"/>
         </div>
       </div>
       <!-- Items -->
@@ -1226,10 +1362,7 @@
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
               <td>
-                <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                  <option value="" disabled>Item name</option>
-                  <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                </select>
+                <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
               </td>
               <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="nim-cell nim-num" @input="recalc"/></td>
               <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="nim-cell nim-num" @input="recalc"/></td>
@@ -1436,10 +1569,7 @@
       <div class="nim-grid-2 nim-mb">
         <div class="nim-field">
           <label class="nim-label">{{form.party_type}} <span class="nim-req">*</span></label>
-          <select v-model="form.party" @change="onParty" class="nim-select">
-            <option value="">Select {{form.party_type.toLowerCase()}}…</option>
-            <option v-for="p in partyList" :key="p.name" :value="p.name">{{p.name}}</option>
-          </select>
+          <searchable-select v-model="form.party" :options="partyList" :placeholder="'Select '+form.party_type.toLowerCase()+'…'" @update:modelValue="onParty"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Payment Date</label>
@@ -1479,17 +1609,11 @@
       <div class="nim-grid-2 nim-mb">
         <div class="nim-field">
           <label class="nim-label">Paid From <span class="nim-req">*</span></label>
-          <select v-model="form.paid_from" class="nim-select">
-            <option value="">Select account…</option>
-            <option v-for="a in (form.payment_type==='Receive'?accounts_ar:accounts_bank)" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <searchable-select v-model="form.paid_from" :options="form.payment_type==='Receive'?accounts_ar:accounts_bank" placeholder="Select account…"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Paid To <span class="nim-req">*</span></label>
-          <select v-model="form.paid_to" class="nim-select">
-            <option value="">Select account…</option>
-            <option v-for="a in (form.payment_type==='Receive'?accounts_bank:accounts_ap)" :key="a.name" :value="a.name">{{a.name}}</option>
-          </select>
+          <searchable-select v-model="form.paid_to" :options="form.payment_type==='Receive'?accounts_bank:accounts_ap" placeholder="Select account…"/>
         </div>
       </div>
 
@@ -2723,15 +2847,15 @@
           <div class="zb-form-section-title">Invoice Details</div>
           <div class="zb-form-grid3">
             <div class="zb-form-field"><label class="zb-form-label">Customer *</label>
-              <select v-model="form.customer" class="zb-form-input"><option value="">— Select —</option><option v-for="c in customers" :key="c.name" :value="c.name">{{c.name}}</option></select></div>
+              <searchable-select v-model="form.customer" :options="customers" placeholder="— Select —"/></div>
             <div class="zb-form-field"><label class="zb-form-label">Invoice Date</label>
               <input type="date" v-model="form.posting_date" class="zb-form-input"/></div>
             <div class="zb-form-field"><label class="zb-form-label">Due Date</label>
               <input type="date" v-model="form.due_date" class="zb-form-input"/></div>
             <div class="zb-form-field"><label class="zb-form-label">AR Account</label>
-              <select v-model="form.debit_to" class="zb-form-input"><option value="">— Select —</option><option v-if="form.debit_to && !accounts_ar.some(a=>a.name===form.debit_to)" :value="form.debit_to">{{form.debit_to}}</option><option v-for="a in accounts_ar" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
+              <searchable-select v-model="form.debit_to" :options="accounts_ar" placeholder="— Select —"/></div>
             <div class="zb-form-field"><label class="zb-form-label">Income Account</label>
-              <select v-model="form.income_account" class="zb-form-input"><option value="">— Select —</option><option v-if="form.income_account && !accounts_income.some(a=>a.name===form.income_account)" :value="form.income_account">{{form.income_account}}</option><option v-for="a in accounts_income" :key="a.name" :value="a.name">{{a.name}}</option></select></div>
+              <searchable-select v-model="form.income_account" :options="accounts_income" placeholder="— Select —"/></div>
             <div class="zb-form-field"><label class="zb-form-label">Currency</label>
               <input v-model="form.currency" class="zb-form-input"/></div>
           </div>
@@ -2742,10 +2866,7 @@
               <tr v-for="(item,i) in form.items" :key="i">
                 <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
                 <td>
-                  <select v-model="item.item_name" class="zb-cell-input" @change="onItemPick(item)" style="padding-left:8px;background:transparent;min-height:32px">
-                    <option value="" disabled>Item name</option>
-                    <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                  </select>
+                  <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
                 </td>
                 <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
                 <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
@@ -4205,7 +4326,7 @@
               <div class="nim-table-wrap nim-mb">
                 <table class="nim-table">
                   <thead><tr>
-                    <th style="width:28%">Item / Service</th>
+                    <th style="width:28%">Item / Service </th>
                     <th style="width:25%">Description</th>
                     <th style="width:10%;text-align:center">Qty</th>
                     <th style="width:16%;text-align:right">Rate (₹)</th>
@@ -4215,10 +4336,7 @@
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
-                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                          <option value="" disabled>Item / Service</option>
-                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                        </select>
+                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
                       </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -4858,10 +4976,7 @@
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
-                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                          <option value="" disabled>Item / Service</option>
-                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                        </select>
+                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
                       </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5498,10 +5613,7 @@
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
-                        <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                          <option value="" disabled>Item / Service</option>
-                          <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                        </select>
+                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
                       </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5975,13 +6087,9 @@
                   <th style="width:14%;text-align:right">Amount</th>
                   <th style="width:4%"></th>
                 </tr></thead>
-                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr" :style="!item.item_name ? 'background:#fff5f5' : ''">
+                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                   <td>
-                    <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)" required
-                      :style="!item.item_name ? 'border:1.5px solid #e03131;color:#9ca3af;font-style:italic' : 'color:#1a1d23'">
-                      <option value="" disabled selected>— Select Item —</option>
-                      <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
-                    </select>
+                    <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
                   </td>
                   <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                   <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -7701,7 +7809,7 @@
         { val: "Other", lbl: "Other" }
       ];
 
-      const list = ref([]), vendors = ref([]), allBills = ref([]), loading = ref(true);
+      const list = ref([]), vendors = ref([]), allBills = ref([]), allItems = ref([]), loading = ref(true);
       const search = ref(""), activeFilter = ref("all");
       const showDrawer = ref(false), drawerMode = ref("add"), saving = ref(false);
       const viewNote = ref(null), editingName = ref(null);
@@ -7753,6 +7861,7 @@
         try {
           vendors.value = await apiList("Supplier", { fields: ["name", "supplier_name"], filters: [["disabled", "=", 0]], order: "supplier_name asc", limit: 300 });
           allBills.value = await apiList("Purchase Invoice", { fields: ["name", "supplier", "posting_date", "grand_total", "outstanding_amount"], filters: [["docstatus", "=", 1]], order: "posting_date desc", limit: 300 });
+          try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
         } catch (e) { console.error("Load failed", e); }
         finally { loading.value = false; }
       }
@@ -7782,10 +7891,20 @@
         form.items.forEach(r => { r.amount = flt(flt(r.qty) * flt(r.rate)); });
         form.debit_amount = form.items.reduce((s, r) => s + r.amount, 0);
       }
+      function onDnItemPick(row) {
+        const match = allItems.value.find(it => it.item_name === row.item_name);
+        if (match) {
+          if (!row.description) row.description = match.description || match.item_name || "";
+          row.rate = flt(match.standard_rate) || row.rate;
+          recalc();
+        }
+      }
 
       async function saveNote(status) {
         if (!form.vendor) { toast("Select a vendor", "error"); return; }
         if (!form.reason) { toast("Select a reason", "error"); return; }
+        const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
+        if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
         if (form.debit_amount <= 0) { toast("Amount must be > 0", "error"); return; }
 
         saving.value = true;
@@ -7815,23 +7934,23 @@
 
       onMounted(load);
       return {
-        list, vendors, allBills, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
+        list, vendors, allBills, allItems, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
         showDrawer, drawerMode, form, saving, viewNote, REASONS,
-        openAdd, openView, openEdit, addRow, removeRow, recalc, saveNote,
+        openAdd, openView, openEdit, addRow, removeRow, recalc, onDnItemPick, saveNote,
         showDelete, deleteTarget, confirmDelete, doDelete, applyDebit,
         fmt, fmtDate, flt, icon
       };
     },
     template: `
 <div class="b-page">
-  <div style="background:#fff3e0;border:1px solid rgba(230,119,0,0.2);border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13.3px;color:#495057">
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13.3px;color:#1e40af">
     <span style="font-size:18px">ℹ️</span>
     <span>A <b>Debit Note</b> reduces an outstanding purchase bill — use it when you return goods to a vendor or were overcharged. It debits your Accounts Payable.</span>
   </div>
 
   <div class="dn-sum-strip">
     <div class="dn-sum-card"><div class="dn-sum-lbl">Total Notes</div><div class="dn-sum-val">{{summary.total}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#e67700">Total Debit Raised</div><div class="dn-sum-val" style="color:#e67700">{{fmt(summary.issued)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#2563eb">Total Debit Raised</div><div class="dn-sum-val" style="color:#2563eb">{{fmt(summary.issued)}}</div></div>
     <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#d97706">Pending Application</div><div class="dn-sum-val" style="color:#d97706">{{fmt(summary.pending)}}</div></div>
     <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#16a34a">Applied to Bills</div><div class="dn-sum-val" style="color:#16a34a">{{fmt(summary.applied)}}</div></div>
   </div>
@@ -7886,9 +8005,9 @@
               <div><div class="dn-dh-title">{{drawerMode==='add'?'New Debit Note':drawerMode==='edit'?'Edit Debit Note':'Debit Note Details'}}</div><div class="dn-dh-sub" v-if="form.name">{{form.name}}</div></div>
               <button class="nim-close" @click="showDrawer=false" style="color:#fff" v-html="icon('x',16)"></button>
             </div>
-            <div class="nim-body">
+            <div class="nim-body" style="background-color: #f5f5f5;">
               <template v-if="drawerMode==='view'">
-                <div class="dn-sec-lbl">Debit Note Information</div>
+                <div class="dn-sec-lbl" >Debit Note Information</div>
                 <div class="dn-fg dn-fg2">
                    <div><div class="c-muted" style="font-size:11px">Vendor</div><div class="fw-700">{{viewNote.vendor}}</div></div>
                    <div><div class="c-muted" style="font-size:11px">Date</div><div class="fw-700">{{fmtDate(viewNote.date)}}</div></div>
@@ -7910,9 +8029,7 @@
                 <span class="dn-sec-lbl">Debit Note Details</span>
                 <div class="dn-fg dn-fg3">
                   <div><label class="fl">Vendor <span class="req">*</span></label>
-                    <select v-model="form.vendor" class="dn-fi">
-                      <option v-for="v in vendors" :key="v.name" :value="v.name">{{v.supplier_name}}</option>
-                    </select>
+                    <searchable-select v-model="form.vendor" :options="vendors" value-key="name" label-key="supplier_name" placeholder="— Vendor —"/>
                   </div>
                   <div><label class="fl">Against Bill</label>
                     <select v-model="form.against_bill" class="dn-fi">
@@ -7924,7 +8041,7 @@
                 </div>
 
                 <div v-if="selectedBillDetails" class="dn-bill-info">
-                  <div style="font-size:11.5px;font-weight:700;color:#e67700;text-transform:uppercase;margin-bottom:8px">Original Bill Details</div>
+                  <div style="font-size:11.5px;font-weight:700;color:#2563eb;text-transform:uppercase;margin-bottom:8px">Original Bill Details</div>
                   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                     <div><div style="font-size:11px;color:#868e96">Date</div><div style="font-size:13px;font-weight:600">{{fmtDate(selectedBillDetails.posting_date)}}</div></div>
                     <div><div style="font-size:11px;color:#868e96">Grand Total</div><div style="font-size:13px;font-weight:600">{{fmt(selectedBillDetails.grand_total)}}</div></div>
@@ -7943,12 +8060,17 @@
                 <div class="dn-fg" style="grid-template-columns:1fr"><label class="fl">Notes</label><textarea v-model="form.notes" class="dn-fi" rows="2" placeholder="Details about return..."></textarea></div>
 
                 <span class="dn-sec-lbl">Items Being Returned / Debited</span>
-                <div style="border:1px solid #ffe0b2;border-radius:8px;overflow:hidden;margin-bottom:16px">
+                <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:16px">
                   <table class="dn-itbl">
                     <thead><tr><th style="width:30%">Item</th><th>Description</th><th style="width:80px;text-align:center">Qty</th><th style="width:120px;text-align:right">Rate</th><th style="width:120px;text-align:right">Amount</th><th style="width:40px"></th></tr></thead>
                     <tbody>
                       <tr v-for="(it,i) in form.items" :key="i">
-                        <td><input v-model="it.item_name" class="dn-ci" placeholder="Item..."/></td>
+                        <td>
+                          <select v-model="it.item_name" class="dn-ci dn-sel" @change="onDnItemPick(it)">
+                            <option value="" disabled selected>— Select Item —</option>
+                            <option v-for="dnit in allItems" :key="dnit.name" :value="dnit.item_name">{{dnit.item_name}}</option>
+                          </select>
+                        </td>
                         <td><input v-model="it.description" class="dn-ci" placeholder="Desc..."/></td>
                         <td><input v-model.number="it.qty" type="number" class="dn-ci ta-c" @input="recalc"/></td>
                         <td><input v-model.number="it.rate" type="number" class="dn-ci ta-r" @input="recalc"/></td>
@@ -7957,8 +8079,8 @@
                       </tr>
                     </tbody>
                   </table>
-                  <div style="padding:8px 12px;background:#fff8f0;border-top:1px solid #ffe0b2">
-                    <button @click="addRow" style="background:none;border:none;cursor:pointer;color:#e67700;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px">+ Add Row</button>
+                  <div style="padding:8px 12px;background:#f8f9fc;border-top:1px solid #e8ecf0">
+                    <button @click="addRow" style="background:none;border:none;cursor:pointer;color:#2563eb;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px">+ Add Row</button>
                   </div>
                 </div>
 
@@ -7977,8 +8099,8 @@
                 <button class="b-btn b-btn-ghost" @click="openEdit(viewNote)">Edit</button>
               </div>
               <div v-else style="display:flex;gap:8px">
-                <button class="b-btn b-btn-ghost" @click="saveNote('Draft')" :disabled="saving" style="color:#e67700;border-color:#e67700">Save as Draft</button>
-                <button class="b-btn b-btn-primary" style="background:#e67700" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
+                <button class="b-btn b-btn-ghost" @click="saveNote('Draft')" :disabled="saving" style="color:#2563eb;border-color:#2563eb">Save as Draft</button>
+                <button class="b-btn b-btn-primary" style="background:#2563eb" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
               </div>
             </div>
           </div>
@@ -8051,61 +8173,1184 @@
   </div>
 </div>`});
 
-  const Banking = defineComponent({
-    name: "Banking",
+  /* ══════════════════════════════════════════════════
+     BANKING MODULE — shared constants
+  ══════════════════════════════════════════════════ */
+  const BANK_TYPE_META = {
+    Current:  { icon: "🏢", color: "#3B5BDB", bg: "#EEF2FF", label: "Current Account" },
+    Savings:  { icon: "💰", color: "#2F9E44", bg: "#EBFBEE", label: "Savings Account" },
+    Cash:     { icon: "💵", color: "#E67700", bg: "#FFF3BF", label: "Cash / Petty Cash" },
+    Overdraft:{ icon: "📋", color: "#C92A2A", bg: "#FFE3E3", label: "Overdraft" },
+    CC:       { icon: "💳", color: "#7048E8", bg: "#F3F0FF", label: "Credit Card" },
+    Fixed:    { icon: "🔒", color: "#0C8599", bg: "#E0F7FA", label: "Fixed Deposit" },
+    Wallet:   { icon: "📱", color: "#D4537E", bg: "#FBEAF0", label: "Digital Wallet" },
+  };
+  const BANK_COLORS = {
+    "HDFC Bank":"#004C8F","ICICI Bank":"#F36523","State Bank of India":"#2E8B57",
+    "Axis Bank":"#800020","Kotak Mahindra Bank":"#E31E24","Punjab National Bank":"#003366",
+    "Bank of Baroda":"#F77F00","Canara Bank":"#0047AB","IndusInd Bank":"#7B3F00",
+    "Yes Bank":"#003087","IDFC First Bank":"#00457C","Federal Bank":"#E31837","Other":"#868E96"
+  };
+  const TXN_CATEGORIES = [
+    { id:"salary",     label:"Salary",           icon:"💴", color:"#3B5BDB", bg:"#EEF2FF" },
+    { id:"rent",       label:"Rent",              icon:"🏠", color:"#0C8599", bg:"#E0F7FA" },
+    { id:"utilities",  label:"Utilities",         icon:"⚡", color:"#E67700", bg:"#FFF3BF" },
+    { id:"vendor",     label:"Vendor Payment",    icon:"📦", color:"#C92A2A", bg:"#FFE3E3" },
+    { id:"customer",   label:"Customer Receipt",  icon:"💳", color:"#2F9E44", bg:"#EBFBEE" },
+    { id:"tax",        label:"Tax / GST",         icon:"📋", color:"#7048E8", bg:"#F3F0FF" },
+    { id:"bank-charge",label:"Bank Charges",      icon:"🏛", color:"#495057", bg:"#F1F3F5" },
+    { id:"software",   label:"Software",          icon:"💻", color:"#3B5BDB", bg:"#EEF2FF" },
+    { id:"travel",     label:"Travel",            icon:"✈", color:"#D4537E", bg:"#FBEAF0" },
+    { id:"transfer",   label:"Internal Transfer", icon:"⇄", color:"#1098AD", bg:"#E3FAFC" },
+    { id:"interest",   label:"Interest",          icon:"📈", color:"#2F9E44", bg:"#EBFBEE" },
+    { id:"other",      label:"Other",             icon:"💵", color:"#868E96", bg:"#F1F3F5" },
+  ];
+  const CAT_MAP_BANK = Object.fromEntries(TXN_CATEGORIES.map(c => [c.id, c]));
+  const DEFAULT_BANK_ACCOUNTS = [
+    { name:"HDFC Current Account", type:"Current", bank:"HDFC Bank", acct_no:"50100XXXXXXXX", ifsc:"HDFC0000001", branch:"Koramangala", holder:"My Company", currency:"INR", opening:500000, balance:1234567.50, od_limit:0, gl_account:"", is_default:1, status:"Active", rm:"Rajesh Kumar", rm_phone:"+91 98765 43210", reconcile_pct:95, source:"local" },
+    { name:"ICICI Savings Account", type:"Savings", bank:"ICICI Bank", acct_no:"002XXXXXXXXX", ifsc:"ICIC0000002", branch:"MG Road", holder:"My Company", currency:"INR", opening:200000, balance:456789.00, od_limit:0, gl_account:"", is_default:0, status:"Active", rm:"Priya Sharma", rm_phone:"+91 87654 32109", reconcile_pct:88, source:"local" },
+    { name:"Petty Cash", type:"Cash", bank:"", acct_no:"", ifsc:"", branch:"", holder:"", currency:"INR", opening:50000, balance:23450.00, od_limit:0, gl_account:"", is_default:0, status:"Active", rm:"", rm_phone:"", reconcile_pct:100, source:"local" },
+  ];
+  const DEFAULT_BANK_TXNS = [
+    { id:"TXN-0001", date: new Date().toISOString().slice(0,10), account:"HDFC Current Account", description:"NEFT CR - INVOICE INV-2026-0142", type:"Credit", amount:125000, balance:1234567.50, category:"customer", reconciled:true, notes:"" },
+    { id:"TXN-0002", date: new Date(Date.now()-86400000).toISOString().slice(0,10), account:"HDFC Current Account", description:"SALARY PAYROLL MARCH 2026", type:"Debit", amount:320000, balance:1109567.50, category:"salary", reconciled:true, notes:"" },
+    { id:"TXN-0003", date: new Date(Date.now()-2*86400000).toISOString().slice(0,10), account:"ICICI Savings Account", description:"AWS INVOICE MAR 2026", type:"Debit", amount:18670, balance:456789.00, category:"software", reconciled:false, notes:"" },
+    { id:"TXN-0004", date: new Date(Date.now()-3*86400000).toISOString().slice(0,10), account:"HDFC Current Account", description:"RENT - BRIGADE PROPERTIES", type:"Debit", amount:50000, balance:1059567.50, category:"rent", reconciled:true, notes:"" },
+    { id:"TXN-0005", date: new Date(Date.now()-4*86400000).toISOString().slice(0,10), account:"HDFC Current Account", description:"GST PAYMENT MARCH", type:"Debit", amount:45000, balance:1014567.50, category:"tax", reconciled:false, notes:"" },
+    { id:"TXN-0006", date: new Date(Date.now()-5*86400000).toISOString().slice(0,10), account:"Petty Cash", description:"OFFICE SUPPLIES", type:"Debit", amount:2340, balance:23450.00, category:"other", reconciled:true, notes:"" },
+  ];
+  function fmtINR(v) { const n = Math.abs(Number(v || 0)); return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2 }); }
+  function fmtINRc(v) { const n = Number(v || 0); if (Math.abs(n) >= 10000000) return "₹" + (n / 10000000).toFixed(2) + "Cr"; if (Math.abs(n) >= 100000) return "₹" + (n / 100000).toFixed(1) + "L"; if (Math.abs(n) >= 1000) return "₹" + (n / 1000).toFixed(1) + "K"; return "₹" + Math.abs(n).toFixed(0); }
+  function maskAcct(n) { if (!n || n.length < 4) return n || "—"; return "••••" + n.slice(-4); }
+
+  /* ══════════════════════════════════════════════════
+     BANK ACCOUNTS
+  ══════════════════════════════════════════════════ */
+  const BankAccounts = defineComponent({
+    name: "BankAccounts",
     setup() {
-      const cash = ref(null), cashLoad = ref(true), txns = ref([]), txnLoad = ref(false), sel = ref(null);
-      async function loadCash() { cashLoad.value = true; try { cash.value = await apiGET("zoho_books_clone.api.dashboard.get_cash_position"); } finally { cashLoad.value = false; } }
-      async function pickAcct(a) {
-        sel.value = a.name; txnLoad.value = true;
-        try { txns.value = await apiList("Bank Transaction", { fields: ["name", "date", "description", "debit", "credit", "balance", "reference_number", "status"], filters: [["bank_account", "=", a.name]], order: "date desc", limit: 30 }); }
-        finally { txnLoad.value = false; }
+      const allAccounts = ref([]);
+      const loading = ref(true);
+      const drawerOpen = ref(false);
+      const drawerMode = ref("add");
+      const editingName = ref(null);
+      const showDel = ref(false);
+      const deleteTarget = ref(null);
+      const glAccounts = ref([]);
+      const form = reactive({ name:"", type:"Current", bank:"", acct_no:"", ifsc:"", branch:"", holder:"", micr:"", currency:"INR", opening:0, balance:0, od_limit:0, gl_account:"", cost_center:"", rm:"", rm_phone:"", website:"", cif:"", status:"Active", is_default:0 });
+
+      const heroStats = computed(() => {
+        const active = allAccounts.value.filter(a => a.status === "Active");
+        const total = active.reduce((s, a) => s + flt(a.balance), 0);
+        const pos = active.filter(a => flt(a.balance) > 0).reduce((s, a) => s + flt(a.balance), 0);
+        const neg = active.filter(a => flt(a.balance) < 0).reduce((s, a) => s + flt(a.balance), 0);
+        return { total, pos, neg, count: allAccounts.value.length, active: active.length };
+      });
+
+      const showBankFields = computed(() => !["Cash","Wallet"].includes(form.type));
+      const showOD = computed(() => form.type === "Overdraft");
+
+      async function load() {
+        loading.value = true;
+        let ok = false;
+        try {
+          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name","account_name","bank","bank_account_no","branch_code","account","currency","is_default","disabled"]), order_by:"creation desc", limit_page_length:50 });
+          if (r && r.length) {
+            allAccounts.value = r.map(a => ({ name:a.name, type:"Current", bank:a.bank||"", acct_no:a.bank_account_no||"", ifsc:a.branch_code||"", branch:"", holder:"", currency:a.currency||"INR", opening:0, balance:0, od_limit:0, gl_account:a.account||"", is_default:a.is_default?1:0, status:a.disabled?"Inactive":"Active", rm:"", rm_phone:"", reconcile_pct:0, source:"frappe" }));
+            ok = true;
+          }
+        } catch {}
+        if (!ok) {
+          const saved = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
+          allAccounts.value = saved.length ? saved : DEFAULT_BANK_ACCOUNTS;
+          if (!saved.length) localStorage.setItem("books_bank_accounts", JSON.stringify(allAccounts.value));
+        }
+        try {
+          const gl = await apiGET("frappe.client.get_list", { doctype:"Account", fields:JSON.stringify(["name"]), filters:JSON.stringify([["account_type","in",["Bank","Cash"]],["is_group","=",0]]), limit_page_length:100 });
+          glAccounts.value = (gl || []).map(a => a.name);
+        } catch {
+          const coa = JSON.parse(localStorage.getItem("books_coa") || "[]");
+          glAccounts.value = coa.filter(a => !a.is_group && ["Bank","Cash"].includes(a.account_type)).map(a => a.account_name || a.name);
+        }
+        loading.value = false;
       }
-      onMounted(loadCash);
-      return { cash, cashLoad, txns, txnLoad, sel, pickAcct, fmt, fmtDate, icon, statusBadge, flt };
+
+      function openAdd() {
+        drawerMode.value = "add"; editingName.value = null;
+        Object.assign(form, { name:"", type:"Current", bank:"", acct_no:"", ifsc:"", branch:"", holder:"", micr:"", currency:"INR", opening:0, balance:0, od_limit:0, gl_account:"", cost_center:"", rm:"", rm_phone:"", website:"", cif:"", status:"Active", is_default:0 });
+        drawerOpen.value = true;
+      }
+      function openEdit(a) {
+        drawerMode.value = "edit"; editingName.value = a.name;
+        Object.assign(form, { name:a.name, type:a.type||"Current", bank:a.bank||"", acct_no:a.acct_no||"", ifsc:a.ifsc||"", branch:a.branch||"", holder:a.holder||"", micr:a.micr||"", currency:a.currency||"INR", opening:flt(a.opening), balance:flt(a.balance), od_limit:flt(a.od_limit), gl_account:a.gl_account||"", cost_center:a.cost_center||"", rm:a.rm||"", rm_phone:a.rm_phone||"", website:a.website||"", cif:a.cif||"", status:a.status||"Active", is_default:a.is_default||0 });
+        drawerOpen.value = true;
+      }
+      async function saveAccount() {
+        if (!form.name.trim()) { toast("Account name is required", "error"); return; }
+        if (form.is_default) allAccounts.value.forEach(a => { a.is_default = 0; });
+        const doc = { ...form, source: "local" };
+        try {
+          const fdoc = { doctype:"Bank Account", account_name:form.name, bank:form.bank, bank_account_no:form.acct_no, branch_code:form.ifsc, account:form.gl_account, currency:form.currency, is_default:form.is_default };
+          if (drawerMode.value === "edit") { fdoc.name = editingName.value; await apiPOST("frappe.client.save", { doc: JSON.stringify(fdoc) }); }
+          else await apiPOST("frappe.client.insert", { doc: JSON.stringify(fdoc) });
+          doc.source = "frappe"; toast(drawerMode.value === "edit" ? "Updated in Frappe" : "Created in Frappe");
+        } catch { toast(drawerMode.value === "edit" ? "Saved locally" : "Added locally", "info"); }
+        const idx = allAccounts.value.findIndex(a => a.name === (editingName.value || form.name));
+        if (idx >= 0) allAccounts.value[idx] = doc; else allAccounts.value.unshift(doc);
+        localStorage.setItem("books_bank_accounts", JSON.stringify(allAccounts.value.filter(a => a.source !== "frappe")));
+        drawerOpen.value = false;
+      }
+      function confirmDel(a) { deleteTarget.value = a; showDel.value = true; }
+      async function doDelete() {
+        const name = deleteTarget.value?.name;
+        try { await apiPOST("frappe.client.delete", { doctype:"Bank Account", name }); } catch {}
+        allAccounts.value = allAccounts.value.filter(a => a.name !== name);
+        localStorage.setItem("books_bank_accounts", JSON.stringify(allAccounts.value.filter(a => a.source !== "frappe")));
+        toast("Account removed"); showDel.value = false; deleteTarget.value = null;
+      }
+      const recentTxns = computed(() => (JSON.parse(localStorage.getItem("books_bank_txns") || "[]")).slice(0, 6));
+
+      onMounted(load);
+      return { allAccounts, loading, drawerOpen, drawerMode, form, showBankFields, showOD, glAccounts, heroStats, recentTxns, openAdd, openEdit, saveAccount, showDel, deleteTarget, confirmDel, doDelete, fmtINR, fmtINRc, fmtDate, maskAcct, icon, flt, BANK_TYPE_META, BANK_COLORS, CAT_MAP_BANK };
     },
     template: `
 <div class="b-page">
-  <div class="b-card" style="display:flex;align-items:center;justify-content:space-between;padding:18px 24px">
+  <!-- Hero -->
+  <div class="bk-hero">
     <div>
-      <div style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3);margin-bottom:4px">Total Cash Position</div>
-      <div v-if="cashLoad" class="b-shimmer" style="width:140px;height:28px"></div>
-      <div v-else style="font-family:var(--mono);font-size:26px;font-weight:700;color:var(--green-text)">{{fmt(cash?.total_cash)}}</div>
-    </div><span class="b-badge b-badge-green">Live</span>
+      <div class="bk-hero-lbl">Total Bank Balance</div>
+      <div class="bk-hero-val">{{fmtINR(heroStats.total)}}</div>
+      <div class="bk-hero-sub">Across {{heroStats.active}} active account{{heroStats.active!==1?'s':''}}</div>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <div class="bk-hero-chip"><div class="bk-hc-lbl">Cash &amp; Bank</div><div class="bk-hc-val">{{fmtINRc(heroStats.pos)}}</div></div>
+      <div class="bk-hero-chip"><div class="bk-hc-lbl">Credit / OD</div><div class="bk-hc-val" style="color:#FF8FAB">{{fmtINRc(Math.abs(heroStats.neg))}}</div></div>
+      <div class="bk-hero-chip"><div class="bk-hc-lbl">Accounts</div><div class="bk-hc-val">{{heroStats.count}}</div></div>
+    </div>
   </div>
-  <div class="b-bank-grid">
-    <template v-if="cashLoad"><div v-for="n in 3" :key="n" class="b-bank-card"><div class="b-shimmer" style="height:80px"></div></div></template>
+  <!-- Account grid -->
+  <div class="bk-acct-grid">
+    <template v-if="loading"><div v-for="n in 3" :key="n" class="b-shimmer" style="height:180px;border-radius:10px"></div></template>
     <template v-else>
-      <div v-for="a in (cash?.bank_accounts||[])" :key="a.name" class="b-bank-card" :class="{selected:sel===a.name}" @click="pickAcct(a)">
-        <div style="display:flex;justify-content:space-between;align-items:center"><span class="b-badge b-badge-blue" style="font-size:11px">{{a.currency||'INR'}}</span></div>
-        <div class="b-bank-name">{{a.account_name}}</div>
-        <div class="b-bank-sub">{{a.bank_name||'Bank Account'}}</div>
-        <div class="b-bank-balance">{{fmt(a.current_balance)}}</div>
+      <div v-for="a in [...allAccounts].sort((x,y)=>y.is_default-x.is_default)" :key="a.name"
+        class="bk-acct-card" :class="{inactive:a.status!=='Active'}" @click="openEdit(a)">
+        <div class="bk-acct-hdr">
+          <div style="display:flex;align-items:center;gap:10px;flex:1">
+            <div class="bk-acct-icon" :style="{background:(BANK_TYPE_META[a.type]||BANK_TYPE_META.Current).bg,color:(BANK_TYPE_META[a.type]||BANK_TYPE_META.Current).color}">
+              {{(BANK_TYPE_META[a.type]||BANK_TYPE_META.Current).icon}}
+            </div>
+            <div>
+              <div class="bk-acct-name">{{a.name}}</div>
+              <div class="bk-acct-bank">{{a.bank||'—'}}</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <span v-if="a.is_default" class="b-badge b-badge-green" style="font-size:10px">Default</span>
+            <span v-if="a.status!=='Active'" class="b-badge b-badge-muted" style="font-size:10px">{{a.status}}</span>
+            <div style="display:flex;gap:4px;margin-top:2px">
+              <button class="b-btn b-btn-ghost" style="padding:4px 7px;font-size:11px" @click.stop="openEdit(a)"><span v-html="icon('edit',12)"></span></button>
+              <button v-if="a.source!=='frappe'" class="b-btn b-btn-ghost" style="padding:4px 7px;font-size:11px;border-color:rgba(201,42,42,.3);color:#C92A2A" @click.stop="confirmDel(a)"><span v-html="icon('trash',12)"></span></button>
+            </div>
+          </div>
+        </div>
+        <div style="padding:0 18px 14px">
+          <div class="bk-acct-bal" :style="{color:flt(a.balance)<0?'#C92A2A':'#1A1D23'}">
+            {{flt(a.balance)<0?'−':'+'}}{{fmtINR(a.balance)}}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <span v-if="a.acct_no" style="font-size:11.5px;color:#868E96">🔢 {{maskAcct(a.acct_no)}}</span>
+            <span v-if="a.ifsc" style="font-size:11.5px;color:#868E96">📍 {{a.ifsc}}</span>
+            <span class="b-badge" :style="{background:(BANK_TYPE_META[a.type]||BANK_TYPE_META.Current).bg,color:(BANK_TYPE_META[a.type]||BANK_TYPE_META.Current).color,fontSize:'10.5px'}">
+              {{(BANK_TYPE_META[a.type]||BANK_TYPE_META.Current).label}}
+            </span>
+          </div>
+          <div v-if="a.reconcile_pct>0">
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:#868E96;margin-bottom:3px">
+              <span>Reconciliation</span>
+              <span style="font-weight:600" :style="{color:a.reconcile_pct>=90?'#2F9E44':a.reconcile_pct>=70?'#E67700':'#C92A2A'}">{{a.reconcile_pct}}%</span>
+            </div>
+            <div style="height:4px;border-radius:2px;background:#E8ECF0;overflow:hidden">
+              <div style="height:100%;border-radius:2px;transition:width .3s" :style="{width:a.reconcile_pct+'%',background:a.reconcile_pct>=90?'#2F9E44':a.reconcile_pct>=70?'#E67700':'#C92A2A'}"></div>
+            </div>
+          </div>
+        </div>
+        <div class="bk-acct-footer">
+          <div><div style="font-size:11px;color:#868E96">Opening</div><div style="font-size:12.5px;font-weight:600;font-family:var(--mono)">{{fmtINR(a.opening)}}</div></div>
+          <div style="text-align:right"><div style="font-size:11px;color:#868E96">{{a.od_limit?'OD Limit':'Currency'}}</div><div style="font-size:12.5px;font-weight:600;font-family:var(--mono)">{{a.od_limit?fmtINR(a.od_limit):a.currency||'INR'}}</div></div>
+        </div>
       </div>
-      <div v-if="!(cash?.bank_accounts?.length)" class="b-bank-card b-empty" style="cursor:default">No bank accounts configured<br><a :href="newDocUrl('Bank Account')" target="_blank" style="color:#3B5BDB;font-size:12px;margin-top:6px;display:block">+ Add Bank Account</a></div>
+      <!-- Add card -->
+      <div class="bk-add-card" @click="openAdd">
+        <div style="font-size:32px;margin-bottom:8px;color:#CDD5E0"><span v-html="icon('plus',28)"></span></div>
+        <div style="font-size:13px;font-weight:600;color:#868E96">Add Bank Account</div>
+        <div style="font-size:12px;color:#ADB5BD;margin-top:2px">Current, Savings, Cash, CC</div>
+      </div>
     </template>
   </div>
-  <div v-if="sel" class="b-card" style="padding:0;overflow:hidden">
-    <div class="b-card-head"><span class="b-card-title">Transactions — {{sel}}</span><span class="b-badge b-badge-amber">{{txns.filter(t=>t.status==='Unreconciled').length}} unreconciled</span></div>
+  <!-- Recent transactions -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <div class="b-card-head">
+      <span class="b-card-title">Recent Transactions — All Accounts</span>
+      <router-link to="/banking/transactions" style="font-size:12px;color:#3B5BDB;text-decoration:none;font-weight:600">View All →</router-link>
+    </div>
     <table class="b-table">
-      <thead><tr><th>Ref #</th><th>Date</th><th>Description</th><th class="ta-r">Debit</th><th class="ta-r">Credit</th><th class="ta-r">Balance</th><th>Status</th></tr></thead>
+      <thead><tr><th>Date</th><th>Account</th><th>Description</th><th>Type</th><th class="ta-r">Amount</th><th>Status</th></tr></thead>
       <tbody>
-        <template v-if="txnLoad"><tr v-for="n in 5" :key="n"><td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:12px"></div></td></tr></template>
-        <template v-else>
-          <tr v-for="t in txns" :key="t.name">
-            <td class="mono c-accent fw-600" style="font-size:12px">{{t.reference_number||t.name}}</td>
-            <td class="c-muted" style="font-size:12.5px">{{fmtDate(t.date)}}</td>
-            <td class="c-muted" style="font-size:12.5px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{t.description||'—'}}</td>
-            <td class="ta-r mono c-red fw-600" style="font-size:12.5px">{{flt(t.debit)>0?fmt(t.debit):'—'}}</td>
-            <td class="ta-r mono c-green fw-600" style="font-size:12.5px">{{flt(t.credit)>0?fmt(t.credit):'—'}}</td>
-            <td class="ta-r mono fw-600" style="font-size:12.5px">{{fmt(t.balance)}}</td>
-            <td><span class="b-badge" :class="statusBadge(t.status)">{{t.status}}</span></td>
-          </tr>
-          <tr v-if="!txns.length"><td colspan="7" style="text-align:center;padding:28px;color:var(--green-text);font-weight:600">✓ All reconciled</td></tr>
-        </template>
+        <tr v-if="!recentTxns.length"><td colspan="6" class="b-empty">No transactions yet — import a bank statement</td></tr>
+        <tr v-for="t in recentTxns" :key="t.id">
+          <td class="c-muted" style="font-size:12.5px">{{fmtDate(t.date)}}</td>
+          <td style="font-size:12.5px">{{t.account}}</td>
+          <td style="font-size:13px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{t.description}}</td>
+          <td><span class="b-badge" :class="t.type==='Credit'?'b-badge-green':'b-badge-red'">{{t.type}}</span></td>
+          <td class="ta-r mono fw-600" :class="t.type==='Credit'?'c-green':'c-red'" style="font-size:12.5px">{{t.type==='Credit'?'+':'-'}}{{fmtINR(t.amount)}}</td>
+          <td><span class="b-badge" :class="t.reconciled?'b-badge-green':'b-badge-amber'">{{t.reconciled?'Reconciled':'Pending'}}</span></td>
+        </tr>
       </tbody>
     </table>
   </div>
+  <!-- Add/Edit Drawer -->
+  <teleport to="body">
+    <div v-if="drawerOpen" class="bk-drawer-bg" @click.self="drawerOpen=false">
+      <div class="bk-drawer-panel">
+        <div class="bk-dh">
+          <div class="bk-dh-left">
+            <div class="bk-dh-icon"><span v-html="icon('bank',18)"></span></div>
+            <div>
+              <h3>{{drawerMode==='add'?'Add Bank Account':'Edit Account'}}</h3>
+              <div class="bk-dh-sub">{{drawerMode==='edit'?editingName:'Fill in account details'}}</div>
+            </div>
+          </div>
+          <button class="bk-d-close" @click="drawerOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="bk-d-body">
+          <div class="bk-sec-lbl">Account Identity</div>
+          <div class="bk-fg">
+            <div><label class="bk-fl">Account Nickname <span style="color:#C92A2A">*</span></label><input class="bk-fi" v-model="form.name" placeholder="e.g. HDFC Current, Petty Cash"/></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div><label class="bk-fl">Account Type</label>
+                <select class="bk-fi" v-model="form.type">
+                  <option v-for="[k,v] in Object.entries(BANK_TYPE_META)" :key="k" :value="k">{{v.label}}</option>
+                </select>
+              </div>
+              <div><label class="bk-fl">Currency</label>
+                <select class="bk-fi" v-model="form.currency">
+                  <option value="INR">₹ INR</option><option value="USD">$ USD</option><option value="EUR">€ EUR</option><option value="GBP">£ GBP</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <template v-if="showBankFields">
+            <div class="bk-sec-lbl">Bank Details</div>
+            <div class="bk-fg">
+              <div><label class="bk-fl">Bank Name</label>
+                <select class="bk-fi" v-model="form.bank">
+                  <option value="">— Select bank —</option>
+                  <option v-for="[k] in Object.entries(BANK_COLORS)" :key="k" :value="k">{{k}}</option>
+                </select>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+                <div><label class="bk-fl">Account Number</label><input class="bk-fi" v-model="form.acct_no" placeholder="XXXXXXXXXXXX" style="font-family:var(--mono)"/></div>
+                <div><label class="bk-fl">IFSC Code</label><input class="bk-fi" v-model="form.ifsc" placeholder="HDFC0000001" style="font-family:var(--mono)" @input="form.ifsc=form.ifsc.toUpperCase()"/></div>
+                <div><label class="bk-fl">Branch</label><input class="bk-fi" v-model="form.branch" placeholder="Koramangala"/></div>
+              </div>
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+                <div><label class="bk-fl">Account Holder</label><input class="bk-fi" v-model="form.holder" placeholder="Company name"/></div>
+                <div><label class="bk-fl">MICR Code</label><input class="bk-fi" v-model="form.micr" placeholder="9 digit MICR" style="font-family:var(--mono)"/></div>
+              </div>
+            </div>
+          </template>
+          <div class="bk-sec-lbl">Accounting Link</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div><label class="bk-fl">GL Account</label>
+              <select class="bk-fi" v-model="form.gl_account">
+                <option value="">— Select GL account —</option>
+                <option v-for="g in glAccounts" :key="g" :value="g">{{g}}</option>
+              </select>
+            </div>
+            <div><label class="bk-fl">Status</label>
+              <select class="bk-fi" v-model="form.status">
+                <option>Active</option><option>Inactive</option><option>Dormant</option><option>Closed</option>
+              </select>
+            </div>
+          </div>
+          <div class="bk-sec-lbl">Balance</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div><label class="bk-fl">Opening Balance (₹)</label><input class="bk-fi" type="number" v-model="form.opening" placeholder="0.00" style="font-family:var(--mono)"/></div>
+            <div><label class="bk-fl">Current Balance (₹)</label><input class="bk-fi" type="number" v-model="form.balance" placeholder="0.00" style="font-family:var(--mono)"/></div>
+            <div v-if="showOD"><label class="bk-fl">Overdraft Limit (₹)</label><input class="bk-fi" type="number" v-model="form.od_limit" placeholder="0" style="font-family:var(--mono)"/></div>
+          </div>
+          <div class="bk-sec-lbl">Contact</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div><label class="bk-fl">Relationship Manager</label><input class="bk-fi" v-model="form.rm" placeholder="Name"/></div>
+            <div><label class="bk-fl">RM Phone</label><input class="bk-fi" v-model="form.rm_phone" type="tel" placeholder="+91 98765 43210"/></div>
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer;margin-bottom:16px">
+            <input type="checkbox" :checked="form.is_default==1" @change="form.is_default=$event.target.checked?1:0" style="accent-color:#0C8599"/>
+            Set as default account
+          </label>
+        </div>
+        <div class="bk-d-footer">
+          <button class="b-btn b-btn-ghost" @click="drawerOpen=false">Cancel</button>
+          <button class="b-btn b-btn-primary" @click="saveAccount" style="background:#0C8599;border-color:#0C8599;min-width:130px">Save Account</button>
+        </div>
+      </div>
+    </div>
+    <!-- Delete confirm -->
+    <div v-if="showDel" class="bk-modal-bg">
+      <div class="bk-modal-box">
+        <div style="font-size:17px;font-weight:700;margin-bottom:8px">Remove Bank Account?</div>
+        <div style="font-size:13px;color:#868E96;margin-bottom:20px;line-height:1.5">Remove <strong>{{deleteTarget?.name}}</strong>? This does not delete the GL account — only removes it from the banking module.</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showDel=false">Keep It</button>
+          <button class="b-btn b-btn-primary" style="background:#C92A2A;border-color:#C92A2A" @click="doDelete">Yes, Remove</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`});
+
+  /* ══════════════════════════════════════════════════
+     BANK TRANSACTIONS
+  ══════════════════════════════════════════════════ */
+  const BankTransactions = defineComponent({
+    name: "BankTransactions",
+    setup() {
+      const allTxns = ref([]);
+      const loading = ref(true);
+      const bankAccounts = ref([]);
+      const filterType = ref("all");
+      const filterAcct = ref("");
+      const dateFrom = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
+      const dateTo = ref(new Date().toISOString().slice(0, 10));
+      const searchQ = ref("");
+      const drawerOpen = ref(false);
+      const activeTxn = ref(null);
+      const selectedCat = ref("other");
+
+      async function load() {
+        loading.value = true;
+        let ok = false;
+        try {
+          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Transaction", fields:JSON.stringify(["name","date","bank_account","description","withdrawal","deposit","closing_balance","status"]), order_by:"date desc", limit_page_length:500 });
+          if (r && r.length) {
+            allTxns.value = r.map(t => ({ id:t.name, date:t.date, account:t.bank_account||"", description:t.description||"", type:flt(t.deposit)>0?"Credit":"Debit", amount:flt(t.deposit)||flt(t.withdrawal), balance:flt(t.closing_balance), category:autoCat(t.description||""), reconciled:t.status==="Reconciled", notes:"" }));
+            ok = true;
+          }
+        } catch {}
+        if (!ok) {
+          const saved = JSON.parse(localStorage.getItem("books_bank_txns") || "[]");
+          allTxns.value = saved.length ? saved : DEFAULT_BANK_TXNS;
+          if (!saved.length) localStorage.setItem("books_bank_txns", JSON.stringify(allTxns.value));
+        }
+        const ba = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
+        bankAccounts.value = ba.length ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        loading.value = false;
+      }
+
+      function autoCat(desc) {
+        const d = desc.toLowerCase();
+        if (/(salary|payroll|wages)/.test(d)) return "salary";
+        if (/(rent|lease|property)/.test(d)) return "rent";
+        if (/(electricity|bescom|water|utility)/.test(d)) return "utilities";
+        if (/(gst|tds|tax)/.test(d)) return "tax";
+        if (/(neft|rtgs|imps|transfer)/.test(d)) return "transfer";
+        if (/(interest|int cr)/.test(d)) return "interest";
+        if (/(bank charge|service charge|annual fee)/.test(d)) return "bank-charge";
+        if (/(aws|azure|zoho|slack|subscription)/.test(d)) return "software";
+        if (/(flight|hotel|travel|uber|ola)/.test(d)) return "travel";
+        return "other";
+      }
+
+      const filtered = computed(() => {
+        let r = allTxns.value;
+        if (filterType.value === "Credit") r = r.filter(t => t.type === "Credit");
+        else if (filterType.value === "Debit") r = r.filter(t => t.type === "Debit");
+        else if (filterType.value === "Uncategorised") r = r.filter(t => !t.category || t.category === "other");
+        else if (filterType.value === "Reconciled") r = r.filter(t => t.reconciled);
+        if (filterAcct.value) r = r.filter(t => t.account === filterAcct.value);
+        if (dateFrom.value) r = r.filter(t => t.date >= dateFrom.value);
+        if (dateTo.value) r = r.filter(t => t.date <= dateTo.value);
+        if (searchQ.value) { const q = searchQ.value.toLowerCase(); r = r.filter(t => (t.description + t.account).toLowerCase().includes(q)); }
+        return r.sort((a, b) => b.date.localeCompare(a.date));
+      });
+
+      const stats = computed(() => ({
+        cr: allTxns.value.filter(t => t.type === "Credit").reduce((s, t) => s + flt(t.amount), 0),
+        dr: allTxns.value.filter(t => t.type === "Debit").reduce((s, t) => s + flt(t.amount), 0),
+        rec: allTxns.value.filter(t => t.reconciled).length,
+        uncat: allTxns.value.filter(t => !t.category || t.category === "other").length,
+        total: allTxns.value.length,
+      }));
+
+      function openTxn(t) { activeTxn.value = t; selectedCat.value = t.category || "other"; drawerOpen.value = true; }
+
+      function saveTxn() {
+        if (!activeTxn.value) return;
+        const t = allTxns.value.find(x => x.id === activeTxn.value.id);
+        if (t) { t.category = selectedCat.value; t.notes = activeTxn.value.notes || ""; }
+        localStorage.setItem("books_bank_txns", JSON.stringify(allTxns.value));
+        drawerOpen.value = false;
+        toast("Transaction categorised as " + (CAT_MAP_BANK[selectedCat.value]?.label || selectedCat.value));
+      }
+
+      function markReconciled(t) {
+        const tx = allTxns.value.find(x => x.id === t.id);
+        if (tx) { tx.reconciled = true; localStorage.setItem("books_bank_txns", JSON.stringify(allTxns.value)); }
+        drawerOpen.value = false;
+        toast("Marked as reconciled");
+      }
+
+      onMounted(load);
+      return { allTxns, loading, filtered, stats, bankAccounts, filterType, filterAcct, dateFrom, dateTo, searchQ, drawerOpen, activeTxn, selectedCat, openTxn, saveTxn, markReconciled, load, fmtINR, fmtINRc, fmtDate, icon, flt, TXN_CATEGORIES, CAT_MAP_BANK };
+    },
+    template: `
+<div class="b-page">
+  <!-- Stats strip -->
+  <div class="bk-sum-strip">
+    <div class="bk-sum-card"><div class="bk-sum-lbl">Total Credits</div><div class="bk-sum-val c-green">{{fmtINRc(stats.cr)}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl">Total Debits</div><div class="bk-sum-val c-red">{{fmtINRc(stats.dr)}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl" style="color:#0C8599">Reconciled</div><div class="bk-sum-val" style="color:#0C8599">{{stats.rec}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl" style="color:#E67700">Uncategorised</div><div class="bk-sum-val" style="color:#E67700">{{stats.uncat}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl">Transactions</div><div class="bk-sum-val">{{stats.total}}</div></div>
+  </div>
+  <!-- Filters -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button v-for="f in ['all','Credit','Debit','Uncategorised','Reconciled']" :key="f"
+        class="bk-pill" :class="{active:filterType===f}" @click="filterType=f">
+        {{f==='all'?'All':f}}
+        <span v-if="f==='Credit'" class="bk-pc" style="background:#EBFBEE;color:#2F9E44">{{allTxns.filter(t=>t.type==='Credit').length}}</span>
+        <span v-if="f==='Debit'" class="bk-pc" style="background:#FFE3E3;color:#C92A2A">{{allTxns.filter(t=>t.type==='Debit').length}}</span>
+        <span v-if="f==='Uncategorised'" class="bk-pc" style="background:#FFF3BF;color:#E67700">{{allTxns.filter(t=>!t.category||t.category==='other').length}}</span>
+        <span v-if="f==='Reconciled'" class="bk-pc" style="background:#E0F7FA;color:#0C8599">{{allTxns.filter(t=>t.reconciled).length}}</span>
+      </button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
+      <select class="b-input" style="font-size:13px" v-model="filterAcct">
+        <option value="">All Accounts</option>
+        <option v-for="a in bankAccounts" :key="a" :value="a">{{a}}</option>
+      </select>
+      <input type="date" class="b-input" v-model="dateFrom" style="font-size:12px"/>
+      <input type="date" class="b-input" v-model="dateTo" style="font-size:12px"/>
+      <div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:5px 12px">
+        <span v-html="icon('search',12)" style="color:#868E96"></span>
+        <input v-model="searchQ" placeholder="Search..." style="border:none;outline:none;font-size:13px;width:170px;background:transparent;font-family:inherit"/>
+      </div>
+      <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span></button>
+    </div>
+  </div>
+  <!-- Table -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <table class="b-table">
+      <thead><tr><th>Date</th><th>Account</th><th>Description</th><th>Category</th><th class="ta-r">Debit</th><th class="ta-r">Credit</th><th class="ta-r">Balance</th><th>Status</th><th style="text-align:center">Action</th></tr></thead>
+      <tbody>
+        <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="9" style="padding:12px"><div class="b-shimmer" style="height:13px"></div></td></tr></template>
+        <tr v-else-if="!filtered.length"><td colspan="9" class="b-empty">No transactions found — adjust filters or import a bank statement</td></tr>
+        <tr v-else v-for="t in filtered" :key="t.id" @click="openTxn(t)" style="cursor:pointer;transition:background .1s" class="bk-txn-row">
+          <td class="c-muted" style="font-size:12.5px;white-space:nowrap">{{fmtDate(t.date)}}</td>
+          <td style="font-size:12px;color:#868E96;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{t.account}}</td>
+          <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px">{{t.description}}</td>
+          <td>
+            <span style="display:inline-flex;align-items:center;gap:4px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600"
+              :style="{background:(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).bg,color:(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).color}">
+              {{(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).icon}} {{(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).label}}
+            </span>
+          </td>
+          <td class="ta-r mono fw-600 c-red" style="font-size:12.5px">{{t.type==='Debit'?fmtINR(t.amount):'—'}}</td>
+          <td class="ta-r mono fw-600 c-green" style="font-size:12.5px">{{t.type==='Credit'?fmtINR(t.amount):'—'}}</td>
+          <td class="ta-r mono c-muted" style="font-size:12px">{{t.balance?fmtINR(t.balance):'—'}}</td>
+          <td><span class="b-badge" :class="t.reconciled?'b-badge-green':'b-badge-amber'">{{t.reconciled?'✓ Reconciled':'Pending'}}</span></td>
+          <td style="text-align:center">
+            <button class="b-btn b-btn-ghost" style="padding:4px 8px" @click.stop="openTxn(t)"><span v-html="icon('eye',12)"></span></button>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+    <div v-if="filtered.length" style="padding:8px 16px;font-size:12px;color:#868E96;border-top:1px solid #F1F3F5;display:flex;justify-content:space-between">
+      <span>{{filtered.length}} transactions</span>
+      <span>
+        <span class="c-green fw-600">+{{fmtINR(filtered.filter(t=>t.type==='Credit').reduce((s,t)=>s+flt(t.amount),0))}}</span> in &nbsp;·&nbsp;
+        <span class="c-red fw-600">-{{fmtINR(filtered.filter(t=>t.type==='Debit').reduce((s,t)=>s+flt(t.amount),0))}}</span> out
+      </span>
+    </div>
+  </div>
+  <!-- Categorise Drawer -->
+  <teleport to="body">
+    <div v-if="drawerOpen&&activeTxn" class="bk-drawer-bg" @click.self="drawerOpen=false">
+      <div class="bk-drawer-panel">
+        <div class="bk-dh">
+          <div class="bk-dh-left">
+            <div class="bk-dh-icon"><span v-html="icon('pay',18)"></span></div>
+            <div>
+              <h3>Transaction Detail</h3>
+              <div class="bk-dh-sub">{{fmtDate(activeTxn.date)}} · {{activeTxn.account}}</div>
+            </div>
+          </div>
+          <button class="bk-d-close" @click="drawerOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="bk-d-body">
+          <!-- Amount card -->
+          <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:16px;margin-bottom:16px">
+            <div style="font-size:24px;font-weight:700;font-family:var(--mono)" :class="activeTxn.type==='Credit'?'c-green':'c-red'">
+              {{activeTxn.type==='Credit'?'+':'-'}}{{fmtINR(activeTxn.amount)}}
+            </div>
+            <div style="font-size:13px;color:#868E96;margin-top:4px">{{activeTxn.description}}</div>
+            <div style="display:flex;gap:14px;margin-top:8px;font-size:12.5px;color:#868E96">
+              <span>📅 {{fmtDate(activeTxn.date)}}</span>
+              <span>🏛 {{activeTxn.account}}</span>
+              <span v-if="activeTxn.balance">Balance: {{fmtINR(activeTxn.balance)}}</span>
+            </div>
+          </div>
+          <div class="bk-sec-lbl">Category</div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px">
+            <div v-for="c in TXN_CATEGORIES" :key="c.id"
+              style="border:1.5px solid #E2E8F0;border-radius:8px;padding:10px 8px;text-align:center;cursor:pointer;transition:all .12s;font-size:12px;font-weight:500"
+              :style="selectedCat===c.id?{borderColor:c.color,background:c.bg,color:c.color}:{}"
+              @click="selectedCat=c.id">
+              <div style="font-size:18px;margin-bottom:3px">{{c.icon}}</div>
+              <div>{{c.label}}</div>
+            </div>
+          </div>
+          <div class="bk-sec-lbl">Notes</div>
+          <textarea class="bk-fi" rows="2" style="resize:vertical;margin-bottom:4px" placeholder="Optional notes..." v-model="activeTxn.notes"></textarea>
+        </div>
+        <div class="bk-d-footer">
+          <div style="font-size:12px;color:#868E96">ID: {{activeTxn.id}}</div>
+          <div style="display:flex;gap:8px">
+            <button class="b-btn b-btn-ghost" @click="drawerOpen=false">Cancel</button>
+            <button v-if="!activeTxn.reconciled" class="b-btn b-btn-ghost" style="border-color:#0C8599;color:#0C8599" @click="markReconciled(activeTxn)">✓ Reconcile</button>
+            <button class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="saveTxn">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`});
+
+  /* ══════════════════════════════════════════════════
+     BANK RECONCILIATION
+  ══════════════════════════════════════════════════ */
+  const BankReconciliation = defineComponent({
+    name: "BankReconciliation",
+    setup() {
+      const bankAccounts = ref([]);
+      const selAccount = ref("");
+      const stmtDate = ref(new Date().toISOString().slice(0, 10));
+      const stmtBalance = ref(0);
+      const loading = ref(false);
+      const bookTxns = ref([]);     // GL / journal entries for this account
+      const bankTxns = ref([]);     // Bank statement transactions
+      const selectedBook = ref([]); // names of selected book items
+      const selectedBank = ref([]); // ids of selected bank items
+
+      async function load() {
+        if (!selAccount.value) return;
+        loading.value = true;
+        try {
+          // Load unreconciled bank transactions from Frappe
+          const r = await apiGET("frappe.client.get_list", {
+            doctype: "Bank Transaction",
+            fields: JSON.stringify(["name","date","description","withdrawal","deposit","closing_balance","status"]),
+            filters: JSON.stringify([["bank_account","=",selAccount.value],["status","!=","Reconciled"]]),
+            order_by: "date desc", limit_page_length: 200
+          });
+          bankTxns.value = (r || []).map(t => ({ id:t.name, date:t.date, desc:t.description||"", type:flt(t.deposit)>0?"Credit":"Debit", amount:flt(t.deposit)||flt(t.withdrawal) }));
+        } catch {
+          // Use localStorage bank txns for selected account
+          const saved = JSON.parse(localStorage.getItem("books_bank_txns") || "[]");
+          bankTxns.value = saved.filter(t => t.account === selAccount.value && !t.reconciled).map(t => ({ id:t.id, date:t.date, desc:t.description, type:t.type, amount:flt(t.amount) }));
+          if (!bankTxns.value.length) bankTxns.value = DEFAULT_BANK_TXNS.filter(t => t.account === selAccount.value && !t.reconciled).map(t => ({ id:t.id, date:t.date, desc:t.description, type:t.type, amount:flt(t.amount) }));
+        }
+        try {
+          const gl = await apiGET("frappe.client.get_list", {
+            doctype: "General Ledger Entry",
+            fields: JSON.stringify(["name","posting_date","voucher_no","debit","credit","remarks"]),
+            filters: JSON.stringify([["account","=",selAccount.value],["docstatus","=",1]]),
+            order_by: "posting_date desc", limit_page_length: 200
+          });
+          bookTxns.value = (gl || []).map(g => ({ id:g.name, date:g.posting_date, desc:g.remarks||g.voucher_no||"", type:flt(g.credit)>0?"Credit":"Debit", amount:flt(g.debit)||flt(g.credit) }));
+        } catch {
+          bookTxns.value = [];
+        }
+        loading.value = false;
+      }
+
+      const bookBal = computed(() => {
+        const acct = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]").find(a => a.name === selAccount.value);
+        return flt(acct?.balance || 0);
+      });
+      const selectedBankTotal = computed(() => bankTxns.value.filter(t => selectedBank.value.includes(t.id)).reduce((s, t) => s + (t.type === "Credit" ? flt(t.amount) : -flt(t.amount)), 0));
+      const selectedBookTotal = computed(() => bookTxns.value.filter(t => selectedBook.value.includes(t.id)).reduce((s, t) => s + (t.type === "Credit" ? flt(t.amount) : -flt(t.amount)), 0));
+      const diff = computed(() => flt(stmtBalance.value) - bookBal.value);
+      const isBalanced = computed(() => Math.abs(diff.value) < 0.01);
+
+      function toggleBank(id) { const i = selectedBank.value.indexOf(id); if (i >= 0) selectedBank.value.splice(i, 1); else selectedBank.value.push(id); }
+      function toggleBook(id) { const i = selectedBook.value.indexOf(id); if (i >= 0) selectedBook.value.splice(i, 1); else selectedBook.value.push(id); }
+
+      function matchSelected() {
+        if (!selectedBank.value.length || !selectedBook.value.length) { toast("Select at least one item from each side to match", "error"); return; }
+        bankTxns.value = bankTxns.value.filter(t => !selectedBank.value.includes(t.id));
+        bookTxns.value = bookTxns.value.filter(t => !selectedBook.value.includes(t.id));
+        selectedBank.value = []; selectedBook.value = [];
+        toast("Items matched and reconciled");
+      }
+
+      async function finaliseReconciliation() {
+        try {
+          await apiPOST("zoho_books_clone.db.queries.reconcile_bank_account", { bank_account: selAccount.value, statement_date: stmtDate.value, statement_balance: stmtBalance.value });
+          toast("Reconciliation saved");
+        } catch {
+          toast("Reconciliation saved locally", "info");
+        }
+      }
+
+      async function loadAccounts() {
+        const saved = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
+        bankAccounts.value = saved.length ? saved.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        if (bankAccounts.value.length) { selAccount.value = bankAccounts.value[0]; await load(); }
+      }
+
+      onMounted(loadAccounts);
+      return { bankAccounts, selAccount, stmtDate, stmtBalance, loading, bookTxns, bankTxns, selectedBook, selectedBank, bookBal, diff, isBalanced, selectedBankTotal, selectedBookTotal, load, toggleBank, toggleBook, matchSelected, finaliseReconciliation, fmtINR, fmtDate, icon, flt };
+    },
+    template: `
+<div class="b-page">
+  <!-- Setup bar -->
+  <div class="b-card" style="padding:16px 20px">
+    <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Bank Account</div>
+        <select class="b-input" v-model="selAccount" @change="load" style="min-width:200px">
+          <option v-for="a in bankAccounts" :key="a" :value="a">{{a}}</option>
+        </select>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Statement Date</div>
+        <input type="date" class="b-input" v-model="stmtDate"/>
+      </div>
+      <div>
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Closing Balance (₹)</div>
+        <input type="number" class="b-input" v-model="stmtBalance" placeholder="0.00" style="font-family:var(--mono);width:150px"/>
+      </div>
+      <button class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599;margin-top:18px" @click="load">Load</button>
+    </div>
+  </div>
+  <!-- Balance panel -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <div class="b-card-head"><span class="b-card-title">Reconciliation Balance</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr">
+      <div style="padding:20px;border-right:1px solid #E2E8F0">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:14px">📚 Book Balance</div>
+        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F8F9FC;font-size:13px"><span>Balance as per Books</span><span class="mono fw-600">{{fmtINR(bookBal)}}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F8F9FC;font-size:13px"><span>Selected items</span><span class="mono fw-600" :class="selectedBookTotal>=0?'c-green':'c-red'">{{fmtINR(Math.abs(selectedBookTotal))}}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:10px 0;font-size:14px;font-weight:700"><span>Adjusted Balance</span><span class="mono">{{fmtINR(bookBal+selectedBookTotal)}}</span></div>
+      </div>
+      <div style="padding:20px">
+        <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:14px">🏦 Bank Statement</div>
+        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F8F9FC;font-size:13px"><span>Statement Closing Balance</span><span class="mono fw-600">{{fmtINR(stmtBalance)}}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #F8F9FC;font-size:13px"><span>Selected items</span><span class="mono fw-600" :class="selectedBankTotal>=0?'c-green':'c-red'">{{fmtINR(Math.abs(selectedBankTotal))}}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:10px 0;font-size:14px;font-weight:700"><span>Statement Balance</span><span class="mono">{{fmtINR(flt(stmtBalance)+selectedBankTotal)}}</span></div>
+      </div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;background:#F8F9FC">
+      <div style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;font-size:13px;font-weight:700"
+        :style="isBalanced?{background:'#EBFBEE',color:'#2F9E44',border:'1px solid rgba(47,158,68,.2)'}:Math.abs(diff)<0.01?{background:'#F8F9FC',color:'#868E96',border:'1px solid #E2E8F0'}:{background:'#FFF5F5',color:'#C92A2A',border:'1px solid rgba(201,42,42,.2)'}">
+        <span>{{isBalanced?'✓ Balanced':'Difference:'}}</span>
+        <span v-if="!isBalanced" class="mono">{{fmtINR(Math.abs(diff))}}</span>
+      </div>
+      <div style="display:flex;gap:10px">
+        <button v-if="selectedBank.length&&selectedBook.length" class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="matchSelected">Match Selected ({{selectedBank.length}}↔{{selectedBook.length}})</button>
+        <button class="b-btn b-btn-primary" :disabled="!isBalanced" @click="finaliseReconciliation">Finalise Reconciliation</button>
+      </div>
+    </div>
+  </div>
+  <!-- Two-column match area -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <!-- Bank transactions -->
+    <div class="b-card" style="padding:0;overflow:hidden">
+      <div class="b-card-head">
+        <span class="b-card-title">Unreconciled Bank Transactions</span>
+        <span class="b-badge b-badge-amber">{{bankTxns.length}}</span>
+      </div>
+      <div v-if="loading" style="padding:20px"><div class="b-shimmer" style="height:60px"></div></div>
+      <div v-else-if="!bankTxns.length" class="b-empty">All bank transactions reconciled ✓</div>
+      <div v-else style="max-height:380px;overflow-y:auto">
+        <div v-for="t in bankTxns" :key="t.id"
+          style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #F1F3F5;cursor:pointer;transition:background .12s"
+          :style="selectedBank.includes(t.id)?{background:'#E0F7FA'}:{}"
+          @click="toggleBank(t.id)">
+          <div style="width:16px;height:16px;border-radius:4px;border:2px solid" :style="selectedBank.includes(t.id)?{background:'#0C8599',borderColor:'#0C8599'}:{borderColor:'#CDD5E0'}">
+            <span v-if="selectedBank.includes(t.id)" style="color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;height:100%">✓</span>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{t.desc}}</div>
+            <div style="font-size:11.5px;color:#868E96">{{fmtDate(t.date)}}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="mono fw-600" :class="t.type==='Credit'?'c-green':'c-red'" style="font-size:13px">{{t.type==='Credit'?'+':'-'}}{{fmtINR(t.amount)}}</div>
+            <div class="b-badge" :class="t.type==='Credit'?'b-badge-green':'b-badge-red'" style="font-size:10px">{{t.type}}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Book entries -->
+    <div class="b-card" style="padding:0;overflow:hidden">
+      <div class="b-card-head">
+        <span class="b-card-title">Unreconciled GL Entries</span>
+        <span class="b-badge b-badge-amber">{{bookTxns.length}}</span>
+      </div>
+      <div v-if="loading" style="padding:20px"><div class="b-shimmer" style="height:60px"></div></div>
+      <div v-else-if="!bookTxns.length" class="b-empty">No unreconciled GL entries</div>
+      <div v-else style="max-height:380px;overflow-y:auto">
+        <div v-for="t in bookTxns" :key="t.id"
+          style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #F1F3F5;cursor:pointer;transition:background .12s"
+          :style="selectedBook.includes(t.id)?{background:'#EEF2FF'}:{}"
+          @click="toggleBook(t.id)">
+          <div style="width:16px;height:16px;border-radius:4px;border:2px solid" :style="selectedBook.includes(t.id)?{background:'#3B5BDB',borderColor:'#3B5BDB'}:{borderColor:'#CDD5E0'}">
+            <span v-if="selectedBook.includes(t.id)" style="color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;height:100%">✓</span>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{t.desc}}</div>
+            <div style="font-size:11.5px;color:#868E96">{{fmtDate(t.date)}}</div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div class="mono fw-600" :class="t.type==='Credit'?'c-green':'c-red'" style="font-size:13px">{{t.type==='Credit'?'+':'-'}}{{fmtINR(t.amount)}}</div>
+            <div class="b-badge" :class="t.type==='Credit'?'b-badge-green':'b-badge-red'" style="font-size:10px">{{t.type}}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`});
+
+  /* ══════════════════════════════════════════════════
+     CHEQUE MANAGEMENT
+  ══════════════════════════════════════════════════ */
+  const ChequeManagement = defineComponent({
+    name: "ChequeManagement",
+    setup() {
+      const cheques = ref([]);
+      const activeTab = ref("issued");
+      const filterStatus = ref("all");
+      const searchQ = ref("");
+      const drawerOpen = ref(false);
+      const drawerMode = ref("add");
+      const editingName = ref(null);
+      const form = reactive({ no:"", date: new Date().toISOString().slice(0,10), payee:"", bank_account:"", amount:0, due_date:"", status:"Issued", remarks:"" });
+      const bankAccounts = ref([]);
+
+      const CHEQUE_STATUS_META = {
+        Issued:   { color:"#3B5BDB", bg:"#EEF2FF" },
+        Cleared:  { color:"#2F9E44", bg:"#EBFBEE" },
+        Bounced:  { color:"#C92A2A", bg:"#FFE3E3" },
+        Void:     { color:"#868E96", bg:"#F1F3F5" },
+        Presented:{ color:"#E67700", bg:"#FFF3BF" },
+        Received: { color:"#0C8599", bg:"#E0F7FA" },
+        Deposited:{ color:"#2F9E44", bg:"#EBFBEE" },
+      };
+
+      const DEFAULTS = [
+        { name:"CHQ-0001", no:"000101", date:"2026-04-05", payee:"Sharma Traders", bank_account:"HDFC Current Account", amount:75000, due_date:"2026-04-20", status:"Issued", type:"issued", remarks:"For March supplies" },
+        { name:"CHQ-0002", no:"000102", date:"2026-03-28", payee:"Brigade Properties", bank_account:"HDFC Current Account", amount:50000, due_date:"2026-04-05", status:"Cleared", type:"issued", remarks:"March rent" },
+        { name:"CHQ-0003", no:"REC-001", date:"2026-04-08", payee:"TechSoft Solutions", bank_account:"ICICI Savings Account", amount:125000, due_date:"2026-04-15", status:"Received", type:"received", remarks:"Invoice INV-0142" },
+        { name:"CHQ-0004", no:"000099", date:"2026-02-14", payee:"Vendor Co", bank_account:"HDFC Current Account", amount:15000, due_date:"2026-03-01", status:"Bounced", type:"issued", remarks:"Re-presenting" },
+      ];
+
+      async function load() {
+        // Try Payment Entry with cheque reference (mode_of_payment = Cheque)
+        try {
+          const r = await apiGET("frappe.client.get_list", {
+            doctype: "Payment Entry",
+            fields: JSON.stringify(["name","posting_date","payment_type","party","bank_account","paid_amount","received_amount","reference_no","reference_date","remarks","docstatus"]),
+            filters: JSON.stringify([["mode_of_payment","=","Cheque"],["docstatus","!=",2]]),
+            order_by: "posting_date desc",
+            limit_page_length: 200,
+          });
+          if (r && r.length) {
+            cheques.value = r.map(c => ({
+              name: c.name, no: c.reference_no || "", date: c.posting_date || "",
+              payee: c.party || "", bank_account: c.bank_account || "",
+              amount: flt(c.paid_amount || c.received_amount),
+              due_date: c.reference_date || "", status: c.docstatus === 1 ? "Cleared" : "Issued",
+              type: c.payment_type === "Pay" ? "issued" : "received", remarks: c.remarks || "",
+            }));
+            const ba = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
+            bankAccounts.value = ba.length ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+            return;
+          }
+        } catch {}
+        const saved = JSON.parse(localStorage.getItem("books_cheques") || "[]");
+        cheques.value = saved.length ? saved : DEFAULTS;
+        if (!saved.length) localStorage.setItem("books_cheques", JSON.stringify(cheques.value));
+        const ba = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
+        bankAccounts.value = ba.length ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+      }
+
+      const filtered = computed(() => {
+        let r = cheques.value.filter(c => c.type === activeTab.value || (activeTab.value === "void" && c.status === "Void"));
+        if (activeTab.value !== "void") r = r.filter(c => c.status !== "Void");
+        if (filterStatus.value !== "all") r = r.filter(c => c.status === filterStatus.value);
+        if (searchQ.value) { const q = searchQ.value.toLowerCase(); r = r.filter(c => (c.payee + c.no + c.bank_account).toLowerCase().includes(q)); }
+        return r.sort((a, b) => b.date.localeCompare(a.date));
+      });
+
+      const stats = computed(() => ({
+        total: cheques.value.length,
+        issued: cheques.value.filter(c => c.status === "Issued").length,
+        cleared: cheques.value.filter(c => c.status === "Cleared").length,
+        bounced: cheques.value.filter(c => c.status === "Bounced").length,
+        totalAmt: cheques.value.reduce((s, c) => s + flt(c.amount), 0),
+      }));
+
+      function openAdd() {
+        drawerMode.value = "add"; editingName.value = null;
+        Object.assign(form, { no:"", date: new Date().toISOString().slice(0,10), payee:"", bank_account: bankAccounts.value[0]||"", amount:0, due_date:"", status: activeTab.value==="received"?"Received":"Issued", remarks:"" });
+        drawerOpen.value = true;
+      }
+      function openEdit(c) {
+        drawerMode.value = "edit"; editingName.value = c.name;
+        Object.assign(form, { no:c.no, date:c.date, payee:c.payee, bank_account:c.bank_account, amount:c.amount, due_date:c.due_date, status:c.status, remarks:c.remarks });
+        drawerOpen.value = true;
+      }
+      function save() {
+        if (!form.no || !form.payee) { toast("Cheque number and payee are required", "error"); return; }
+        const doc = { ...form, type: activeTab.value === "received" ? "received" : "issued", name: editingName.value || ("CHQ-" + String(Date.now()).slice(-4)) };
+        const idx = cheques.value.findIndex(c => c.name === editingName.value);
+        if (idx >= 0) cheques.value[idx] = doc; else cheques.value.unshift(doc);
+        localStorage.setItem("books_cheques", JSON.stringify(cheques.value));
+        drawerOpen.value = false;
+        toast(drawerMode.value === "edit" ? "Cheque updated" : "Cheque added");
+      }
+      function changeStatus(c, status) {
+        const idx = cheques.value.findIndex(x => x.name === c.name);
+        if (idx >= 0) { cheques.value[idx].status = status; localStorage.setItem("books_cheques", JSON.stringify(cheques.value)); toast("Status updated to " + status); }
+      }
+
+      onMounted(load);
+      return { cheques, filtered, stats, activeTab, filterStatus, searchQ, drawerOpen, drawerMode, form, bankAccounts, CHEQUE_STATUS_META, openAdd, openEdit, save, changeStatus, fmtINR, fmtDate, icon, flt };
+    },
+    template: `
+<div class="b-page">
+  <!-- Stats -->
+  <div class="bk-sum-strip">
+    <div class="bk-sum-card"><div class="bk-sum-lbl">Total Cheques</div><div class="bk-sum-val">{{stats.total}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl" style="color:#3B5BDB">Issued</div><div class="bk-sum-val" style="color:#3B5BDB">{{stats.issued}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl" style="color:#2F9E44">Cleared</div><div class="bk-sum-val" style="color:#2F9E44">{{stats.cleared}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl" style="color:#C92A2A">Bounced</div><div class="bk-sum-val" style="color:#C92A2A">{{stats.bounced}}</div></div>
+    <div class="bk-sum-card"><div class="bk-sum-lbl">Total Amount</div><div class="bk-sum-val">{{fmtINR(stats.totalAmt)}}</div></div>
+  </div>
+  <!-- Tabs -->
+  <div style="display:flex;gap:2px;background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:4px;margin-bottom:14px;width:fit-content">
+    <button v-for="t in [{k:'issued',l:'Issued Cheques'},{k:'received',l:'Received Cheques'},{k:'void',l:'Void / Cancelled'}]" :key="t.k"
+      style="padding:7px 18px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;border:none;font-family:inherit;transition:all .15s"
+      :style="activeTab===t.k?{background:'#0C8599',color:'#fff'}:{background:'none',color:'#868E96'}"
+      @click="activeTab=t.k">{{t.l}}</button>
+  </div>
+  <!-- Action bar -->
+  <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    <button v-for="s in ['all','Issued','Cleared','Bounced','Presented']" :key="s"
+      class="bk-pill" :class="{active:filterStatus===s}" @click="filterStatus=s">{{s==='all'?'All Statuses':s}}</button>
+    <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+      <div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:5px 12px">
+        <span v-html="icon('search',12)" style="color:#868E96"></span>
+        <input v-model="searchQ" placeholder="Search cheques..." style="border:none;outline:none;font-size:13px;width:160px;background:transparent;font-family:inherit"/>
+      </div>
+      <button class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="openAdd">+ Add Cheque</button>
+    </div>
+  </div>
+  <!-- Table -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <table class="b-table">
+      <thead><tr><th>Cheque No.</th><th>Date</th><th>{{activeTab==='received'?'From (Drawer)':'To (Payee)'}}</th><th>Bank Account</th><th class="ta-r">Amount</th><th>Due Date</th><th>Status</th><th style="text-align:center">Actions</th></tr></thead>
+      <tbody>
+        <tr v-if="!filtered.length"><td colspan="8" class="b-empty">No cheques found</td></tr>
+        <tr v-for="c in filtered" :key="c.name" @click="openEdit(c)" style="cursor:pointer" class="bk-txn-row">
+          <td class="mono fw-600 c-accent" style="font-size:13px">{{c.no||'—'}}</td>
+          <td class="c-muted" style="font-size:12.5px">{{fmtDate(c.date)}}</td>
+          <td style="font-weight:500">{{c.payee}}</td>
+          <td class="c-muted" style="font-size:12.5px">{{c.bank_account}}</td>
+          <td class="ta-r mono fw-700">{{fmtINR(c.amount)}}</td>
+          <td class="c-muted" style="font-size:12.5px">{{c.due_date?fmtDate(c.due_date):'—'}}</td>
+          <td>
+            <span class="b-badge" :style="{background:(CHEQUE_STATUS_META[c.status]||CHEQUE_STATUS_META.Issued).bg,color:(CHEQUE_STATUS_META[c.status]||CHEQUE_STATUS_META.Issued).color,fontSize:'11px'}">{{c.status}}</span>
+          </td>
+          <td style="text-align:center">
+            <div style="display:flex;gap:4px;justify-content:center" @click.stop>
+              <button v-if="c.status==='Issued'||c.status==='Presented'" class="b-btn b-btn-ghost" style="padding:3px 8px;font-size:11px;border-color:#2F9E44;color:#2F9E44" @click="changeStatus(c,'Cleared')">Clear</button>
+              <button v-if="c.status==='Issued'" class="b-btn b-btn-ghost" style="padding:3px 8px;font-size:11px;border-color:#C92A2A;color:#C92A2A" @click="changeStatus(c,'Bounced')">Bounce</button>
+              <button v-if="c.status!=='Void'" class="b-btn b-btn-ghost" style="padding:3px 8px;font-size:11px" @click="changeStatus(c,'Void')">Void</button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <!-- Drawer -->
+  <teleport to="body">
+    <div v-if="drawerOpen" class="bk-drawer-bg" @click.self="drawerOpen=false">
+      <div class="bk-drawer-panel">
+        <div class="bk-dh">
+          <div class="bk-dh-left">
+            <div class="bk-dh-icon"><span v-html="icon('creditnote',18)"></span></div>
+            <div>
+              <h3>{{drawerMode==='add'?'Add Cheque':'Edit Cheque'}}</h3>
+              <div class="bk-dh-sub">{{activeTab==='received'?'Received / Inward':'Issued / Outward'}} Cheque</div>
+            </div>
+          </div>
+          <button class="bk-d-close" @click="drawerOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="bk-d-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div><label class="bk-fl">Cheque No. <span style="color:#C92A2A">*</span></label><input class="bk-fi" v-model="form.no" placeholder="000101" style="font-family:var(--mono)"/></div>
+            <div><label class="bk-fl">Date</label><input type="date" class="bk-fi" v-model="form.date"/></div>
+            <div><label class="bk-fl">{{activeTab==='received'?'Drawer (From)':'Payee (To)'}} <span style="color:#C92A2A">*</span></label><input class="bk-fi" v-model="form.payee" placeholder="Party name"/></div>
+            <div><label class="bk-fl">Bank Account</label>
+              <select class="bk-fi" v-model="form.bank_account">
+                <option v-for="a in bankAccounts" :key="a" :value="a">{{a}}</option>
+              </select>
+            </div>
+            <div><label class="bk-fl">Amount (₹)</label><input type="number" class="bk-fi" v-model="form.amount" placeholder="0.00" style="font-family:var(--mono)"/></div>
+            <div><label class="bk-fl">Due / Presentation Date</label><input type="date" class="bk-fi" v-model="form.due_date"/></div>
+          </div>
+          <div style="margin-bottom:12px">
+            <label class="bk-fl">Status</label>
+            <select class="bk-fi" v-model="form.status">
+              <option v-for="s in ['Issued','Presented','Cleared','Bounced','Received','Deposited','Void']" :key="s" :value="s">{{s}}</option>
+            </select>
+          </div>
+          <div><label class="bk-fl">Remarks</label><textarea class="bk-fi" rows="2" v-model="form.remarks" placeholder="Optional remarks..."></textarea></div>
+        </div>
+        <div class="bk-d-footer">
+          <button class="b-btn b-btn-ghost" @click="drawerOpen=false">Cancel</button>
+          <button class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="save">Save Cheque</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`});
+
+  /* ══════════════════════════════════════════════════
+     CASH MANAGEMENT
+  ══════════════════════════════════════════════════ */
+  const CashManagement = defineComponent({
+    name: "CashManagement",
+    setup() {
+      const cashTxns = ref([]);
+      const activeTab = ref("txns");
+      const filterType = ref("all");
+      const searchQ = ref("");
+      const drawerOpen = ref(false);
+      const drawerMode = ref("add");
+      const entryForm = reactive({ date: new Date().toISOString().slice(0,10), type:"Receipt", desc:"", amount:0, category:"other", person:"", narration:"" });
+
+      const DENOM = [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1];
+      const denomCount = reactive(Object.fromEntries(DENOM.map(d => [d, 0])));
+      const denomTotal = computed(() => DENOM.reduce((s, d) => s + d * (denomCount[d] || 0), 0));
+
+      const CASH_DEFAULTS = [
+        { id:"CASH-001", date: new Date().toISOString().slice(0,10), type:"Receipt", desc:"Cash received from customer", amount:25000, category:"customer", person:"Ravi Kumar", narration:"Invoice INV-0142" },
+        { id:"CASH-002", date: new Date(Date.now()-86400000).toISOString().slice(0,10), type:"Payment", desc:"Office stationery", amount:1250, category:"other", person:"", narration:"Petty cash" },
+        { id:"CASH-003", date: new Date(Date.now()-2*86400000).toISOString().slice(0,10), type:"Receipt", desc:"Cash sales", amount:8500, category:"customer", person:"Walk-in", narration:"Daily sales" },
+        { id:"CASH-004", date: new Date(Date.now()-3*86400000).toISOString().slice(0,10), type:"Payment", desc:"Travelling allowance", amount:2000, category:"travel", person:"Sales Rep", narration:"Field visit" },
+      ];
+
+      async function load() {
+        // Try pulling cash-related Payment Entries from Frappe (Cash account mode)
+        try {
+          const r = await apiGET("frappe.client.get_list", {
+            doctype: "Payment Entry",
+            fields: JSON.stringify(["name","posting_date","payment_type","remarks","paid_amount","received_amount","mode_of_payment"]),
+            filters: JSON.stringify([["mode_of_payment","=","Cash"],["docstatus","=",1]]),
+            order_by: "posting_date desc",
+            limit_page_length: 200,
+          });
+          if (r && r.length) {
+            cashTxns.value = r.map(t => ({
+              id: t.name, date: t.posting_date,
+              type: t.payment_type === "Pay" ? "Payment" : "Receipt",
+              desc: t.remarks || t.name, amount: flt(t.paid_amount || t.received_amount),
+              category: "other", person: "", narration: t.remarks || "",
+            }));
+            return;
+          }
+        } catch {}
+        const saved = JSON.parse(localStorage.getItem("books_cash_txns") || "[]");
+        cashTxns.value = saved.length ? saved : CASH_DEFAULTS;
+        if (!saved.length) localStorage.setItem("books_cash_txns", JSON.stringify(cashTxns.value));
+      }
+
+      const filtered = computed(() => {
+        let r = cashTxns.value;
+        if (filterType.value === "Receipt") r = r.filter(t => t.type === "Receipt");
+        else if (filterType.value === "Payment") r = r.filter(t => t.type === "Payment");
+        if (searchQ.value) { const q = searchQ.value.toLowerCase(); r = r.filter(t => (t.desc + t.person + t.narration).toLowerCase().includes(q)); }
+        return r.sort((a, b) => b.date.localeCompare(a.date));
+      });
+
+      const hero = computed(() => {
+        const today = new Date().toISOString().slice(0, 10);
+        const todayTxns = cashTxns.value.filter(t => t.date === today);
+        return {
+          balance: cashTxns.value.reduce((s, t) => s + (t.type === "Receipt" ? flt(t.amount) : -flt(t.amount)), 0),
+          todayIn: todayTxns.filter(t => t.type === "Receipt").reduce((s, t) => s + flt(t.amount), 0),
+          todayOut: todayTxns.filter(t => t.type === "Payment").reduce((s, t) => s + flt(t.amount), 0),
+        };
+      });
+
+      function openAdd(type = "Receipt") {
+        drawerMode.value = "add";
+        Object.assign(entryForm, { date: new Date().toISOString().slice(0,10), type, desc:"", amount:0, category:"other", person:"", narration:"" });
+        drawerOpen.value = true;
+      }
+
+      function saveEntry() {
+        if (!entryForm.amount || !entryForm.desc) { toast("Description and amount are required", "error"); return; }
+        const doc = { ...entryForm, id: "CASH-" + Date.now().toString(36).toUpperCase() };
+        cashTxns.value.unshift(doc);
+        localStorage.setItem("books_cash_txns", JSON.stringify(cashTxns.value));
+        drawerOpen.value = false;
+        toast("Cash entry saved");
+      }
+
+      onMounted(load);
+      return { cashTxns, filtered, hero, activeTab, filterType, searchQ, drawerOpen, drawerMode, entryForm, denomCount, denomTotal, DENOM, openAdd, saveEntry, fmtINR, fmtINRc, fmtDate, icon, flt, TXN_CATEGORIES, CAT_MAP_BANK };
+    },
+    template: `
+<div class="b-page">
+  <!-- Hero -->
+  <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:20px">
+    <div style="background:linear-gradient(135deg,#0a4f5c 0%,#0C8599 100%);border-radius:10px;padding:20px;position:relative;overflow:hidden">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:rgba(255,255,255,.75);margin-bottom:6px">Cash in Hand</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono);color:#fff;margin-bottom:4px">{{fmtINR(hero.balance)}}</div>
+      <div style="font-size:12px;color:rgba(255,255,255,.6)">Current petty cash balance</div>
+      <div style="position:absolute;right:16px;top:16px;font-size:28px;opacity:.15">💵</div>
+    </div>
+    <div class="b-card b-card-body" style="position:relative;overflow:hidden">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:6px">Today's Receipts</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono);color:#2F9E44;margin-bottom:4px">+{{fmtINR(hero.todayIn)}}</div>
+      <div style="font-size:12px;color:#868E96">Cash received today</div>
+    </div>
+    <div class="b-card b-card-body" style="position:relative;overflow:hidden">
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:6px">Today's Payments</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono);color:#C92A2A;margin-bottom:4px">-{{fmtINR(hero.todayOut)}}</div>
+      <div style="font-size:12px;color:#868E96">Cash paid out today</div>
+    </div>
+  </div>
+  <!-- Tabs -->
+  <div style="display:flex;gap:0;background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden;margin-bottom:14px">
+    <button v-for="t in [{k:'txns',l:'Cash Transactions'},{k:'denom',l:'Denomination Counter'}]" :key="t.k"
+      style="flex:1;padding:11px 16px;font-size:13px;font-weight:600;cursor:pointer;border:none;border-bottom:2px solid transparent;transition:all .15s;font-family:inherit;text-align:center"
+      :style="activeTab===t.k?{color:'#0C8599',borderBottomColor:'#0C8599',background:'#E0F7FA'}:{color:'#868E96',background:'none'}"
+      @click="activeTab=t.k">{{t.l}}</button>
+  </div>
+  <!-- Transactions tab -->
+  <template v-if="activeTab==='txns'">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+      <button v-for="f in ['all','Receipt','Payment']" :key="f"
+        class="bk-pill" :class="{active:filterType===f}" @click="filterType=f">{{f==='all'?'All':f+'s'}}</button>
+      <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+        <div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:5px 12px">
+          <span v-html="icon('search',12)" style="color:#868E96"></span>
+          <input v-model="searchQ" placeholder="Search..." style="border:none;outline:none;font-size:13px;width:160px;background:transparent;font-family:inherit"/>
+        </div>
+        <button class="b-btn b-btn-ghost" style="border-color:#2F9E44;color:#2F9E44" @click="openAdd('Receipt')">+ Cash In</button>
+        <button class="b-btn b-btn-ghost" style="border-color:#C92A2A;color:#C92A2A" @click="openAdd('Payment')">− Cash Out</button>
+      </div>
+    </div>
+    <div class="b-card" style="padding:0;overflow:hidden">
+      <table class="b-table">
+        <thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Person</th><th>Type</th><th class="ta-r">Amount</th></tr></thead>
+        <tbody>
+          <tr v-if="!filtered.length"><td colspan="6" class="b-empty">No cash entries yet</td></tr>
+          <tr v-for="t in filtered" :key="t.id">
+            <td class="c-muted" style="font-size:12.5px;white-space:nowrap">{{fmtDate(t.date)}}</td>
+            <td style="font-size:13px">{{t.desc}}</td>
+            <td>
+              <span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600"
+                :style="{background:(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).bg,color:(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).color}">
+                {{(CAT_MAP_BANK[t.category]||CAT_MAP_BANK.other).label}}
+              </span>
+            </td>
+            <td class="c-muted" style="font-size:12.5px">{{t.person||'—'}}</td>
+            <td><span class="b-badge" :class="t.type==='Receipt'?'b-badge-green':'b-badge-red'">{{t.type}}</span></td>
+            <td class="ta-r mono fw-700" :class="t.type==='Receipt'?'c-green':'c-red'">{{t.type==='Receipt'?'+':'-'}}{{fmtINR(t.amount)}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </template>
+  <!-- Denomination counter tab -->
+  <template v-if="activeTab==='denom'">
+    <div class="b-card b-card-body">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">Denomination Counter</div>
+      <div style="font-size:13px;color:#868E96;margin-bottom:20px">Count physical cash by denomination to verify petty cash balance</div>
+      <div style="max-width:480px">
+        <div v-for="d in DENOM" :key="d" style="display:grid;grid-template-columns:80px 1fr 1fr;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #F1F3F5">
+          <div style="font-size:15px;font-weight:700;font-family:var(--mono)">₹{{d}}</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <button @click="denomCount[d]=Math.max(0,(denomCount[d]||0)-1)" style="width:28px;height:28px;border-radius:6px;border:1px solid #CDD5E0;background:#fff;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center">−</button>
+            <input type="number" :value="denomCount[d]||0" @input="denomCount[d]=Math.max(0,parseInt($event.target.value)||0)" style="width:70px;text-align:center;border:1px solid #CDD5E0;border-radius:6px;padding:5px;font-family:var(--mono);font-size:14px;outline:none" min="0"/>
+            <button @click="denomCount[d]=(denomCount[d]||0)+1" style="width:28px;height:28px;border-radius:6px;border:1px solid #CDD5E0;background:#fff;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center">+</button>
+          </div>
+          <div class="mono fw-600" style="text-align:right;font-size:14px">₹{{((denomCount[d]||0)*d).toLocaleString("en-IN")}}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 0;font-size:16px;font-weight:700;border-top:2px solid #E2E8F0;margin-top:4px">
+          <span>Total Physical Cash</span>
+          <span class="mono c-green">{{fmtINR(denomTotal)}}</span>
+        </div>
+        <div v-if="denomTotal>0" style="padding:10px 14px;border-radius:8px;font-size:13px;font-weight:600;margin-top:8px"
+          :style="Math.abs(denomTotal-hero.balance)<0.01?{background:'#EBFBEE',color:'#2F9E44',border:'1px solid rgba(47,158,68,.2)'}:{background:'#FFF5F5',color:'#C92A2A',border:'1px solid rgba(201,42,42,.2)'}">
+          {{Math.abs(denomTotal-hero.balance)<0.01?'✓ Matches book balance':'Difference: '+fmtINR(Math.abs(denomTotal-hero.balance))+' from book balance of '+fmtINR(hero.balance)}}
+        </div>
+      </div>
+    </div>
+  </template>
+  <!-- Cash Entry Drawer -->
+  <teleport to="body">
+    <div v-if="drawerOpen" class="bk-drawer-bg" @click.self="drawerOpen=false">
+      <div class="bk-drawer-panel">
+        <div class="bk-dh" :style="{background:entryForm.type==='Receipt'?'linear-gradient(135deg,#1a7f4b,#2F9E44)':'linear-gradient(135deg,#a51010,#C92A2A)'}">
+          <div class="bk-dh-left">
+            <div class="bk-dh-icon" :style="{background:entryForm.type==='Receipt'?'rgba(255,255,255,.2)':'rgba(255,255,255,.2)'}">
+              <span style="font-size:18px">{{entryForm.type==='Receipt'?'↓':'↑'}}</span>
+            </div>
+            <div>
+              <h3>{{entryForm.type==='Receipt'?'Cash Receipt':'Cash Payment'}}</h3>
+              <div class="bk-dh-sub">Record a cash {{entryForm.type==='Receipt'?'inflow':'outflow'}}</div>
+            </div>
+          </div>
+          <button class="bk-d-close" @click="drawerOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="bk-d-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div><label class="bk-fl">Date</label><input type="date" class="bk-fi" v-model="entryForm.date"/></div>
+            <div><label class="bk-fl">Type</label>
+              <select class="bk-fi" v-model="entryForm.type">
+                <option>Receipt</option><option>Payment</option>
+              </select>
+            </div>
+          </div>
+          <div style="margin-bottom:12px"><label class="bk-fl">Description <span style="color:#C92A2A">*</span></label><input class="bk-fi" v-model="entryForm.desc" placeholder="What is this cash for?"/></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div><label class="bk-fl">Amount (₹) <span style="color:#C92A2A">*</span></label><input type="number" class="bk-fi" v-model="entryForm.amount" placeholder="0.00" style="font-family:var(--mono)"/></div>
+            <div><label class="bk-fl">Person / Party</label><input class="bk-fi" v-model="entryForm.person" placeholder="Who paid / received?"/></div>
+          </div>
+          <div style="margin-bottom:12px"><label class="bk-fl">Category</label>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+              <div v-for="c in TXN_CATEGORIES.slice(0,9)" :key="c.id"
+                style="border:1.5px solid #E2E8F0;border-radius:6px;padding:7px;text-align:center;cursor:pointer;font-size:11.5px"
+                :style="entryForm.category===c.id?{borderColor:c.color,background:c.bg,color:c.color}:{}"
+                @click="entryForm.category=c.id">{{c.icon}} {{c.label}}</div>
+            </div>
+          </div>
+        </div>
+        <div class="bk-d-footer">
+          <button class="b-btn b-btn-ghost" @click="drawerOpen=false">Cancel</button>
+          <button class="b-btn b-btn-primary" :style="{background:entryForm.type==='Receipt'?'#2F9E44':'#C92A2A',borderColor:entryForm.type==='Receipt'?'#2F9E44':'#C92A2A'}" @click="saveEntry">Save Entry</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </div>`});
 
   const Accounts = defineComponent({
@@ -8151,50 +9396,2421 @@
   </div>
 </div>`});
 
+  /* ══════════════════════════════════════════════════
+     CHART OF ACCOUNTS
+  ══════════════════════════════════════════════════ */
+  const TYPE_META_COA = {
+    Asset:     { color: "#0C8599", bg: "#E0F7FA", dr: true },
+    Liability: { color: "#C92A2A", bg: "#FFE3E3", dr: false },
+    Equity:    { color: "#7048E8", bg: "#F3F0FF", dr: false },
+    Income:    { color: "#2F9E44", bg: "#EBFBEE", dr: false },
+    Expense:   { color: "#E67700", bg: "#FFF3BF", dr: true },
+  };
+  // Account type options — must match exactly what this Frappe installation accepts
+  // (plain Frappe Account doctype: Asset, Liability, Income, Expense, Bank, Cash, Receivable, Payable, Tax)
+  const ACCOUNT_TYPES_COA = {
+    Asset:     ["Asset","Bank","Cash","Receivable","Tax"],
+    Liability: ["Liability","Payable","Tax"],
+    Equity:    ["Equity"],
+    Income:    ["Income"],
+    Expense:   ["Expense"],
+  };
+  const STANDARD_COA_DATA = [
+    {name:"Current Assets",code:"1000",root_type:"Asset",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Debit"},
+    {name:"Cash in Hand",code:"1001",root_type:"Asset",account_type:"Cash",is_group:0,parent:"Current Assets",opening:50000,bal_type:"Debit"},
+    {name:"Bank Accounts",code:"1010",root_type:"Asset",account_type:"Bank",is_group:1,parent:"Current Assets",opening:0,bal_type:"Debit"},
+    {name:"HDFC Current Account",code:"1011",root_type:"Asset",account_type:"Bank",is_group:0,parent:"Bank Accounts",opening:500000,bal_type:"Debit"},
+    {name:"ICICI Savings Account",code:"1012",root_type:"Asset",account_type:"Bank",is_group:0,parent:"Bank Accounts",opening:200000,bal_type:"Debit"},
+    {name:"Accounts Receivable",code:"1100",root_type:"Asset",account_type:"Receivable",is_group:0,parent:"Current Assets",opening:0,bal_type:"Debit"},
+    {name:"Advance Tax Paid",code:"1200",root_type:"Asset",account_type:"Tax",is_group:0,parent:"Current Assets",opening:0,bal_type:"Debit"},
+    {name:"Input GST (ITC)",code:"1300",root_type:"Asset",account_type:"Tax",is_group:1,parent:"Current Assets",opening:0,bal_type:"Debit"},
+    {name:"CGST Input",code:"1301",root_type:"Asset",account_type:"Tax",is_group:0,parent:"Input GST (ITC)",opening:0,bal_type:"Debit"},
+    {name:"SGST Input",code:"1302",root_type:"Asset",account_type:"Tax",is_group:0,parent:"Input GST (ITC)",opening:0,bal_type:"Debit"},
+    {name:"IGST Input",code:"1303",root_type:"Asset",account_type:"Tax",is_group:0,parent:"Input GST (ITC)",opening:0,bal_type:"Debit"},
+    {name:"Stock in Hand",code:"1400",root_type:"Asset",account_type:"Stock",is_group:0,parent:"Current Assets",opening:0,bal_type:"Debit"},
+    {name:"Fixed Assets",code:"1500",root_type:"Asset",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Debit"},
+    {name:"Furniture & Fixtures",code:"1501",root_type:"Asset",account_type:"Fixed Asset",is_group:0,parent:"Fixed Assets",opening:150000,bal_type:"Debit"},
+    {name:"Computer & Equipment",code:"1502",root_type:"Asset",account_type:"Fixed Asset",is_group:0,parent:"Fixed Assets",opening:300000,bal_type:"Debit"},
+    {name:"Accumulated Depreciation",code:"1510",root_type:"Asset",account_type:"Fixed Asset",is_group:0,parent:"Fixed Assets",opening:0,bal_type:"Credit"},
+    {name:"Current Liabilities",code:"2000",root_type:"Liability",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Credit"},
+    {name:"Accounts Payable",code:"2100",root_type:"Liability",account_type:"Payable",is_group:0,parent:"Current Liabilities",opening:0,bal_type:"Credit"},
+    {name:"GST Payable",code:"2200",root_type:"Liability",account_type:"Tax",is_group:1,parent:"Current Liabilities",opening:0,bal_type:"Credit"},
+    {name:"CGST Payable",code:"2201",root_type:"Liability",account_type:"Tax",is_group:0,parent:"GST Payable",opening:0,bal_type:"Credit"},
+    {name:"SGST Payable",code:"2202",root_type:"Liability",account_type:"Tax",is_group:0,parent:"GST Payable",opening:0,bal_type:"Credit"},
+    {name:"IGST Payable",code:"2203",root_type:"Liability",account_type:"Tax",is_group:0,parent:"GST Payable",opening:0,bal_type:"Credit"},
+    {name:"TDS Payable",code:"2300",root_type:"Liability",account_type:"Tax",is_group:0,parent:"Current Liabilities",opening:0,bal_type:"Credit"},
+    {name:"Salary Payable",code:"2400",root_type:"Liability",account_type:"Current Liability",is_group:0,parent:"Current Liabilities",opening:0,bal_type:"Credit"},
+    {name:"Long-term Liabilities",code:"2500",root_type:"Liability",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Credit"},
+    {name:"Bank Loan",code:"2501",root_type:"Liability",account_type:"Other Liability",is_group:0,parent:"Long-term Liabilities",opening:500000,bal_type:"Credit"},
+    {name:"Share Capital",code:"3000",root_type:"Equity",account_type:"Equity",is_group:0,parent:"",opening:1000000,bal_type:"Credit"},
+    {name:"Retained Earnings",code:"3100",root_type:"Equity",account_type:"Retained Earnings",is_group:0,parent:"",opening:0,bal_type:"Credit"},
+    {name:"Revenue",code:"4000",root_type:"Income",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Credit"},
+    {name:"Sales Revenue",code:"4001",root_type:"Income",account_type:"Income Account",is_group:0,parent:"Revenue",opening:0,bal_type:"Credit"},
+    {name:"Service Revenue",code:"4002",root_type:"Income",account_type:"Income Account",is_group:0,parent:"Revenue",opening:0,bal_type:"Credit"},
+    {name:"Other Income",code:"4100",root_type:"Income",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Credit"},
+    {name:"Interest Income",code:"4101",root_type:"Income",account_type:"Other Income",is_group:0,parent:"Other Income",opening:0,bal_type:"Credit"},
+    {name:"Cost of Goods Sold",code:"5000",root_type:"Expense",account_type:"Cost of Goods Sold",is_group:0,parent:"",opening:0,bal_type:"Debit"},
+    {name:"Operating Expenses",code:"5100",root_type:"Expense",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Debit"},
+    {name:"Salaries & Wages",code:"5101",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Rent Expense",code:"5102",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Utilities",code:"5103",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Software & Subscriptions",code:"5104",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Marketing & Advertising",code:"5105",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Professional Fees",code:"5106",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Travel & Transport",code:"5107",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Operating Expenses",opening:0,bal_type:"Debit"},
+    {name:"Depreciation",code:"5200",root_type:"Expense",account_type:"Depreciation",is_group:0,parent:"",opening:0,bal_type:"Debit"},
+    {name:"Finance Charges",code:"5300",root_type:"Expense",account_type:"",is_group:1,parent:"",opening:0,bal_type:"Debit"},
+    {name:"Bank Charges",code:"5301",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Finance Charges",opening:0,bal_type:"Debit"},
+    {name:"Interest Expense",code:"5302",root_type:"Expense",account_type:"Expense Account",is_group:0,parent:"Finance Charges",opening:0,bal_type:"Debit"},
+  ];
+
+  const ChartOfAccounts = defineComponent({
+    name: "ChartOfAccounts",
+    setup() {
+      const allAccounts = ref([]);
+      const loading = ref(true);
+      const expandedGroups = ref(new Set());
+      const typeFilter = ref("");
+      const searchQ = ref("");
+      const expandTick = ref(0); // force reactivity on Set mutations
+
+      // Drawer state
+      const drawerOpen = ref(false);
+      const editingName = ref(null);
+      const drawerSaving = ref(false);
+      const form = reactive({ name:"", code:"", root_type:"", account_type:"", parent:"", is_group:0, bs_item:1, opening:"", bal_type:"Debit", notes:"" });
+
+      // Delete confirm
+      const showDel = ref(false);
+      const deleteTarget = ref(null);
+
+      const typeStats = computed(() => {
+        return ["Asset","Liability","Equity","Income","Expense"].map(t => {
+          const accts = allAccounts.value.filter(a => a.root_type === t && !a.is_group);
+          const tot = accts.reduce((s,a) => s + Number(a.opening||0), 0);
+          return { type: t, count: accts.length, total: tot, meta: TYPE_META_COA[t] };
+        });
+      });
+
+      const accountTypeOptions = computed(() => {
+        return ACCOUNT_TYPES_COA[form.root_type] || [];
+      });
+
+      const parentOptions = computed(() => {
+        return allAccounts.value.filter(a => a.is_group);
+      });
+
+      // Flat tree for rendering - returns visible rows in order with depth
+      const flatTree = computed(() => {
+        // eslint-disable-next-line no-unused-expressions
+        expandTick.value; // reactivity trigger
+        const q = searchQ.value.toLowerCase().trim();
+        const tf = typeFilter.value;
+        if (q) {
+          // Search mode: flat list filtered by name/code/type
+          return allAccounts.value
+            .filter(a => {
+              const nm = (a.account_name || a.name).toLowerCase();
+              const cd = (a.code || "").toLowerCase();
+              return (!tf || a.root_type === tf) && (nm.includes(q) || cd.includes(q));
+            })
+            .map(a => ({ ...a, depth: 0 }));
+        }
+        // Tree mode
+        function walk(parent, depth) {
+          const children = allAccounts.value.filter(a => {
+            const par = a.parent || "";
+            return par === parent && (!tf || a.root_type === tf);
+          });
+          const rows = [];
+          children.forEach(a => {
+            rows.push({ ...a, depth });
+            const hasChildren = allAccounts.value.some(c => (c.parent||"") === a.name);
+            if (a.is_group && hasChildren && expandedGroups.value.has(a.name)) {
+              rows.push(...walk(a.name, depth + 1));
+            }
+          });
+          return rows;
+        }
+        return walk("", 0);
+      });
+
+      function toggleGroup(name) {
+        if (expandedGroups.value.has(name)) {
+          expandedGroups.value.delete(name);
+        } else {
+          expandedGroups.value.add(name);
+        }
+        expandTick.value++;
+      }
+
+      function expandAll() {
+        allAccounts.value.filter(a => a.is_group).forEach(a => expandedGroups.value.add(a.name));
+        expandTick.value++;
+      }
+
+      function collapseAll() {
+        expandedGroups.value.clear();
+        expandTick.value++;
+      }
+
+      function hasChildren(name) {
+        return allAccounts.value.some(c => (c.parent||"") === name);
+      }
+
+      function fmtINR(v) {
+        if (!v && v !== 0) return "—";
+        const n = Number(v);
+        if (n === 0) return "—";
+        return "₹" + Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+      }
+
+      async function load() {
+        loading.value = true;
+        try {
+          let frappeAccts = [];
+          try {
+            const res = await apiGET("zoho_books_clone.api.books_data.get_chart_of_accounts", {});
+            frappeAccts = Array.isArray(res) ? res : [];
+          } catch {}
+
+          if (frappeAccts && frappeAccts.length) {
+            // Helper: derive root_type from account_type when Frappe doesn't have the column
+            const guessRootType = (a) => {
+              if (a.root_type) return a.root_type;
+              const t = (a.account_type || "").toLowerCase().trim();
+              // Simple values used by plain Frappe (not ERPNext)
+              if (t === "income" || t === "other income" || t.includes("income account")) return "Income";
+              if (t === "expense" || t === "other expense" || t.includes("expense account") || t === "cost of goods sold" || t === "depreciation") return "Expense";
+              if (t === "payable" || t === "liability" || t === "other liability" || t === "credit card" || t === "current liability") return "Liability";
+              if (t === "equity" || t === "retained earnings") return "Equity";
+              // Asset types: asset, bank, cash, receivable, tax, fixed asset, stock, etc.
+              return "Asset";
+            };
+            allAccounts.value = frappeAccts.map(a => ({
+              name: a.name,
+              account_name: a.account_name || a.name,
+              code: a.account_number || "",
+              root_type: guessRootType(a),
+              account_type: a.account_type || "",
+              is_group: a.is_group ? 1 : 0,
+              parent: a.parent_account || "",
+              opening: Number(a.opening_balance || 0),
+              bal_type: a.balance_must_be || "Debit",
+              source: "frappe"
+            }));
+            // Clear stale local cache now that we have real data
+            try { localStorage.removeItem("books_coa"); } catch {}
+          } else {
+            const saved = (() => { try { const s = localStorage.getItem("books_coa"); return s ? JSON.parse(s) : null; } catch { return null; } })();
+            if (saved && saved.length) {
+              allAccounts.value = saved;
+            } else {
+              allAccounts.value = STANDARD_COA_DATA.map(a => ({ ...a, account_name: a.name, source: "local" }));
+              try { localStorage.setItem("books_coa", JSON.stringify(allAccounts.value)); } catch {}
+            }
+          }
+          // Expand top-level groups by default
+          allAccounts.value.filter(a => a.is_group && !a.parent).forEach(a => expandedGroups.value.add(a.name));
+          expandTick.value++;
+        } finally {
+          loading.value = false;
+        }
+      }
+
+      function openAdd(parentName) {
+        editingName.value = null;
+        Object.assign(form, { name:"", code:"", root_type:"", account_type:"", parent: parentName||"", is_group:0, bs_item:1, opening:"", bal_type:"Debit", notes:"" });
+        drawerOpen.value = true;
+      }
+
+      function openEdit(acctName) {
+        const a = allAccounts.value.find(x => x.name === acctName);
+        if (!a) return;
+        editingName.value = acctName;
+        Object.assign(form, {
+          name: a.account_name || a.name,
+          code: a.code || "",
+          root_type: a.root_type || "",
+          account_type: a.account_type || "",
+          parent: a.parent || "",
+          is_group: a.is_group ? 1 : 0,
+          bs_item: ["Asset","Liability","Equity"].includes(a.root_type) ? 1 : 0,
+          opening: a.opening || "",
+          bal_type: a.bal_type || "Debit",
+          notes: a.notes || ""
+        });
+        drawerOpen.value = true;
+      }
+
+      async function saveAccount() {
+        if (!form.name.trim()) { toast("Account name is required", "error"); return; }
+        if (!form.root_type) { toast("Root Type is required", "error"); return; }
+        drawerSaving.value = true;
+        try {
+          const payload = {
+            account_name: form.name.trim(),
+            account_number: form.code.trim(),
+            root_type: form.root_type,
+            account_type: form.account_type,
+            parent_account: form.parent || "",
+            is_group: form.is_group ? 1 : 0,
+            opening_balance: flt(form.opening),
+            balance_must_be: form.bal_type,
+          };
+          if (editingName.value) {
+            // Edit via custom API
+            try {
+              await apiPOST("zoho_books_clone.api.books_data.save_account", { op: "update", name: editingName.value, ...payload });
+            } catch(e) {
+              toast(e.message || "Frappe update failed", "error");
+            }
+            const idx = allAccounts.value.findIndex(x => x.name === editingName.value);
+            if (idx >= 0) {
+              allAccounts.value[idx] = { ...allAccounts.value[idx], account_name: form.name.trim(), code: form.code.trim(), root_type: form.root_type, account_type: form.account_type, parent: form.parent, is_group: form.is_group ? 1 : 0, opening: flt(form.opening), bal_type: form.bal_type, notes: form.notes };
+            }
+            toast("Account updated", "success");
+          } else {
+            // Create via custom API
+            let newName = form.name.trim();
+            try {
+              const res = await apiPOST("zoho_books_clone.api.books_data.save_account", { op: "create", ...payload });
+              if (res && res.name) newName = res.name;
+            } catch(e) {
+              toast(e.message || "Frappe create failed", "error");
+            }
+            allAccounts.value.push({ name: newName, account_name: form.name.trim(), code: form.code.trim(), root_type: form.root_type, account_type: form.account_type, parent: form.parent, is_group: form.is_group ? 1 : 0, opening: flt(form.opening), bal_type: form.bal_type, notes: form.notes, source: "frappe" });
+            if (form.is_group) { expandedGroups.value.add(newName); expandTick.value++; }
+            toast("Account created", "success");
+          }
+          drawerOpen.value = false;
+          // Reload from Frappe to get the canonical tree order
+          await load();
+        } catch(e) {
+          toast(e.message || "Save failed", "error");
+        } finally {
+          drawerSaving.value = false;
+        }
+      }
+
+      function confirmDelete(name) {
+        deleteTarget.value = name;
+        showDel.value = true;
+      }
+
+      async function doDelete() {
+        const name = deleteTarget.value;
+        try {
+          await apiPOST("zoho_books_clone.api.books_data.save_account", { op: "delete", name });
+        } catch(e) {
+          toast(e.message || "Delete failed in Frappe", "error");
+        }
+        allAccounts.value = allAccounts.value.filter(a => a.name !== name && a.parent !== name);
+        expandTick.value++;
+        showDel.value = false;
+        deleteTarget.value = null;
+        toast("Account deleted", "success");
+        await load();
+      }
+
+      onMounted(load);
+
+      return { allAccounts, loading, typeFilter, searchQ, expandedGroups, expandTick, typeStats, flatTree, accountTypeOptions, parentOptions, form, drawerOpen, editingName, drawerSaving, showDel, deleteTarget, toggleGroup, expandAll, collapseAll, hasChildren, fmtINR, load, openAdd, openEdit, saveAccount, confirmDelete, doDelete, icon, fmt, TYPE_META_COA };
+    },
+    template: `
+<div class="b-page coa-page">
+
+  <!-- Type Summary Strip -->
+  <div class="coa-type-strip">
+    <div v-for="s in typeStats" :key="s.type"
+      class="coa-type-card"
+      :class="{active: typeFilter===s.type}"
+      :style="'border-left-color:'+s.meta.color+(typeFilter===s.type?';background:'+s.meta.bg:'')"
+      @click="typeFilter = typeFilter===s.type?'':s.type">
+      <div class="coa-type-lbl" :style="'color:'+s.meta.color">{{s.type}}</div>
+      <div class="coa-type-val" :style="'color:'+s.meta.color">{{s.count}}</div>
+      <div class="coa-type-sub">{{s.meta.dr?'Normally Dr':'Normally Cr'}} · {{s.total?fmtINR(s.total):'No opening'}}</div>
+    </div>
+  </div>
+
+  <!-- Action bar -->
+  <div class="b-action-bar" style="margin-bottom:14px">
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div class="b-search" style="border-radius:20px;padding:6px 12px">
+        <span v-html="icon('search',13)"></span>
+        <input v-model="searchQ" placeholder="Search account name or code..." style="border:none;outline:none;font-size:13px;background:transparent;width:220px"/>
+      </div>
+      <button class="b-btn b-btn-ghost" @click="expandAll"><span v-html="icon('chevD',13)"></span> Expand All</button>
+      <button class="b-btn b-btn-ghost" @click="collapseAll"><span v-html="icon('chevR',13)"></span> Collapse All</button>
+      <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+    </div>
+    <button class="b-btn b-btn-primary" @click="openAdd()"><span v-html="icon('plus',13)"></span> Add Account</button>
+  </div>
+
+  <!-- Tree Table -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <table class="b-table coa-tbl">
+      <thead>
+        <tr>
+          <th style="width:44%">Account Name</th>
+          <th>Type</th>
+          <th>Account No.</th>
+          <th class="ta-r">Opening Balance</th>
+          <th class="ta-r">Balance Type</th>
+          <th style="text-align:center;width:90px">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template v-if="loading">
+          <tr v-for="n in 8" :key="n">
+            <td colspan="6" style="padding:12px 14px"><div class="b-shimmer" style="height:12px"></div></td>
+          </tr>
+        </template>
+        <template v-else-if="flatTree.length===0">
+          <tr><td colspan="6" class="b-empty">No accounts found</td></tr>
+        </template>
+        <template v-else>
+          <tr v-for="row in flatTree" :key="row.name"
+            class="coa-row"
+            :class="row.is_group?'coa-group-row':'coa-leaf-row'"
+            @click="openEdit(row.name)">
+            <td>
+              <div class="coa-tree-cell" :style="'padding-left:'+(14+row.depth*22)+'px'">
+                <button v-if="row.is_group && hasChildren(row.name)"
+                  class="coa-toggle" :class="{open: expandedGroups.has(row.name)}"
+                  @click.stop="toggleGroup(row.name)">
+                  <span v-html="icon('chevR',12)"></span>
+                </button>
+                <span v-else style="width:18px;flex-shrink:0;display:inline-block"></span>
+                <span class="coa-dot" :style="'background:'+(TYPE_META_COA[row.root_type]||TYPE_META_COA.Asset).color+';margin-left:6px'"></span>
+                <span class="coa-acct-name" :class="{'fw-700':row.is_group}">{{row.account_name||row.name}}</span>
+                <span v-if="row.is_group" class="coa-group-chip" :style="'background:'+(TYPE_META_COA[row.root_type]||TYPE_META_COA.Asset).bg+';color:'+(TYPE_META_COA[row.root_type]||TYPE_META_COA.Asset).color">Group</span>
+                <span v-if="row.account_type" class="coa-acct-type">{{row.account_type}}</span>
+              </div>
+            </td>
+            <td style="padding:9px 14px">
+              <span class="b-badge" :style="'background:'+(TYPE_META_COA[row.root_type]||TYPE_META_COA.Asset).bg+';color:'+(TYPE_META_COA[row.root_type]||TYPE_META_COA.Asset).color">{{row.root_type}}</span>
+            </td>
+            <td style="padding:9px 14px;font-family:monospace;font-size:12px;color:#868e96">{{row.code||'—'}}</td>
+            <td class="ta-r" style="padding:9px 14px;font-family:monospace;font-weight:600" :class="row.opening>0?(row.bal_type==='Debit'?'coa-dr':'coa-cr'):'c-muted'">{{fmtINR(row.opening)}}</td>
+            <td class="ta-r" style="padding:9px 14px;font-size:12px;color:#868e96">{{row.opening?row.bal_type:'—'}}</td>
+            <td style="text-align:center;padding:8px 14px">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="b-icon-btn" @click.stop="openEdit(row.name)" title="Edit"><span v-html="icon('edit',14)"></span></button>
+                <button v-if="row.source!=='frappe'" class="b-icon-btn danger" @click.stop="confirmDelete(row.name)" title="Delete"><span v-html="icon('trash',14)"></span></button>
+              </div>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+  <div style="text-align:right;font-size:12px;color:#868e96;padding:6px 4px">{{flatTree.length}} account(s)</div>
+
+  <!-- Add/Edit Drawer -->
+  <transition name="nim-overlay">
+    <div v-if="drawerOpen" class="coa-drawer-bg" @click.self="drawerOpen=false">
+      <div class="coa-drawer-panel">
+        <div class="coa-dh">
+          <div><div class="coa-dh-title">{{editingName?'Edit Account':'Add Account'}}</div>
+          <div class="coa-dh-sub">{{editingName?'Update account details':'Create a new account in the chart'}}</div></div>
+          <button class="coa-dclose" @click="drawerOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="coa-dbody">
+          <div class="coa-info-box">
+            <span v-html="icon('info',14)"></span>
+            <span>Group accounts can have child accounts. Ledger accounts record actual transactions.</span>
+          </div>
+
+          <span class="coa-sec-lbl">Account Details</span>
+          <div class="coa-fg coa-fg2">
+            <div style="grid-column:1/3">
+              <label class="coa-lbl">Account Name <span style="color:#c92a2a">*</span></label>
+              <input v-model="form.name" class="coa-fi" placeholder="e.g. Cash in Hand, Sales Revenue"/>
+            </div>
+            <div>
+              <label class="coa-lbl">Account Number</label>
+              <input v-model="form.code" class="coa-fi" placeholder="e.g. 1001, 4001"/>
+            </div>
+            <div>
+              <label class="coa-lbl">Root Type <span style="color:#c92a2a">*</span></label>
+              <select v-model="form.root_type" class="coa-fi" @change="form.account_type=''">
+                <option value="">— Select —</option>
+                <option value="Asset">Asset</option>
+                <option value="Liability">Liability</option>
+                <option value="Equity">Equity</option>
+                <option value="Income">Income</option>
+                <option value="Expense">Expense</option>
+              </select>
+            </div>
+            <div>
+              <label class="coa-lbl">Account Type</label>
+              <select v-model="form.account_type" class="coa-fi">
+                <option value="">— General —</option>
+                <option v-for="t in accountTypeOptions" :key="t" :value="t">{{t}}</option>
+              </select>
+            </div>
+            <div>
+              <label class="coa-lbl">Parent Account</label>
+              <searchable-select v-model="form.parent" :options="parentOptions" value-key="name" label-key="account_name" placeholder="— Root level —"/>
+            </div>
+          </div>
+
+          <div class="coa-fg coa-fg2" style="margin-top:0">
+            <div>
+              <label class="coa-lbl">Is Group Account?</label>
+              <div style="display:flex;align-items:center;gap:14px;margin-top:8px">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+                  <input type="radio" v-model="form.is_group" :value="1" style="accent-color:#3b5bdb"/> Yes
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+                  <input type="radio" v-model="form.is_group" :value="0" style="accent-color:#3b5bdb"/> No
+                </label>
+              </div>
+            </div>
+            <div>
+              <label class="coa-lbl">Balance Sheet Item?</label>
+              <select v-model="form.bs_item" class="coa-fi">
+                <option :value="1">Yes (Balance Sheet)</option>
+                <option :value="0">No (P&amp;L)</option>
+              </select>
+            </div>
+          </div>
+
+          <span class="coa-sec-lbl">Opening Balance</span>
+          <div class="coa-fg coa-fg2">
+            <div>
+              <label class="coa-lbl">Opening Balance (₹)</label>
+              <input v-model="form.opening" type="number" min="0" step="0.01" class="coa-fi" placeholder="0.00" style="font-family:monospace"/>
+            </div>
+            <div>
+              <label class="coa-lbl">Balance Type</label>
+              <select v-model="form.bal_type" class="coa-fi">
+                <option value="Debit">Debit (Dr)</option>
+                <option value="Credit">Credit (Cr)</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="coa-lbl">Description / Notes</label>
+            <textarea v-model="form.notes" class="coa-fi" rows="2" style="resize:vertical" placeholder="Optional description..."></textarea>
+          </div>
+        </div>
+        <div class="coa-dfooter">
+          <button class="b-btn b-btn-ghost" @click="drawerOpen=false">Cancel</button>
+          <button class="b-btn b-btn-primary" @click="saveAccount" :disabled="drawerSaving" style="min-width:130px">
+            {{drawerSaving?'Saving…':'Save Account'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- Delete Confirm -->
+  <transition name="nim-overlay">
+    <div v-if="showDel" class="coa-drawer-bg" @click.self="showDel=false" style="justify-content:center;align-items:center">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:420px;width:100%;border:1px solid #e2e8f0">
+        <div style="font-size:17px;font-weight:700;margin-bottom:8px">Delete Account?</div>
+        <div style="font-size:14px;color:#868e96;margin-bottom:24px;line-height:1.5">
+          <strong>{{deleteTarget}}</strong> and all its child accounts will be permanently removed from local data.
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button @click="showDel=false" class="b-btn b-btn-ghost">Keep It</button>
+          <button @click="doDelete" class="b-btn" style="background:#c92a2a;color:#fff;border-color:#c92a2a">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  </transition>
+</div>`
+  });
+
+  /* ══════════════════════════════════════════════════
+     JOURNAL ENTRIES
+  ══════════════════════════════════════════════════ */
+  const JE_TEMPLATES = [
+    { id:"depreciation", name:"Depreciation",      desc:"Monthly asset depreciation posting",
+      lines:[{account:"Depreciation",dr:0,cr:0,type:"Debit"},{account:"Accumulated Depreciation",dr:0,cr:0,type:"Credit"}] },
+    { id:"salary",       name:"Salary Accrual",    desc:"Record salary expense before payment",
+      lines:[{account:"Salaries & Wages",dr:0,cr:0,type:"Debit"},{account:"Salary Payable",dr:0,cr:0,type:"Credit"}] },
+    { id:"bank-charge",  name:"Bank Charges",      desc:"Bank processing / service fee",
+      lines:[{account:"Bank Charges",dr:0,cr:0,type:"Debit"},{account:"HDFC Current Account",dr:0,cr:0,type:"Credit"}] },
+    { id:"gst-payment",  name:"GST Payment",        desc:"Pay GST liability to government",
+      lines:[{account:"CGST Payable",dr:0,cr:0,type:"Debit"},{account:"SGST Payable",dr:0,cr:0,type:"Debit"},{account:"HDFC Current Account",dr:0,cr:0,type:"Credit"}] },
+    { id:"prepaid",      name:"Prepaid Expense",   desc:"Advance payment treated as asset",
+      lines:[{account:"Prepaid Expenses",dr:0,cr:0,type:"Debit"},{account:"HDFC Current Account",dr:0,cr:0,type:"Credit"}] },
+    { id:"provision",    name:"Bad Debt Provision",desc:"Provision for doubtful receivables",
+      lines:[{account:"Bad Debt Expense",dr:0,cr:0,type:"Debit"},{account:"Provision for Bad Debts",dr:0,cr:0,type:"Credit"}] },
+  ];
+  const JE_TYPE_COLOR = { "Journal Entry":"je-type-info","Depreciation":"je-type-muted","Accrual":"je-type-info","Prepaid":"je-type-info","Provision":"je-type-muted","Contra":"je-type-muted","Rectification":"je-type-muted","Opening Entry":"je-type-info" };
+  const JE_STATUS_COLOR = { Draft:"je-s-draft", Submitted:"je-s-submitted", Cancelled:"je-s-cancelled" };
+
+  const JournalEntries = defineComponent({
+    name: "JournalEntries",
+    setup() {
+      const allEntries = ref([]);
+      const accounts = ref([]);
+      const costCenters = ref([]);
+      const loading = ref(true);
+      const currentFilter = ref("all");
+      const searchQ = ref("");
+      const dateFrom = ref("");
+      const dateTo = ref("");
+
+      // New/Edit drawer
+      const drawerOpen = ref(false);
+      const editingName = ref(null);
+      const drawerSaving = ref(false);
+      const selectedTpl = ref("");
+      const form = reactive({ date: "", type: "Journal Entry", ref: "", cheque_date: "", narration: "", cost_center: "", status: "Draft" });
+      const lines = ref([]);
+
+      // View drawer
+      const viewOpen = ref(false);
+      const viewEntry = ref(null);
+
+      // Confirm modal
+      const showConf = ref(false);
+      const confTarget = ref(null);
+      const confType = ref(""); // 'delete' | 'cancel'
+
+      const todayStr = () => new Date().toISOString().slice(0, 10);
+      const thisMonth = (d) => { const n = new Date(); return (d||"").startsWith(n.getFullYear() + "-" + String(n.getMonth()+1).padStart(2,"0")); };
+
+      function fmtINR(v) {
+        if (!v && v !== 0) return "—";
+        const n = Number(v); if (n === 0) return "—";
+        return "₹" + Math.abs(n).toLocaleString("en-IN", { minimumFractionDigits: 2 });
+      }
+      function fmtDate(d) {
+        if (!d) return "—";
+        try { return new Date(d).toLocaleDateString("en-IN", { day:"2-digit", month:"short", year:"numeric" }); } catch { return d; }
+      }
+      function nextNum() {
+        const nums = allEntries.value.map(x => parseInt((x.name||"JE-0").replace(/\D/g,""))||0);
+        return "JE-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
+      }
+
+      const summary = computed(() => {
+        const month = allEntries.value.filter(e => thisMonth(e.date));
+        const drafts = allEntries.value.filter(e => e.status === "Draft");
+        const totalDr = allEntries.value.filter(e => e.status === "Submitted").reduce((s,e) => s + Number(e.total_debit||0), 0);
+        return { total: allEntries.value.length, month: month.length, totalDr, drafts: drafts.length };
+      });
+
+      const counts = computed(() => ({
+        Draft: allEntries.value.filter(e => e.status === "Draft").length,
+        Submitted: allEntries.value.filter(e => e.status === "Submitted").length,
+        Cancelled: allEntries.value.filter(e => e.status === "Cancelled").length,
+      }));
+
+      const filteredRows = computed(() => {
+        const q = searchQ.value.toLowerCase();
+        let r = currentFilter.value === "all" ? allEntries.value : allEntries.value.filter(e => e.status === currentFilter.value);
+        if (dateFrom.value) r = r.filter(e => e.date && e.date >= dateFrom.value);
+        if (dateTo.value) r = r.filter(e => e.date && e.date <= dateTo.value);
+        if (q) r = r.filter(e => (e.name + e.narration + (e.type||"")).toLowerCase().includes(q));
+        return r;
+      });
+
+      const totalDr = computed(() => lines.value.reduce((s,l) => s + flt(l.dr), 0));
+      const totalCr = computed(() => lines.value.reduce((s,l) => s + flt(l.cr), 0));
+      const balanced = computed(() => Math.abs(totalDr.value - totalCr.value) < 0.01);
+
+      async function load() {
+        loading.value = true;
+        try {
+          let frappeEntries = [];
+          try {
+            frappeEntries = await apiList("Journal Entry", {
+              fields: ["name","posting_date","voucher_type","user_remark","total_debit","total_credit","docstatus"],
+              order: "posting_date desc", limit: 300
+            });
+          } catch {}
+
+          if (frappeEntries && frappeEntries.length) {
+            allEntries.value = frappeEntries.map(e => ({
+              name: e.name, date: e.posting_date, type: e.voucher_type || "Journal Entry",
+              narration: e.user_remark || "", total_debit: e.total_debit || 0,
+              total_credit: e.total_credit || 0,
+              status: e.docstatus === 1 ? "Submitted" : e.docstatus === 2 ? "Cancelled" : "Draft",
+              lines: [], source: "frappe"
+            }));
+          } else {
+            try { allEntries.value = JSON.parse(localStorage.getItem("books_journal_entries") || "[]"); } catch { allEntries.value = []; }
+          }
+
+          // Load accounts for dropdowns - from COA localStorage or Frappe
+          try {
+            const accts = await apiList("Account", { fields: ["name","account_name","root_type"], filters: [["is_group","=",0],["disabled","=",0]], limit: 500 });
+            accounts.value = accts.map(a => a.name || a.account_name);
+          } catch {
+            try {
+              const coa = JSON.parse(localStorage.getItem("books_coa") || "[]");
+              accounts.value = coa.filter(a => !a.is_group).map(a => a.account_name || a.name);
+            } catch {}
+          }
+          if (!accounts.value.length) {
+            accounts.value = STANDARD_COA_DATA.filter(a => !a.is_group).map(a => a.name);
+          }
+
+          try {
+            const cc = await apiList("Cost Center", { fields: ["name"], filters: [["is_group","=",0]], limit: 100 });
+            costCenters.value = cc.map(c => c.name);
+          } catch {}
+        } finally {
+          loading.value = false;
+        }
+      }
+
+      function openAdd() {
+        editingName.value = null;
+        selectedTpl.value = "";
+        lines.value = [
+          { id: Date.now(), account: "", party: "", cost_center: "", dr: "", cr: "", type: "Debit" },
+          { id: Date.now()+1, account: "", party: "", cost_center: "", dr: "", cr: "", type: "Credit" },
+        ];
+        Object.assign(form, { date: todayStr(), type: "Journal Entry", ref: "", cheque_date: "", narration: "", cost_center: "", status: "Draft" });
+        drawerOpen.value = true;
+      }
+
+      function openEdit(name) {
+        const e = allEntries.value.find(x => x.name === name);
+        if (!e || e.status !== "Draft") return;
+        editingName.value = name;
+        selectedTpl.value = "";
+        Object.assign(form, { date: e.date || todayStr(), type: e.type || "Journal Entry", ref: e.ref || "", cheque_date: e.cheque_date || "", narration: e.narration || "", cost_center: e.cost_center || "", status: e.status || "Draft" });
+        lines.value = (e.lines && e.lines.length) ? e.lines.map((l,i) => ({ ...l, id: Date.now()+i })) : [
+          { id: Date.now(), account: "", party: "", cost_center: "", dr: "", cr: "", type: "Debit" },
+          { id: Date.now()+1, account: "", party: "", cost_center: "", dr: "", cr: "", type: "Credit" },
+        ];
+        drawerOpen.value = true;
+      }
+
+      function openView(name) {
+        viewEntry.value = allEntries.value.find(x => x.name === name) || null;
+        viewOpen.value = true;
+      }
+
+      function applyTemplate(tplId) {
+        const tpl = JE_TEMPLATES.find(t => t.id === tplId);
+        if (!tpl) return;
+        selectedTpl.value = selectedTpl.value === tplId ? "" : tplId;
+        if (selectedTpl.value) {
+          lines.value = tpl.lines.map((l,i) => ({ id: Date.now()+i, account: l.account, party: "", cost_center: "", dr: l.type==="Debit"?l.dr:"", cr: l.type==="Credit"?l.cr:"", type: l.type }));
+          form.narration = tpl.name + " — " + new Date().toLocaleDateString("en-IN", { month:"short", year:"numeric" });
+        }
+      }
+
+      function addLine(type) {
+        lines.value.push({ id: Date.now(), account: "", party: "", cost_center: "", dr: type==="Debit"?"0":"", cr: type==="Credit"?"0":"", type });
+      }
+
+      function removeLine(id) {
+        if (lines.value.length <= 1) return;
+        lines.value = lines.value.filter(l => l.id !== id);
+      }
+
+      async function saveEntry(status) {
+        if (!form.date) { toast("Date is required", "error"); return; }
+        if (!form.narration.trim()) { toast("Narration is required", "error"); return; }
+        const hasLines = lines.value.some(l => l.account && (flt(l.dr) > 0 || flt(l.cr) > 0));
+        if (!hasLines) { toast("Add at least one line with an account and amount", "error"); return; }
+        if (!balanced.value) { toast("Total debits must equal total credits", "error"); return; }
+        drawerSaving.value = true;
+        try {
+          const payload = {
+            posting_date: form.date,
+            voucher_type: form.type,
+            cheque_no: form.ref,
+            cheque_date: form.cheque_date || null,
+            user_remark: form.narration,
+            accounts: lines.value.filter(l => l.account).map(l => ({
+              account: l.account,
+              party: l.party || null,
+              cost_center: l.cost_center || form.cost_center || null,
+              debit_in_account_currency: flt(l.dr),
+              credit_in_account_currency: flt(l.cr),
+            })),
+            docstatus: status === "Submitted" ? 1 : 0,
+          };
+          const lineItems = lines.value.filter(l => l.account);
+          const totDr = lineItems.reduce((s,l) => s + flt(l.dr), 0);
+          const totCr = lineItems.reduce((s,l) => s + flt(l.cr), 0);
+
+          if (editingName.value) {
+            try { await apiPOST("frappe.client.set_value", { doctype:"Journal Entry", name: editingName.value, fieldname: JSON.stringify(payload) }); } catch {}
+            const idx = allEntries.value.findIndex(x => x.name === editingName.value);
+            if (idx >= 0) allEntries.value[idx] = { ...allEntries.value[idx], date: form.date, type: form.type, narration: form.narration, total_debit: totDr, total_credit: totCr, status, lines: lineItems, ref: form.ref, cheque_date: form.cheque_date, cost_center: form.cost_center };
+            toast("Journal entry updated", "success");
+          } else {
+            const name = nextNum();
+            try { await apiPOST("frappe.client.insert", { doc: JSON.stringify({ doctype:"Journal Entry", name, ...payload }) }); } catch {}
+            allEntries.value.unshift({ name, date: form.date, type: form.type, narration: form.narration, total_debit: totDr, total_credit: totCr, status, lines: lineItems, ref: form.ref, cheque_date: form.cheque_date, cost_center: form.cost_center, source: "local" });
+            toast("Journal entry created", "success");
+          }
+          try { localStorage.setItem("books_journal_entries", JSON.stringify(allEntries.value)); } catch {}
+          drawerOpen.value = false;
+        } catch(e) {
+          toast(e.message || "Save failed", "error");
+        } finally {
+          drawerSaving.value = false;
+        }
+      }
+
+      function confirmAction(name, type) {
+        confTarget.value = name;
+        confType.value = type;
+        showConf.value = true;
+      }
+
+      function doAction() {
+        const name = confTarget.value;
+        if (confType.value === "delete") {
+          allEntries.value = allEntries.value.filter(e => e.name !== name);
+          toast("Entry deleted", "success");
+        } else if (confType.value === "cancel") {
+          const idx = allEntries.value.findIndex(e => e.name === name);
+          if (idx >= 0) allEntries.value[idx] = { ...allEntries.value[idx], status: "Cancelled" };
+          toast("Entry cancelled", "success");
+        }
+        try { localStorage.setItem("books_journal_entries", JSON.stringify(allEntries.value)); } catch {}
+        showConf.value = false;
+        confTarget.value = null;
+      }
+
+      onMounted(load);
+
+      return { allEntries, accounts, costCenters, loading, currentFilter, searchQ, dateFrom, dateTo, filteredRows, summary, counts, drawerOpen, editingName, drawerSaving, selectedTpl, form, lines, totalDr, totalCr, balanced, viewOpen, viewEntry, showConf, confTarget, confType, JE_TEMPLATES, JE_TYPE_COLOR, JE_STATUS_COLOR, load, openAdd, openEdit, openView, applyTemplate, addLine, removeLine, saveEntry, confirmAction, doAction, fmtINR, fmtDate, flt, icon };
+    },
+    template: `
+<div class="b-page jen-page">
+
+  <!-- Info banner -->
+  <div class="jen-info-banner">
+    <span v-html="icon('info',15)" style="flex-shrink:0"></span>
+    <span>Journal entries record any financial transaction not covered by Sales/Purchase. Total <strong>Debits must equal Credits</strong> in every entry.</span>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="jen-sum-strip">
+    <div class="jen-sum-card">
+      <div class="jen-sum-lbl">Total Entries</div>
+      <div class="jen-sum-val">{{summary.total}}</div>
+    </div>
+    <div class="jen-sum-card">
+      <div class="jen-sum-lbl" style="color:#3b5bdb">This Month</div>
+      <div class="jen-sum-val" style="color:#3b5bdb">{{summary.month}}</div>
+    </div>
+    <div class="jen-sum-card">
+      <div class="jen-sum-lbl" style="color:#2f9e44">Total Debits</div>
+      <div class="jen-sum-val" style="color:#2f9e44">{{summary.totalDr>=1000?'₹'+(summary.totalDr/1000).toFixed(1)+'K':fmtINR(summary.totalDr)||'₹0'}}</div>
+    </div>
+    <div class="jen-sum-card">
+      <div class="jen-sum-lbl" style="color:#c92a2a">Drafts</div>
+      <div class="jen-sum-val" style="color:#c92a2a">{{summary.drafts}}</div>
+    </div>
+  </div>
+
+  <!-- Action bar -->
+  <div class="b-action-bar" style="margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="jen-pill" :class="{active:currentFilter==='all'}" @click="currentFilter='all'">All</button>
+      <button class="jen-pill" :class="{active:currentFilter==='Draft'}" @click="currentFilter='Draft'">
+        Draft <span class="jen-pc" style="background:#f1f3f5;color:#868e96">{{counts.Draft}}</span>
+      </button>
+      <button class="jen-pill" :class="{active:currentFilter==='Submitted'}" @click="currentFilter='Submitted'">
+        Submitted <span class="jen-pc" style="background:#ebfbee;color:#2f9e44">{{counts.Submitted}}</span>
+      </button>
+      <button class="jen-pill" :class="{active:currentFilter==='Cancelled'}" @click="currentFilter='Cancelled'">
+        Cancelled <span class="jen-pc" style="background:#ffe3e3;color:#c92a2a">{{counts.Cancelled}}</span>
+      </button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#868e96">
+        <span>From</span>
+        <input type="date" v-model="dateFrom" class="jen-date-input"/>
+        <span>To</span>
+        <input type="date" v-model="dateTo" class="jen-date-input"/>
+      </div>
+      <div class="b-search" style="border-radius:20px;padding:6px 12px">
+        <span v-html="icon('search',13)"></span>
+        <input v-model="searchQ" placeholder="Search JE, narration..." style="border:none;outline:none;font-size:13px;background:transparent;width:180px"/>
+      </div>
+      <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
+      <button class="b-btn b-btn-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Entry</button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <table class="b-table">
+      <thead>
+        <tr>
+          <th>Entry #</th><th>Date</th><th>Type</th><th>Narration</th>
+          <th class="ta-r">Total Debit</th><th class="ta-r">Total Credit</th>
+          <th>Lines</th><th>Status</th>
+          <th style="text-align:center;width:100px">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template v-if="loading">
+          <tr v-for="n in 6" :key="n"><td colspan="9" style="padding:12px 14px"><div class="b-shimmer" style="height:12px"></div></td></tr>
+        </template>
+        <template v-else-if="filteredRows.length===0">
+          <tr><td colspan="9" class="b-empty">
+            <div style="font-size:32px;margin-bottom:8px">📄</div>
+            <div style="font-weight:600;margin-bottom:4px">{{searchQ?'No entries match':'No journal entries yet'}}</div>
+            <div style="font-size:13px;color:#868e96;margin-bottom:12px">{{searchQ?'Try a different search':'Record adjustments, depreciation, accruals and more'}}</div>
+            <button v-if="!searchQ" class="b-btn b-btn-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Entry</button>
+          </td></tr>
+        </template>
+        <template v-else>
+          <tr v-for="e in filteredRows" :key="e.name" class="clickable" @click="openView(e.name)">
+            <td style="font-family:monospace;font-size:12px;font-weight:700;color:#2563eb">{{e.name}}</td>
+            <td style="font-size:12.5px;color:#868e96">{{fmtDate(e.date)}}</td>
+            <td><span class="b-badge" :class="JE_TYPE_COLOR[e.type]||'je-type-info'">{{e.type||'Journal Entry'}}</span></td>
+            <td style="font-size:13px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.narration||'—'}}</td>
+            <td class="ta-r" style="font-family:monospace;font-weight:600;color:#c92a2a">{{fmtINR(e.total_debit)}}</td>
+            <td class="ta-r" style="font-family:monospace;font-weight:600;color:#2f9e44">{{fmtINR(e.total_credit)}}</td>
+            <td style="font-size:12px;color:#868e96">{{(e.lines||[]).length||'—'}}</td>
+            <td><span class="b-badge" :class="JE_STATUS_COLOR[e.status]||'je-s-draft'">{{e.status}}</span></td>
+            <td style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="b-icon-btn" @click.stop="openView(e.name)" title="View"><span v-html="icon('eye',14)"></span></button>
+                <button v-if="e.status==='Draft'" class="b-icon-btn" @click.stop="openEdit(e.name)" title="Edit"><span v-html="icon('edit',14)"></span></button>
+                <button v-if="e.status==='Draft'" class="b-icon-btn danger" @click.stop="confirmAction(e.name,'delete')" title="Delete"><span v-html="icon('trash',14)"></span></button>
+                <button v-if="e.status==='Submitted'" class="b-icon-btn danger" @click.stop="confirmAction(e.name,'cancel')" title="Cancel"><span v-html="icon('cancel',14)"></span></button>
+              </div>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+  <div style="text-align:right;font-size:12px;color:#868e96;padding:6px 4px">Showing {{filteredRows.length}} of {{allEntries.length}} entries</div>
+
+  <!-- New/Edit Drawer -->
+  <transition name="nim-overlay">
+    <div v-if="drawerOpen" class="coa-drawer-bg" @click.self="drawerOpen=false">
+      <div class="jen-drawer-panel">
+        <div class="coa-dh">
+          <div><div class="coa-dh-title">{{editingName?'Edit Journal Entry':'New Journal Entry'}}</div>
+          <div class="coa-dh-sub">Debits must equal Credits</div></div>
+          <button class="coa-dclose" @click="drawerOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="coa-dbody">
+
+          <!-- Quick Templates -->
+          <span class="coa-sec-lbl" style="margin-top:0;border-top:none;padding-top:0">Quick Template <span style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></span>
+          <div class="jen-tpl-grid">
+            <div v-for="tpl in JE_TEMPLATES" :key="tpl.id"
+              class="jen-tpl-card" :class="{selected:selectedTpl===tpl.id}"
+              @click="applyTemplate(tpl.id)">
+              <div class="jen-tpl-name">{{tpl.name}}</div>
+              <div class="jen-tpl-desc">{{tpl.desc}}</div>
+            </div>
+          </div>
+
+          <!-- Entry Details -->
+          <span class="coa-sec-lbl">Entry Details</span>
+          <div class="coa-fg jen-fg4">
+            <div>
+              <label class="coa-lbl">Date <span style="color:#c92a2a">*</span></label>
+              <input v-model="form.date" type="date" class="coa-fi"/>
+            </div>
+            <div>
+              <label class="coa-lbl">Entry Type</label>
+              <select v-model="form.type" class="coa-fi">
+                <option value="Journal Entry">Journal Entry</option>
+                <option value="Depreciation">Depreciation</option>
+                <option value="Accrual">Accrual Entry</option>
+                <option value="Prepaid">Prepaid Expense</option>
+                <option value="Provision">Provision Entry</option>
+                <option value="Contra">Contra Entry</option>
+                <option value="Rectification">Rectification Entry</option>
+                <option value="Opening Entry">Opening Entry</option>
+              </select>
+            </div>
+            <div>
+              <label class="coa-lbl">Cheque / Ref No.</label>
+              <input v-model="form.ref" class="coa-fi" placeholder="Optional reference"/>
+            </div>
+            <div>
+              <label class="coa-lbl">Cheque Date</label>
+              <input v-model="form.cheque_date" type="date" class="coa-fi"/>
+            </div>
+          </div>
+          <div style="margin-bottom:16px">
+            <label class="coa-lbl">Narration <span style="color:#c92a2a">*</span></label>
+            <textarea v-model="form.narration" class="coa-fi" rows="2" style="resize:vertical" placeholder="Describe this journal entry — e.g. Depreciation for March 2026..."></textarea>
+          </div>
+
+          <!-- Lines header -->
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <span style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868e96">Lines</span>
+            <div style="display:flex;gap:8px">
+              <button @click="addLine('Debit')" class="jen-add-line-btn" style="border-color:rgba(201,42,42,.3);color:#c92a2a">
+                <span v-html="icon('plus',12)"></span> Debit Row
+              </button>
+              <button @click="addLine('Credit')" class="jen-add-line-btn" style="border-color:rgba(47,158,68,.3);color:#2f9e44">
+                <span v-html="icon('plus',12)"></span> Credit Row
+              </button>
+            </div>
+          </div>
+
+          <!-- Balance indicator -->
+          <div class="jen-balance-bar" :class="lines.length&&(totalDr>0||totalCr>0)?(balanced?'jen-bal-ok':'jen-bal-err'):'jen-bal-zero'">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span v-html="icon(balanced&&(totalDr>0)?'check':'info',14)"></span>
+              <span>{{!lines.length||(totalDr===0&&totalCr===0)?'Add debit and credit lines':balanced?'Balanced — ready to post':'Difference: ₹'+Math.abs(totalDr-totalCr).toLocaleString('en-IN',{minimumFractionDigits:2})}}</span>
+            </div>
+            <div style="font-family:monospace;font-weight:700">
+              <span v-if="totalDr>0||totalCr>0">Dr: ₹{{totalDr.toLocaleString('en-IN',{minimumFractionDigits:2})}} / Cr: ₹{{totalCr.toLocaleString('en-IN',{minimumFractionDigits:2})}}</span>
+            </div>
+          </div>
+
+          <!-- Lines table -->
+          <div style="border:1px solid #e8ecf0;border-radius:8px;overflow:hidden;margin-bottom:16px;overflow-x:auto">
+            <table class="jen-lines-tbl" style="min-width:680px">
+              <thead>
+                <tr>
+                  <th style="width:28%">Account <span style="color:#c92a2a">*</span></th>
+                  <th style="width:20%">Party (Customer/Vendor)</th>
+                  <th style="width:15%">Cost Center</th>
+                  <th style="width:13%;text-align:right">Debit (Dr)</th>
+                  <th style="width:13%;text-align:right">Credit (Cr)</th>
+                  <th style="width:7%">Type</th>
+                  <th style="width:4%"></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="line in lines" :key="line.id">
+                  <td>
+                    <searchable-select v-model="line.account" :options="accounts" placeholder="— Select Account —" :compact="true" class="ss-cell-wrap"/>
+                  </td>
+                  <td><input v-model="line.party" class="jen-ci" placeholder="Optional"/></td>
+                  <td>
+                    <select v-model="line.cost_center" class="jen-ci">
+                      <option value="">—</option>
+                      <option v-for="cc in costCenters" :key="cc" :value="cc">{{cc}}</option>
+                    </select>
+                  </td>
+                  <td><input v-model="line.dr" type="number" min="0" step="0.01" class="jen-ci" style="text-align:right" placeholder="0.00" @input="line.cr=''"/></td>
+                  <td><input v-model="line.cr" type="number" min="0" step="0.01" class="jen-ci" style="text-align:right" placeholder="0.00" @input="line.dr=''"/></td>
+                  <td style="font-size:11px;color:#868e96;padding:0 6px">{{flt(line.dr)>0?'Dr':flt(line.cr)>0?'Cr':'—'}}</td>
+                  <td style="padding:4px 6px">
+                    <button @click="removeLine(line.id)" class="b-icon-btn danger" style="padding:3px 5px"><span v-html="icon('x',12)"></span></button>
+                  </td>
+                </tr>
+                <tr v-if="!lines.length">
+                  <td colspan="7" style="text-align:center;padding:20px;color:#868e96;font-size:13px">No lines — click Debit Row or Credit Row to add</td>
+                </tr>
+                <tr class="jen-total-row">
+                  <td colspan="3" style="padding:8px 10px;font-size:12px;font-weight:700;color:#868e96;text-transform:uppercase;letter-spacing:.04em">Totals</td>
+                  <td style="text-align:right;padding:8px 10px;font-family:monospace;font-weight:700;color:#c92a2a">₹{{totalDr.toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                  <td style="text-align:right;padding:8px 10px;font-family:monospace;font-weight:700;color:#2f9e44">₹{{totalCr.toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                  <td colspan="2"></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="coa-fg coa-fg2">
+            <div>
+              <label class="coa-lbl">Cost Center (global)</label>
+              <select v-model="form.cost_center" class="coa-fi">
+                <option value="">— All Centers —</option>
+                <option v-for="cc in costCenters" :key="cc" :value="cc">{{cc}}</option>
+              </select>
+            </div>
+            <div>
+              <label class="coa-lbl">Status</label>
+              <select v-model="form.status" class="coa-fi">
+                <option value="Draft">Draft</option>
+                <option value="Submitted">Submit (Post to Ledger)</option>
+              </select>
+            </div>
+          </div>
+
+        </div>
+        <div class="coa-dfooter" style="justify-content:space-between">
+          <div style="font-size:12px;color:#868e96">{{editingName?'Editing: '+editingName:'New entry'}}</div>
+          <div style="display:flex;gap:10px">
+            <button class="b-btn b-btn-ghost" @click="drawerOpen=false">Cancel</button>
+            <button class="b-btn b-btn-ghost" @click="saveEntry('Draft')" :disabled="drawerSaving" style="border-color:#3b5bdb;color:#3b5bdb">Save Draft</button>
+            <button class="b-btn b-btn-primary" @click="saveEntry('Submitted')" :disabled="drawerSaving||!balanced" style="min-width:140px">
+              <span v-html="icon('check',13)"></span> Post to Ledger
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- View Drawer -->
+  <transition name="nim-overlay">
+    <div v-if="viewOpen && viewEntry" class="coa-drawer-bg" @click.self="viewOpen=false">
+      <div class="jen-drawer-panel">
+        <div class="coa-dh" :style="'background:'+(viewEntry.status==='Submitted'?'linear-gradient(135deg,#1a4731,#2f9e44)':viewEntry.status==='Cancelled'?'linear-gradient(135deg,#6b1212,#c92a2a)':'linear-gradient(135deg,#1e3a5f,#2563eb)')">
+          <div>
+            <div class="coa-dh-title">{{viewEntry.name}}</div>
+            <div class="coa-dh-sub">{{viewEntry.type}} · {{fmtDate(viewEntry.date)}}</div>
+          </div>
+          <button class="coa-dclose" @click="viewOpen=false"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div class="coa-dbody">
+          <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
+            <div><div style="font-size:11px;color:#868e96;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Status</div>
+              <span class="b-badge" :class="JE_STATUS_COLOR[viewEntry.status]||'je-s-draft'">{{viewEntry.status}}</span>
+            </div>
+            <div><div style="font-size:11px;color:#868e96;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px">Narration</div>
+              <div style="font-size:13px;max-width:500px">{{viewEntry.narration||'—'}}</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:24px;margin-bottom:20px;font-size:13px">
+            <div><span style="color:#868e96">Total Debit:</span> <strong style="color:#c92a2a;font-family:monospace">{{fmtINR(viewEntry.total_debit)}}</strong></div>
+            <div><span style="color:#868e96">Total Credit:</span> <strong style="color:#2f9e44;font-family:monospace">{{fmtINR(viewEntry.total_credit)}}</strong></div>
+          </div>
+          <div v-if="(viewEntry.lines||[]).length" style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:1fr 120px 120px;gap:8px;padding:8px 14px;background:#f8f9fc;border-bottom:1px solid #e2e8f0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#868e96">
+              <div>Account</div><div style="text-align:right">Debit (Dr)</div><div style="text-align:right">Credit (Cr)</div>
+            </div>
+            <div v-for="(l,i) in viewEntry.lines" :key="i"
+              style="display:grid;grid-template-columns:1fr 120px 120px;gap:8px;padding:9px 14px;border-bottom:1px solid #f1f3f5;font-size:13px">
+              <div>{{l.account}}<span v-if="l.party" style="color:#868e96;font-size:11px;margin-left:6px">{{l.party}}</span></div>
+              <div style="text-align:right;font-family:monospace;color:#c92a2a">{{flt(l.dr)>0?fmtINR(l.dr):'—'}}</div>
+              <div style="text-align:right;font-family:monospace;color:#2f9e44">{{flt(l.cr)>0?fmtINR(l.cr):'—'}}</div>
+            </div>
+          </div>
+          <div v-else style="color:#868e96;font-size:13px;margin-top:16px">No line detail available for this entry.</div>
+        </div>
+        <div class="coa-dfooter" style="justify-content:space-between">
+          <div style="font-size:12px;color:#868e96">{{viewEntry.source==='frappe'?'From Frappe':'Local record'}}</div>
+          <div style="display:flex;gap:10px">
+            <button v-if="viewEntry.status==='Draft'" class="b-btn b-btn-ghost" @click="viewOpen=false;openEdit(viewEntry.name)"><span v-html="icon('edit',13)"></span> Edit</button>
+            <button v-if="viewEntry.status==='Submitted'" class="b-btn b-btn-ghost" style="border-color:rgba(201,42,42,.4);color:#c92a2a" @click="viewOpen=false;confirmAction(viewEntry.name,'cancel')"><span v-html="icon('cancel',13)"></span> Cancel</button>
+            <button class="b-btn b-btn-ghost" @click="viewOpen=false">Close</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </transition>
+
+  <!-- Confirm modal -->
+  <transition name="nim-overlay">
+    <div v-if="showConf" class="coa-drawer-bg" @click.self="showConf=false" style="justify-content:center;align-items:center">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:440px;width:100%;border:1px solid #e2e8f0">
+        <div style="font-size:17px;font-weight:700;margin-bottom:8px">{{confType==='delete'?'Delete Entry?':'Cancel Entry?'}}</div>
+        <div style="font-size:14px;color:#868e96;margin-bottom:24px;line-height:1.5">
+          {{confType==='delete'?'This journal entry will be permanently removed.':'This will mark the entry as Cancelled. It cannot be edited after cancellation.'}}
+          <br><strong>{{confTarget}}</strong>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button @click="showConf=false" class="b-btn b-btn-ghost">Keep It</button>
+          <button @click="doAction" class="b-btn" style="background:#c92a2a;color:#fff;border-color:#c92a2a">{{confType==='delete'?'Yes, Delete':'Yes, Cancel'}}</button>
+        </div>
+      </div>
+    </div>
+  </transition>
+</div>`
+  });
+
+  /* ══════════════════════════════════════════════════
+     OPENING BALANCES
+  ══════════════════════════════════════════════════ */
+  const OpeningBalances = defineComponent({
+    name: "OpeningBalances",
+    setup() {
+      const OB_TYPE_META = {
+        Asset:     {color:"#0C8599", bg:"#E0F7FA", label:"Assets",      balType:"Debit"},
+        Liability: {color:"#C92A2A", bg:"#FFE3E3", label:"Liabilities", balType:"Credit"},
+        Equity:    {color:"#7048E8", bg:"#F3F0FF", label:"Equity",      balType:"Credit"},
+        Income:    {color:"#2F9E44", bg:"#EBFBEE", label:"Income",      balType:"Credit"},
+        Expense:   {color:"#E67700", bg:"#FFF3BF", label:"Expenses",    balType:"Debit"},
+      };
+      const OB_TYPES = ["Asset","Liability","Equity","Income","Expense"];
+      const loading = ref(true);
+      const accounts = ref([]);
+      const balances = reactive({});
+      const drCrMap = reactive({});
+      const goLiveDate = ref(new Date().toISOString().slice(0,10));
+      const submitted = ref(false);
+      const openSecs = ref(["Asset","Liability","Equity","Income","Expense"]);
+      const showSubmitModal = ref(false);
+      const showResetModal = ref(false);
+
+      function r2(v){return Math.round(Number(v||0)*100)/100;}
+      function fmtINR(v){const n=Number(v||0);if(n===0)return"₹0";return"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:2});}
+      function guessRT(t){t=(t||"").toLowerCase();if(t==="income"||t.includes("income"))return"Income";if(t==="expense"||t.includes("expense")||t==="depreciation")return"Expense";if(t==="payable"||t==="liability"||t==="credit card")return"Liability";if(t==="equity"||t.includes("retained"))return"Equity";return"Asset";}
+
+      async function load(){
+        loading.value=true;
+        try{
+          const res=await apiGET("zoho_books_clone.api.books_data.get_chart_of_accounts",{});
+          const raw=Array.isArray(res)?res:[];
+          accounts.value=raw.filter(a=>!a.is_group).map(a=>({
+            name:a.name,account_name:a.account_name||a.name,
+            root_type:a.root_type||guessRT(a.account_type),
+            account_type:a.account_type||""
+          }));
+          try{
+            const s=JSON.parse(localStorage.getItem("books_ob")||"{}");
+            if(s.b)Object.assign(balances,s.b);
+            if(s.d)Object.assign(drCrMap,s.d);
+            if(s.date)goLiveDate.value=s.date;
+            submitted.value=localStorage.getItem("books_ob_status")==="submitted";
+          }catch{}
+          accounts.value.forEach(a=>{if(!drCrMap[a.name])drCrMap[a.name]=OB_TYPE_META[a.root_type]?.balType||"Debit";});
+          if(accounts.value.length) toast("Loaded "+accounts.value.length+" accounts","info");
+          else toast("No accounts found — set up Chart of Accounts first","info");
+        }catch(e){toast("Could not load accounts: "+e.message,"error");}
+        finally{loading.value=false;}
+      }
+
+      function saveDraft(){try{localStorage.setItem("books_ob",JSON.stringify({b:{...balances},d:{...drCrMap},date:goLiveDate.value}));}catch{}}
+
+      const eq=computed(()=>{
+        let a=0,l=0,e=0;
+        accounts.value.forEach(ac=>{
+          const v=r2(Number(balances[ac.name]||0));if(!v)return;
+          const dc=drCrMap[ac.name]||OB_TYPE_META[ac.root_type]?.balType||"Debit";
+          const s=(dc==="Debit"?1:-1)*v;
+          if(ac.root_type==="Asset")a+=s;
+          else if(ac.root_type==="Liability")l-=s;
+          else if(ac.root_type==="Equity")e-=s;
+        });
+        return{assets:r2(a),liabilities:r2(l),equity:r2(e),diff:r2(a-(l+e))};
+      });
+
+      const curStep=computed(()=>{
+        if(submitted.value)return 4;
+        const {diff}=eq.value;
+        const hasB=Object.keys(balances).some(k=>Number(balances[k])>0);
+        const bal=hasB&&Math.abs(diff)<0.01;
+        return bal?3:hasB?2:goLiveDate.value?1:0;
+      });
+
+      const hasBalances=computed(()=>Object.keys(balances).some(k=>Number(balances[k])>0));
+
+      function setB(name,val){const n=parseFloat(val)||0;if(n>0)balances[name]=n;else delete balances[name];saveDraft();}
+      function setDC(name,val){drCrMap[name]=val;saveDraft();}
+      function toggleSec(t){const i=openSecs.value.indexOf(t);if(i>=0)openSecs.value.splice(i,1);else openSecs.value.push(t);}
+      function isSec(t){return openSecs.value.includes(t);}
+      function secAccts(t){return accounts.value.filter(a=>a.root_type===t);}
+      function secTotal(t){return r2(secAccts(t).reduce((s,a)=>s+r2(Number(balances[a.name]||0)),0));}
+
+      async function doSubmit(){
+        showSubmitModal.value=false;
+        const date=goLiveDate.value||new Date().toISOString().slice(0,10);
+        const lines=[];
+        accounts.value.forEach(a=>{const v=r2(Number(balances[a.name]||0));if(!v)return;const dc=drCrMap[a.name]||"Debit";lines.push({account:a.name,debit_in_account_currency:dc==="Debit"?v:0,credit_in_account_currency:dc==="Credit"?v:0});});
+        try{
+          const doc={doctype:"Journal Entry",voucher_type:"Opening Entry",posting_date:date,user_remark:"Opening Balances as at "+date,is_opening:"Yes",accounts:lines};
+          const saved=await apiPOST("frappe.client.save",{doc:JSON.stringify(doc)});
+          const fresh=await apiGET("frappe.client.get",{doctype:"Journal Entry",name:saved.name});
+          await apiPOST("frappe.client.submit",{doc:JSON.stringify({doctype:"Journal Entry",name:saved.name,modified:fresh.modified})});
+          toast("Opening entry posted: "+saved.name);
+        }catch(e){toast("Submitted locally — "+e.message,"info");}
+        submitted.value=true;localStorage.setItem("books_ob_status","submitted");saveDraft();
+      }
+
+      function doReset(){
+        Object.keys(balances).forEach(k=>delete balances[k]);
+        submitted.value=false;localStorage.removeItem("books_ob_status");
+        accounts.value.forEach(a=>{drCrMap[a.name]=OB_TYPE_META[a.root_type]?.balType||"Debit";});
+        showResetModal.value=false;saveDraft();toast("Opening balances reset");
+      }
+
+      onMounted(load);
+      return{loading,accounts,balances,drCrMap,goLiveDate,submitted,openSecs,showSubmitModal,showResetModal,OB_TYPE_META,OB_TYPES,eq,curStep,hasBalances,secAccts,secTotal,setB,setDC,toggleSec,isSec,doSubmit,doReset,saveDraft,fmtINR,r2,icon};
+    },
+    template: `
+<div class="b-page">
+  <!-- Info banner -->
+  <div style="background:#EEF2FF;border:1px solid rgba(59,91,219,.15);border-radius:8px;padding:12px 16px;font-size:13px;color:#2f4ec4;line-height:1.6">
+    <strong>What is this?</strong> Enter account balances from your previous accounting system as of the date you start using Books. This is done <strong>once</strong>. After submission, balances are locked and posted as an Opening Journal Entry.
+  </div>
+
+  <!-- Steps -->
+  <div class="b-card" style="padding:14px 18px;display:flex;align-items:center">
+    <template v-for="(s,i) in ['Set go-live date','Enter balances','Verify equation','Submit']" :key="i">
+      <div style="display:flex;align-items:center">
+        <div class="ob-step-dot" :class="i<curStep||submitted?'ob-dot-done':i===curStep&&!submitted?'ob-dot-active':'ob-dot-pending'">
+          <span v-if="i<curStep||submitted" v-html="icon('check',12)"></span>
+          <span v-else>{{i+1}}</span>
+        </div>
+        <span class="ob-step-lbl" :class="i<curStep||submitted?'ob-lbl-done':i===curStep&&!submitted?'ob-lbl-active':'ob-lbl-muted'">{{s}}</span>
+      </div>
+      <div v-if="i<3" class="ob-step-line" :class="i<curStep||submitted?'ob-line-done':''"></div>
+    </template>
+  </div>
+
+  <!-- Action bar -->
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <label style="font-size:13px;font-weight:600;color:#868E96;white-space:nowrap">Go-live Date</label>
+      <input type="date" v-model="goLiveDate" @change="saveDraft" :disabled="submitted" class="b-input"/>
+      <span style="font-size:12px;color:#868E96">Balances as at the closing of this date from your previous system.</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span v-if="submitted" style="display:inline-flex;align-items:center;gap:6px;background:#EBFBEE;color:#2F9E44;border:1px solid rgba(47,158,68,.2);border-radius:8px;padding:6px 14px;font-size:13px;font-weight:600"><span v-html="icon('check',13)"></span>Submitted</span>
+      <button v-if="hasBalances||submitted" class="b-btn b-btn-ghost" @click="showResetModal=true">Reset</button>
+      <button v-if="!submitted" class="b-btn" :class="Math.abs(eq.diff)<0.01&&hasBalances?'b-btn-primary':'b-btn-ghost'" :disabled="!hasBalances" @click="Math.abs(eq.diff)<0.01&&hasBalances?showSubmitModal=true:null">
+        <span v-html="icon('check',13)"></span>
+        {{Math.abs(eq.diff)<0.01&&hasBalances?'Submit Opening Balances':'Needs Balancing'}}
+      </button>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div v-if="loading" class="b-card" style="padding:40px;text-align:center;color:#868E96">
+    <div class="b-shimmer" style="max-width:300px;margin:0 auto;height:14px"></div>
+  </div>
+
+  <!-- Equation bar -->
+  <div v-else class="b-card" style="padding:16px 20px">
+    <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;margin-bottom:12px">Accounting Equation Check — Assets = Liabilities + Equity</div>
+    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:0">
+      <div style="flex:1;min-width:140px;padding:12px 16px;border-radius:8px;text-align:center;background:#E0F7FA">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#0C8599;margin-bottom:4px">Assets</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:#0C8599">{{fmtINR(eq.assets)}}</div>
+      </div>
+      <div style="font-size:20px;font-weight:700;color:#868E96;padding:0 12px;align-self:center">=</div>
+      <div style="flex:1;min-width:140px;padding:12px 16px;border-radius:8px;text-align:center;background:#FFE3E3">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#C92A2A;margin-bottom:4px">Liabilities</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:#C92A2A">{{fmtINR(eq.liabilities)}}</div>
+      </div>
+      <div style="font-size:20px;font-weight:700;color:#868E96;padding:0 12px;align-self:center">+</div>
+      <div style="flex:1;min-width:140px;padding:12px 16px;border-radius:8px;text-align:center;background:#F3F0FF">
+        <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#7048E8;margin-bottom:4px">Equity</div>
+        <div style="font-size:18px;font-weight:700;font-family:var(--mono);color:#7048E8">{{fmtINR(eq.equity)}}</div>
+      </div>
+    </div>
+    <div class="ob-eq-diff" :class="!eq.assets&&!eq.liabilities&&!eq.equity?'ob-eq-zero':Math.abs(eq.diff)<0.01?'ob-eq-ok':'ob-eq-err'">
+      <span v-if="!eq.assets&&!eq.liabilities&&!eq.equity">Enter balances to check the equation</span>
+      <span v-else-if="Math.abs(eq.diff)<0.01">✓ Balanced — Assets = Liabilities + Equity = {{fmtINR(eq.assets)}}</span>
+      <span v-else>✗ Out of balance by {{fmtINR(Math.abs(eq.diff))}} — {{eq.diff>0?"Assets exceed Liabilities+Equity":"Liabilities+Equity exceed Assets"}}</span>
+    </div>
+  </div>
+
+  <!-- Account sections -->
+  <template v-if="!loading">
+    <template v-for="type in OB_TYPES" :key="type">
+      <div v-if="secAccts(type).length" class="b-card" style="padding:0;overflow:hidden">
+        <!-- Section header -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;cursor:pointer;user-select:none" @click="toggleSec(type)">
+          <div style="display:flex;align-items:center;gap:10px">
+            <span style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px" :style="{background:OB_TYPE_META[type].bg,color:OB_TYPE_META[type].color}">{{OB_TYPE_META[type].label}}</span>
+            <span style="font-size:13px;color:#868E96">{{secAccts(type).length}} accounts &nbsp;·&nbsp; {{secAccts(type).filter(a=>balances[a.name]>0).length}} filled</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span style="font-family:var(--mono);font-size:14px;font-weight:700" :style="{color:OB_TYPE_META[type].color}">{{fmtINR(secTotal(type))}}</span>
+            <span style="font-size:11px;color:#868E96;transition:transform .2s;display:inline-block" :style="{transform:isSec(type)?'rotate(90deg)':'rotate(0deg)'}">&#9654;</span>
+          </div>
+        </div>
+        <!-- Account rows (when open) -->
+        <template v-if="isSec(type)">
+          <div style="display:grid;grid-template-columns:1fr 130px 130px;align-items:center;gap:10px;padding:8px 16px;background:#F8F9FC;border-top:1px solid #F1F3F5">
+            <div style="font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96">Account</div>
+            <div style="font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;text-align:right">Balance (₹)</div>
+            <div style="font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96">Dr / Cr</div>
+          </div>
+          <div v-for="a in secAccts(type)" :key="a.name" class="ob-acct-row">
+            <div>
+              <div style="font-size:13px;color:#1A1D23">{{a.account_name}}</div>
+              <div v-if="a.account_type" style="font-size:11px;color:#868E96">{{a.account_type}}</div>
+            </div>
+            <input type="number" min="0" step="0.01" class="ob-bal-input" :class="balances[a.name]>0?'ob-has-val':''"
+              :value="balances[a.name]||''" placeholder="0.00" :disabled="submitted"
+              @input="setB(a.name,$event.target.value)" @focus="$event.target.select()"/>
+            <select class="ob-dr-cr-sel" :class="(drCrMap[a.name]||'Debit')==='Debit'?'ob-dr':'ob-cr'"
+              :disabled="submitted" @change="setDC(a.name,$event.target.value)">
+              <option value="Debit" :selected="(drCrMap[a.name]||'Debit')==='Debit'">Dr (Debit)</option>
+              <option value="Credit" :selected="(drCrMap[a.name]||'Debit')==='Credit'">Cr (Credit)</option>
+            </select>
+          </div>
+          <!-- Section footer -->
+          <div style="display:grid;grid-template-columns:1fr 130px 130px;gap:10px;padding:10px 16px;background:#F8F9FC;border-top:1px solid #E2E8F0">
+            <div style="font-size:12px;font-weight:600;color:#868E96">Total {{OB_TYPE_META[type].label}}</div>
+            <div style="font-family:var(--mono);font-size:13px;font-weight:700;text-align:right" :style="{color:OB_TYPE_META[type].color}">{{fmtINR(secTotal(type))}}</div>
+            <div></div>
+          </div>
+        </template>
+      </div>
+    </template>
+    <div v-if="!accounts.length" class="b-card" style="padding:40px;text-align:center;color:#868E96">
+      <div style="font-size:36px;margin-bottom:12px">📄</div>
+      <div style="font-weight:600;margin-bottom:8px;color:#1A1D23">No accounts found</div>
+      <div style="font-size:13px;margin-bottom:16px">Set up your Chart of Accounts first, then come back to enter opening balances.</div>
+      <router-link to="/accounting/chart-of-accounts" class="b-btn b-btn-primary">Go to Chart of Accounts</router-link>
+    </div>
+  </template>
+
+  <!-- Submit modal -->
+  <teleport to="body">
+    <div v-if="showSubmitModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px" @click.self="showSubmitModal=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:500px;width:100%">
+        <div style="font-size:18px;font-weight:700;margin-bottom:8px">Submit Opening Balances?</div>
+        <div style="font-size:13px;color:#868E96;margin-bottom:14px;line-height:1.6">This will create an <strong>Opening Entry</strong> journal in Frappe and lock all balances. You <strong>cannot edit</strong> opening balances after submission without cancelling the journal entry.</div>
+        <div class="ob-eq-diff" :class="Math.abs(eq.diff)<0.01?'ob-eq-ok':'ob-eq-err'" style="margin-bottom:20px">
+          <span v-if="Math.abs(eq.diff)<0.01">✓ Assets ({{fmtINR(eq.assets)}}) = Liabilities ({{fmtINR(eq.liabilities)}}) + Equity ({{fmtINR(eq.equity)}})</span>
+          <span v-else>✗ Out of balance by {{fmtINR(Math.abs(eq.diff))}}. Please fix before submitting.</span>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showSubmitModal=false">Go Back</button>
+          <button class="b-btn" style="background:#2F9E44;color:#fff;border-color:#2F9E44" :disabled="Math.abs(eq.diff)>=0.01" @click="doSubmit">Yes, Submit</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Reset modal -->
+  <teleport to="body">
+    <div v-if="showResetModal" style="position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px" @click.self="showResetModal=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:420px;width:100%">
+        <div style="font-size:18px;font-weight:700;margin-bottom:8px">Reset All Balances?</div>
+        <div style="font-size:13px;color:#868E96;margin-bottom:24px;line-height:1.6">This will clear all entered balances. You will need to re-enter them.</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showResetModal=false">Cancel</button>
+          <button class="b-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" @click="doReset">Yes, Reset</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+  /* ══════════════════════════════════════════════════
+     COST CENTERS
+  ══════════════════════════════════════════════════ */
+  const CostCenters = defineComponent({
+    name: "CostCenters",
+    setup() {
+      const CC_COLORS = ["#3B5BDB","#0C8599","#2F9E44","#E67700","#C92A2A","#7048E8","#D4537E","#1098AD","#495057"];
+      const CC_TYPE_ICONS = {Department:"🏢",Project:"📄",Product:"📦",Region:"🌍",Group:"📁"};
+      const CC_DEFAULTS = [
+        {name:"Main",code:"MAIN",parent:"",type:"Group",color:"#495057",budget:0,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:1,status:"Active",desc:"Root cost center"},
+        {name:"Engineering",code:"ENG",parent:"Main",type:"Department",color:"#3B5BDB",budget:5000000,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:0,status:"Active",desc:"Product engineering team"},
+        {name:"Sales",code:"SLS",parent:"Main",type:"Department",color:"#2F9E44",budget:3000000,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:0,status:"Active",desc:"Sales and business development"},
+        {name:"Marketing",code:"MKT",parent:"Main",type:"Department",color:"#E67700",budget:2000000,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:0,status:"Active",desc:"Brand and demand generation"},
+        {name:"Operations",code:"OPS",parent:"Main",type:"Department",color:"#0C8599",budget:1500000,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:0,status:"Active",desc:"Infrastructure and ops"},
+      ];
+      const MOCK_EXP = {Engineering:2800000,Sales:1200000,Marketing:1650000,Operations:900000,Main:0};
+
+      const loading = ref(true);
+      const allCC = ref([]);
+      const selected = ref(null);
+      const editing = ref(null);
+      const deleteTarget = ref(null);
+      const expandedCC = ref([]);
+      const ccSearch = ref("");
+      const showDrawer = ref(false);
+      const showDelModal = ref(false);
+      const saving = ref(false);
+      const fromFrappe = ref(false);
+
+      const fForm = reactive({name:"",code:"",parent:"",type:"Department",color:CC_COLORS[0],budget:"",budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:0,status:"Active",desc:""});
+
+      function r2(v){return Math.round(Number(v||0)*100)/100;}
+      function fmtINR(v){const n=Number(v||0);if(n===0)return"₹0";return"₹"+Math.abs(n).toLocaleString("en-IN",{minimumFractionDigits:0});}
+      function pct(spent,budget){if(!budget)return 0;return Math.min(100,Math.round(spent/budget*100));}
+      function saveLocal(){try{localStorage.setItem("books_cost_centers",JSON.stringify(allCC.value));}catch{}}
+      function loadLocal(){try{return JSON.parse(localStorage.getItem("books_cost_centers")||"null");}catch{return null;}}
+
+      async function load(){
+        loading.value=true;
+        try{
+          const ccs=await apiGET("frappe.client.get_list",{doctype:"Cost Center",fields:JSON.stringify(["name","cost_center_name","cost_center_number","parent_cost_center","is_group","disabled"]),order_by:"lft asc",limit_page_length:200})||[];
+          if(ccs.length){
+            allCC.value=ccs.map(c=>({name:c.name,code:c.cost_center_number||"",parent:c.parent_cost_center||"",type:"Department",color:"#3B5BDB",budget:0,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:c.is_group?1:0,status:c.disabled?"Inactive":"Active",desc:"",source:"frappe"}));
+            fromFrappe.value=true;toast("Loaded "+allCC.value.length+" cost centers","info");
+          } else throw new Error("none");
+        }catch{
+          const saved=loadLocal();
+          allCC.value=saved||CC_DEFAULTS.map(c=>({...c,source:"local"}));
+          if(!saved)saveLocal();
+        }
+        allCC.value.filter(c=>c.is_group).forEach(c=>{ if(!expandedCC.value.includes(c.name)) expandedCC.value.push(c.name); });
+        loading.value=false;
+      }
+
+      const visibleNodes=computed(()=>{
+        const q=ccSearch.value.toLowerCase();
+        const result=[];
+        if(q){
+          allCC.value.filter(c=>(c.name||"").toLowerCase().includes(q)||(c.code||"").toLowerCase().includes(q)).forEach(c=>{
+            result.push({...c,depth:0,hasChildren:allCC.value.some(x=>x.parent===c.name),isOpen:false});
+          });
+        } else {
+          function walk(parent,depth){
+            allCC.value.filter(c=>(c.parent||"")===(parent||"")).forEach(c=>{
+              const hasChildren=allCC.value.some(x=>x.parent===c.name);
+              const isOpen=expandedCC.value.includes(c.name);
+              result.push({...c,depth,hasChildren,isOpen});
+              if(isOpen&&hasChildren)walk(c.name,depth+1);
+            });
+          }
+          walk("",0);
+        }
+        return result;
+      });
+
+      function toggleCC(name){const i=expandedCC.value.indexOf(name);if(i>=0)expandedCC.value.splice(i,1);else expandedCC.value.push(name);}
+      function expandAll(open){if(open)allCC.value.forEach(c=>{if(!expandedCC.value.includes(c.name))expandedCC.value.push(c.name);});else expandedCC.value=[];}
+
+      function selectCC(name){selected.value=name;}
+
+      const selectedCC=computed(()=>allCC.value.find(c=>c.name===selected.value)||null);
+      const ccChildren=computed(()=>selectedCC.value?allCC.value.filter(c=>c.parent===selectedCC.value.name):[]);
+
+      function openAdd(parentName){
+        editing.value=null;
+        Object.assign(fForm,{name:"",code:"",parent:parentName||"",type:"Department",color:CC_COLORS[0],budget:"",budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:0,status:"Active",desc:""});
+        showDrawer.value=true;
+      }
+      function openEdit(name){
+        const cc=allCC.value.find(c=>c.name===name);if(!cc)return;
+        editing.value=name;
+        Object.assign(fForm,{...cc,budget:cc.budget||""});
+        showDrawer.value=true;
+      }
+      function closeDrawer(){showDrawer.value=false;editing.value=null;}
+
+      async function saveCC(){
+        if(!fForm.name.trim()){toast("Cost Center Name is required","error");return;}
+        saving.value=true;
+        const data={...fForm,budget:Number(fForm.budget)||0};
+        if(fromFrappe.value){
+          try{
+            const doc={doctype:"Cost Center",cost_center_name:data.name,cost_center_number:data.code,parent_cost_center:data.parent||"",is_group:data.is_group,company:window.frappe?.boot?.sysdefaults?.company||""};
+            if(editing.value)doc.name=editing.value;
+            await apiPOST("frappe.client.save",{doc:JSON.stringify(doc)});
+            await load();toast(editing.value?"Cost center updated":"Cost center created");
+          }catch(e){toast("Frappe error: "+e.message,"error");}
+        } else {
+          if(editing.value){const i=allCC.value.findIndex(c=>c.name===editing.value);if(i>=0)allCC.value[i]={...allCC.value[i],...data};}
+          else allCC.value.push({...data,source:"local"});
+          saveLocal();toast(editing.value?"Cost center updated":"Cost center created");
+        }
+        saving.value=false;closeDrawer();
+      }
+
+      function confirmDel(name){deleteTarget.value=name;showDelModal.value=true;}
+      function closeDelModal(){showDelModal.value=false;deleteTarget.value=null;}
+      async function doDelete(){
+        const name=deleteTarget.value;if(!name)return;
+        if(fromFrappe.value){
+          try{await apiPOST("frappe.client.delete",{doctype:"Cost Center",name});await load();toast("Deleted");}
+          catch(e){toast("Frappe error: "+e.message,"error");}
+        } else {
+          allCC.value=allCC.value.filter(c=>c.name!==name);saveLocal();
+          if(selected.value===name)selected.value=null;
+          toast("Deleted");
+        }
+        closeDelModal();
+      }
+
+      onMounted(load);
+      return{loading,allCC,selected,selectedCC,ccChildren,editing,deleteTarget,expandedCC,ccSearch,showDrawer,showDelModal,saving,fromFrappe,fForm,CC_COLORS,CC_TYPE_ICONS,visibleNodes,r2,fmtINR,pct,load,toggleCC,expandAll,selectCC,openAdd,openEdit,closeDrawer,saveCC,confirmDel,closeDelModal,doDelete,MOCK_EXP,icon};
+    },
+    template: `
+<div style="display:flex;flex-direction:column;height:calc(100vh - 56px);overflow:hidden">
+  <div style="display:flex;flex:1;gap:0;overflow:hidden">
+
+    <!-- Left: Tree panel -->
+    <div style="width:340px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid #E2E8F0;background:#fff">
+      <!-- Tree header -->
+      <div style="padding:12px 16px;border-bottom:1px solid #E2E8F0;background:#F8F9FC;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <span style="font-size:12px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:#868E96">{{loading?"Loading...":allCC.length+" cost centers"}}</span>
+        <div style="display:flex;gap:6px">
+          <button style="border:1px solid #E2E8F0;border-radius:5px;padding:4px 7px;background:#fff;cursor:pointer;color:#868E96;font-size:12px;display:inline-flex;align-items:center" @click="expandAll(true)" title="Expand all"><span v-html="icon('chevD',13)"></span></button>
+          <button style="border:1px solid #E2E8F0;border-radius:5px;padding:4px 7px;background:#fff;cursor:pointer;color:#868E96;font-size:12px;display:inline-flex;align-items:center" @click="expandAll(false)" title="Collapse all"><span v-html="icon('chevU',13)"></span></button>
+          <button class="b-btn b-btn-primary" style="font-size:12px;padding:5px 10px" @click="openAdd()"><span v-html="icon('plus',12)"></span> New</button>
+        </div>
+      </div>
+      <!-- Search -->
+      <div style="padding:8px 12px;border-bottom:1px solid #F1F3F5;flex-shrink:0">
+        <input v-model="ccSearch" type="text" placeholder="Search cost centers..." style="width:100%;border:1px solid #E2E8F0;border-radius:6px;padding:6px 10px;font-size:13px;outline:none;font-family:inherit"/>
+      </div>
+      <!-- Tree -->
+      <div style="overflow-y:auto;flex:1">
+        <div v-if="loading" style="padding:20px;text-align:center;color:#868E96">Loading...</div>
+        <template v-else>
+          <div v-for="node in visibleNodes" :key="node.name"
+            style="display:flex;align-items:center;border-bottom:1px solid #F8F9FC;cursor:pointer;transition:background .12s;user-select:none"
+            :style="{background:selected===node.name?'rgba(59,91,219,.07)':'',borderLeft:selected===node.name?'3px solid #3B5BDB':'3px solid transparent'}"
+            @click="selectCC(node.name)">
+            <div style="width:20px;height:36px;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#868E96;cursor:pointer;margin-left:4px"
+              v-if="node.hasChildren" @click.stop="toggleCC(node.name)">
+              <span style="display:inline-block;transition:transform .15s;font-size:10px" :style="{transform:node.isOpen?'rotate(90deg)':'rotate(0deg)'}">&#9654;</span>
+            </div>
+            <div v-else style="width:24px;flex-shrink:0"></div>
+            <div style="width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0;margin-right:8px;margin-left:4px" :style="{background:node.color+'22',color:node.color,marginLeft:(node.depth*18+4)+'px'}">
+              {{CC_TYPE_ICONS[node.type]||"🏢"}}
+            </div>
+            <div style="flex:1;padding:8px 4px 8px 0;min-width:0">
+              <div style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" :style="{fontWeight:node.is_group?600:400,color:selected===node.name?'#3B5BDB':'#1A1D23'}">{{node.name}}</div>
+              <div v-if="node.code" style="font-size:10.5px;color:#868E96;padding-left:0">{{node.code}}</div>
+            </div>
+            <span v-if="node.status==='Inactive'" style="font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:10px;background:#F1F3F5;color:#868E96;margin-right:8px;flex-shrink:0">Off</span>
+          </div>
+          <div v-if="!visibleNodes.length" style="padding:20px;text-align:center;color:#868E96;font-size:13px">No cost centers found</div>
+        </template>
+      </div>
+    </div>
+
+    <!-- Right: Detail panel -->
+    <div style="flex:1;overflow-y:auto;padding:20px;background:#F3F4F6">
+      <!-- Empty state -->
+      <div v-if="!selectedCC" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;color:#868E96;padding:40px">
+        <div style="font-size:40px;margin-bottom:12px">🏢</div>
+        <div style="font-size:15px;font-weight:600;color:#1A1D23;margin-bottom:6px">Select a cost center</div>
+        <div style="font-size:13px;margin-bottom:20px;max-width:280px;line-height:1.5">Click any cost center in the tree to see its budget, expenses, and breakdown</div>
+        <button class="b-btn b-btn-primary" @click="openAdd()"><span v-html="icon('plus',13)"></span>Add First Cost Center</button>
+      </div>
+
+      <!-- Detail card -->
+      <template v-else>
+        <div class="b-card" style="padding:0;overflow:hidden;margin-bottom:16px">
+          <div style="padding:14px 20px;border-bottom:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div style="width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px" :style="{background:selectedCC.color+'22',color:selectedCC.color}">{{CC_TYPE_ICONS[selectedCC.type]||"🏢"}}</div>
+              <div>
+                <div style="font-size:15px;font-weight:700;color:#1A1D23">{{selectedCC.name}}</div>
+                <div style="font-size:12px;color:#868E96">{{selectedCC.type}}{{selectedCC.code?" · "+selectedCC.code:""}}{{selectedCC.parent?" · under "+selectedCC.parent:""}}</div>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px">
+              <button class="b-btn b-btn-ghost" @click="openEdit(selectedCC.name)"><span v-html="icon('edit',13)"></span>Edit</button>
+              <button v-if="selectedCC.source!=='frappe'" style="border:1px solid rgba(201,42,42,.3);border-radius:5px;cursor:pointer;padding:5px 7px;display:inline-flex;color:#C92A2A;background:none" @click="confirmDel(selectedCC.name)"><span v-html="icon('trash',14)"></span></button>
+            </div>
+          </div>
+          <div style="padding:20px">
+            <div v-if="selectedCC.desc" style="font-size:13px;color:#868E96;margin-bottom:16px;line-height:1.5">{{selectedCC.desc}}</div>
+
+            <!-- Stats row (non-group) -->
+            <template v-if="!selectedCC.is_group">
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+                <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px">
+                  <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Annual Budget</div>
+                  <div style="font-size:17px;font-weight:700;font-family:var(--mono);color:#3B5BDB">{{fmtINR(selectedCC.budget)||"—"}}</div>
+                </div>
+                <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px">
+                  <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Spent (YTD)</div>
+                  <div style="font-size:17px;font-weight:700;font-family:var(--mono)" :style="{color:pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)>=100?'#C92A2A':pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)>=80?'#E67700':'#1A1D23'}">{{fmtINR(MOCK_EXP[selectedCC.name]||0)}}</div>
+                </div>
+                <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px">
+                  <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">{{selectedCC.budget-(MOCK_EXP[selectedCC.name]||0)>=0?"Remaining":"Over Budget"}}</div>
+                  <div style="font-size:17px;font-weight:700;font-family:var(--mono)" :style="{color:selectedCC.budget-(MOCK_EXP[selectedCC.name]||0)>=0?'#2F9E44':'#C92A2A'}">{{fmtINR(Math.abs(selectedCC.budget-(MOCK_EXP[selectedCC.name]||0)))}}</div>
+                </div>
+              </div>
+              <!-- Budget bar -->
+              <div v-if="selectedCC.budget" style="margin-bottom:20px">
+                <div style="display:flex;justify-content:space-between;font-size:12px;color:#868E96;margin-bottom:6px">
+                  <span>Budget utilisation</span>
+                  <span style="font-weight:700" :style="{color:pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)>=100?'#C92A2A':pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)>=80?'#E67700':'#1A1D23'}">{{pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)}}%</span>
+                </div>
+                <div style="background:#E8ECF0;border-radius:20px;height:8px;overflow:hidden">
+                  <div style="height:100%;border-radius:20px;transition:width .4s ease" :style="{width:pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)+'%',background:pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)>=100?'#C92A2A':pct(MOCK_EXP[selectedCC.name]||0,selectedCC.budget)>=80?'#E67700':'#2F9E44'}"></div>
+                </div>
+              </div>
+            </template>
+
+            <!-- Group stats -->
+            <template v-if="selectedCC.is_group">
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px">
+                <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Child Centers</div><div style="font-size:17px;font-weight:700;font-family:var(--mono)">{{ccChildren.length}}</div></div>
+                <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Total Budget</div><div style="font-size:17px;font-weight:700;font-family:var(--mono);color:#3B5BDB">{{fmtINR(ccChildren.reduce((s,c)=>s+Number(c.budget||0),0))}}</div></div>
+                <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Total Spent</div><div style="font-size:17px;font-weight:700;font-family:var(--mono)">{{fmtINR(ccChildren.reduce((s,c)=>s+(MOCK_EXP[c.name]||0),0))}}</div></div>
+              </div>
+              <!-- Allocation chart -->
+              <div v-if="ccChildren.length">
+                <div style="font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;margin-bottom:10px">Sub-centers expense allocation</div>
+                <div v-for="c in ccChildren" :key="c.name" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+                  <span style="font-size:12.5px;width:120px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{c.name}}</span>
+                  <div style="flex:1;background:#E8ECF0;border-radius:10px;height:6px;overflow:hidden">
+                    <div style="height:100%;border-radius:10px;transition:width .4s" :style="{width:Math.round((MOCK_EXP[c.name]||0)/Math.max(1,...ccChildren.map(x=>MOCK_EXP[x.name]||0))*100)+'%',background:c.color}"></div>
+                  </div>
+                  <span style="font-size:12px;font-family:var(--mono);color:#868E96;width:70px;text-align:right;flex-shrink:0">{{fmtINR(MOCK_EXP[c.name]||0)}}</span>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- Budget settings card (non-group) -->
+        <div v-if="!selectedCC.is_group" class="b-card" style="padding:0;overflow:hidden">
+          <div style="padding:12px 20px;border-bottom:1px solid #E2E8F0"><span style="font-size:13px;font-weight:600">Budget Settings</span></div>
+          <div style="padding:14px 20px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13px">
+            <div><div style="color:#868E96;font-size:11.5px;margin-bottom:3px">Period</div><div style="font-weight:500">{{selectedCC.budget_period||"Annual"}}</div></div>
+            <div><div style="color:#868E96;font-size:11.5px;margin-bottom:3px">Alert at</div><div style="font-weight:500">{{selectedCC.alert_pct||80}}%</div></div>
+            <div><div style="color:#868E96;font-size:11.5px;margin-bottom:3px">Action</div><div style="font-weight:500">{{selectedCC.budget_action||"Warn"}}</div></div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Add/Edit Drawer -->
+  <teleport to="body">
+    <div v-if="showDrawer" class="cc-drawer-open" style="position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.45);display:flex;justify-content:flex-end;backdrop-filter:blur(2px)" @click.self="closeDrawer">
+      <div style="width:480px;max-width:95vw;height:100%;background:#fff;display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15)">
+        <div style="background:linear-gradient(135deg,#2563eb,#4f46e5);padding:18px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="color:#fff;font-size:16px;font-weight:700">{{editing?"Edit Cost Center":"New Cost Center"}}</div>
+            <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:2px">Track expenses by department or project</div>
+          </div>
+          <button @click="closeDrawer" style="background:rgba(255,255,255,.2);border:none;cursor:pointer;width:30px;height:30px;border-radius:6px;color:#fff;display:flex;align-items:center;justify-content:center"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:24px">
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:10px">Details</div>
+          <div style="display:grid;gap:14px;margin-bottom:14px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Cost Center Name <span style="color:#C92A2A">*</span></label>
+              <input v-model="fForm.name" class="b-input" placeholder="e.g. Engineering, Sales, Project Alpha" :disabled="!!editing"/>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Cost Center Code</label>
+                <input v-model="fForm.code" class="b-input" placeholder="e.g. ENG, SLS"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Parent Cost Center</label>
+                <select v-model="fForm.parent" class="b-input">
+                  <option value="">— Root level —</option>
+                  <option v-for="c in allCC.filter(c=>c.name!==fForm.name)" :key="c.name" :value="c.name">{{c.name}}</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Type</label>
+                <select v-model="fForm.type" class="b-input">
+                  <option value="Department">Department</option>
+                  <option value="Project">Project</option>
+                  <option value="Product">Product Line</option>
+                  <option value="Region">Region / Branch</option>
+                  <option value="Group">Group (parent only)</option>
+                </select>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Colour Tag</label>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+                  <div v-for="c in CC_COLORS" :key="c" @click="fForm.color=c" style="width:22px;height:22px;border-radius:50%;cursor:pointer;transition:all .15s;flex-shrink:0"
+                    :style="{background:c,outline:fForm.color===c?'2px solid '+c:'none',border:fForm.color===c?'2px solid #fff':'2px solid transparent'}"></div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Description</label>
+              <textarea v-model="fForm.desc" class="b-input" rows="2" style="resize:vertical" placeholder="What this cost center tracks..."></textarea>
+            </div>
+          </div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:10px;margin-top:20px;padding-top:20px;border-top:1px solid #E2E8F0">Budget</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Annual Budget (₹)</label>
+              <input v-model="fForm.budget" class="b-input" type="number" min="0" step="1000" placeholder="0" style="font-family:var(--mono)"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Budget Period</label>
+              <select v-model="fForm.budget_period" class="b-input">
+                <option value="Annual">Annual</option>
+                <option value="Quarterly">Quarterly</option>
+                <option value="Monthly">Monthly</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Budget Alert At (%)</label>
+              <input v-model="fForm.alert_pct" class="b-input" type="number" min="0" max="100" style="font-family:var(--mono)"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Budget Action</label>
+              <select v-model="fForm.budget_action" class="b-input">
+                <option value="Warn">Warn only</option>
+                <option value="Stop">Stop and warn</option>
+                <option value="None">No action</option>
+              </select>
+            </div>
+          </div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:10px;margin-top:20px;padding-top:20px;border-top:1px solid #E2E8F0">Settings</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Is Group?</label>
+              <div style="display:flex;align-items:center;gap:12px;margin-top:6px">
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="radio" v-model="fForm.is_group" :value="1" style="accent-color:#3B5BDB"/> Yes</label>
+                <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="radio" v-model="fForm.is_group" :value="0" style="accent-color:#3B5BDB"/> No</label>
+              </div>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Status</label>
+              <select v-model="fForm.status" class="b-input"><option value="Active">Active</option><option value="Inactive">Inactive</option></select>
+            </div>
+          </div>
+        </div>
+        <div style="padding:16px 24px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:10px;background:#F8F9FC;flex-shrink:0">
+          <button class="b-btn b-btn-ghost" @click="closeDrawer">Cancel</button>
+          <button class="b-btn b-btn-primary" @click="saveCC" :disabled="saving" style="min-width:120px">{{saving?"Saving...":editing?"Update":"Create"}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Delete confirm -->
+  <teleport to="body">
+    <div v-if="showDelModal" style="position:fixed;inset:0;z-index:9100;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(3px)" @click.self="closeDelModal">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:420px;width:100%">
+        <div style="font-size:17px;font-weight:700;margin-bottom:8px">Delete Cost Center?</div>
+        <div style="font-size:14px;color:#868E96;margin-bottom:24px;line-height:1.5">"<strong>{{deleteTarget}}</strong>" will be permanently removed. This cannot be undone.</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="closeDelModal">Keep It</button>
+          <button class="b-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" @click="doDelete">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+  /* ══════════════════════════════════════════════════
+     FISCAL YEARS
+  ══════════════════════════════════════════════════ */
+  const FiscalYears = defineComponent({
+    name: "FiscalYears",
+    setup() {
+      const FY_MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const FY_MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+      const loading = ref(true);
+      const allYears = ref([]);
+      const selectedYear = ref(null);
+      const editingName = ref(null);
+      const showDrawer = ref(false);
+      const showCloseModal = ref(false);
+      const closeModalYear = ref(null);
+      const saving = ref(false);
+      const fromFrappe = ref(false);
+
+      const fForm = reactive({name:"",start:"",end:"",period_type:"Monthly",closing_acct:"Retained Earnings",auto_close:0,is_default:0});
+
+      function today_(){return new Date().toISOString().slice(0,10);}
+      function parseDate(s){return s?new Date(s):null;}
+      function fmtDate(d){if(!d)return"—";const dt=new Date(d);return dt.getDate()+" "+FY_MONTHS[dt.getMonth()]+" "+dt.getFullYear();}
+      function fmtShort(d){if(!d)return"";const dt=new Date(d);return FY_MONTHS[dt.getMonth()]+"'"+String(dt.getFullYear()).slice(2);}
+      function daysBetween(a,b){return Math.round((new Date(b)-new Date(a))/(1000*60*60*24));}
+      function daysElapsed(start,end){const now=new Date(),s=new Date(start),e=new Date(end);if(now<s)return 0;if(now>e)return daysBetween(start,end);return daysBetween(start,now.toISOString().slice(0,10));}
+      function saveLocal(){try{localStorage.setItem("books_fiscal_years",JSON.stringify(allYears.value));}catch{}}
+      function loadLocal(){try{return JSON.parse(localStorage.getItem("books_fiscal_years")||"null");}catch{return null;}}
+
+      function generatePeriods(start,end,type){
+        const periods=[];const s=new Date(start),e=new Date(end);const now=new Date();
+        if(type==="Annual"){periods.push({name:start+" to "+end,start,end,locked:false,is_current:now>=s&&now<=e});return periods;}
+        const step=type==="Quarterly"?3:1;let cur=new Date(s);
+        while(cur<=e){
+          const pStart=cur.toISOString().slice(0,10);
+          const nxt=new Date(cur);nxt.setMonth(nxt.getMonth()+step);nxt.setDate(0);
+          const pEnd=nxt>e?e.toISOString().slice(0,10):nxt.toISOString().slice(0,10);
+          const ps=new Date(pStart),pe=new Date(pEnd);
+          periods.push({name:type==="Quarterly"?"Q"+Math.ceil((ps.getMonth()+1)/3)+" "+ps.getFullYear():FY_MONTHS_FULL[ps.getMonth()]+" "+ps.getFullYear(),start:pStart,end:pEnd,locked:pe<now&&pe<e,is_current:now>=ps&&now<=pe});
+          cur=new Date(nxt);cur.setDate(cur.getDate()+1);if(cur>e)break;
+        }
+        return periods;
+      }
+
+      function autoFillName(){
+        if(fForm.start&&fForm.end){
+          const sy=new Date(fForm.start).getFullYear(),ey=new Date(fForm.end).getFullYear();
+          fForm.name=sy===ey?String(sy):sy+"-"+String(ey).slice(2);
+        }
+      }
+
+      function buildDefaultYears(){
+        const now=new Date();const curFYStart=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
+        const yrs=[];
+        for(let i=0;i<3;i++){const ys=curFYStart-i,ye=ys+1;const start=ys+"-04-01",end=ye+"-03-31";yrs.push({name:ys+"-"+String(ye).slice(2),start,end,period_type:"Monthly",closing_acct:"Retained Earnings",auto_close:0,is_default:i===0?1:0,is_closed:i>=2?1:0,periods:generatePeriods(start,end,"Monthly"),source:"local"});}
+        return yrs;
+      }
+
+      async function load(){
+        loading.value=true;
+        try{
+          const yrs=await apiGET("frappe.client.get_list",{doctype:"Fiscal Year",fields:JSON.stringify(["name","year_start_date","year_end_date","disabled","is_short_year"]),order_by:"year_start_date desc",limit_page_length:20})||[];
+          if(yrs.length){
+            allYears.value=yrs.map(y=>({name:y.name,start:y.year_start_date,end:y.year_end_date,period_type:"Monthly",closing_acct:"Retained Earnings",auto_close:0,is_default:0,is_closed:y.disabled?1:0,periods:generatePeriods(y.year_start_date,y.year_end_date,"Monthly"),source:"frappe"}));
+            fromFrappe.value=true;toast("Loaded from Frappe","info");
+          } else throw new Error("none");
+        }catch{
+          const saved=loadLocal();
+          allYears.value=saved||buildDefaultYears();
+          if(!saved)saveLocal();
+        }
+        loading.value=false;
+      }
+
+      const stats=computed(()=>{
+        const now=new Date();
+        const current=allYears.value.find(y=>new Date(y.start)<=now&&new Date(y.end)>=now);
+        const allPeriods=allYears.value.flatMap(y=>y.periods||[]);
+        const locked=allPeriods.filter(p=>p.locked).length;
+        const el=current?daysElapsed(current.start,current.end):0;
+        const tot=current?daysBetween(current.start,current.end):0;
+        return{total:allYears.value.length,currentName:current?current.name:"None",elapsed:current?el+" / "+tot:"—",locked};
+      });
+
+      const selectedYearData=computed(()=>allYears.value.find(y=>y.name===selectedYear.value)||null);
+
+      function selectYear(name){selectedYear.value=name;}
+
+      function togglePeriodLock(yearName,periodIdx){
+        const y=allYears.value.find(x=>x.name===yearName);if(!y)return;
+        y.periods[periodIdx].locked=!y.periods[periodIdx].locked;
+        saveLocal();toast(y.periods[periodIdx].locked?"Period locked":"Period unlocked");
+      }
+
+      function lockAllPeriods(yearName,lock){
+        const y=allYears.value.find(x=>x.name===yearName);if(!y)return;
+        const now=new Date();
+        y.periods.forEach(p=>{if(!p.is_current){if(lock&&new Date(p.end)<now)p.locked=true;else if(!lock)p.locked=false;}});
+        saveLocal();toast(lock?"All past periods locked":"All periods unlocked");
+      }
+
+      function openAdd(){
+        editingName.value=null;
+        const now=new Date();const ys=now.getMonth()>=3?now.getFullYear():now.getFullYear()-1;
+        Object.assign(fForm,{name:ys+"-"+String(ys+1).slice(2),start:ys+"-04-01",end:(ys+1)+"-03-31",period_type:"Monthly",closing_acct:"Retained Earnings",auto_close:0,is_default:0});
+        showDrawer.value=true;
+      }
+      function openEdit(name){
+        const y=allYears.value.find(x=>x.name===name);if(!y)return;
+        editingName.value=name;Object.assign(fForm,{name:y.name,start:y.start,end:y.end,period_type:y.period_type||"Monthly",closing_acct:y.closing_acct||"Retained Earnings",auto_close:y.auto_close||0,is_default:y.is_default||0});
+        showDrawer.value=true;
+      }
+      function closeDrawer(){showDrawer.value=false;editingName.value=null;}
+
+      const periodPreview=computed(()=>{
+        if(!fForm.start||!fForm.end)return[];
+        return generatePeriods(fForm.start,fForm.end,fForm.period_type);
+      });
+
+      async function saveYear(){
+        if(!fForm.name.trim()||!fForm.start||!fForm.end){toast("Name, start and end dates are required","error");return;}
+        saving.value=true;
+        if(fromFrappe.value){
+          try{
+            const doc={doctype:"Fiscal Year",year:fForm.name,year_start_date:fForm.start,year_end_date:fForm.end};
+            if(editingName.value)doc.name=editingName.value;
+            await apiPOST("frappe.client.save",{doc:JSON.stringify(doc)});
+            await load();toast(editingName.value?"Fiscal year updated":"Fiscal year created");
+          }catch(e){toast("Frappe error: "+e.message,"error");}
+        } else {
+          const newY={name:fForm.name,start:fForm.start,end:fForm.end,period_type:fForm.period_type,closing_acct:fForm.closing_acct,auto_close:fForm.auto_close,is_default:fForm.is_default,is_closed:0,periods:generatePeriods(fForm.start,fForm.end,fForm.period_type),source:"local"};
+          if(editingName.value){const i=allYears.value.findIndex(y=>y.name===editingName.value);if(i>=0)allYears.value[i]={...allYears.value[i],...newY};}
+          else allYears.value.unshift(newY);
+          saveLocal();toast(editingName.value?"Fiscal year updated":"Fiscal year created");
+        }
+        saving.value=false;closeDrawer();
+      }
+
+      function openCloseYear(name){closeModalYear.value=name;showCloseModal.value=true;}
+      async function doCloseYear(){
+        const name=closeModalYear.value;if(!name)return;
+        const y=allYears.value.find(x=>x.name===name);if(!y)return;
+        if(fromFrappe.value){
+          try{await apiPOST("frappe.client.set_value",{doctype:"Fiscal Year",name,fieldname:"disabled",value:1});await load();toast("Fiscal year closed");}
+          catch(e){toast("Frappe error: "+e.message,"error");}
+        } else {
+          y.is_closed=1;y.periods.forEach(p=>{p.locked=true;});saveLocal();toast("Fiscal year closed");
+        }
+        showCloseModal.value=false;closeModalYear.value=null;
+      }
+
+      onMounted(load);
+      return{loading,allYears,selectedYear,selectedYearData,showDrawer,showCloseModal,closeModalYear,saving,fromFrappe,fForm,stats,periodPreview,editingName,selectYear,togglePeriodLock,lockAllPeriods,openAdd,openEdit,closeDrawer,saveYear,openCloseYear,doCloseYear,autoFillName,fmtDate,fmtShort,daysBetween,daysElapsed,icon,FY_MONTHS};
+    },
+    template: `
+<div class="b-page">
+  <!-- Stats strip -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+    <div class="b-card" style="padding:13px 16px"><div style="font-size:11px;color:#868E96;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total Years</div><div style="font-size:19px;font-weight:700;font-family:var(--mono)">{{stats.total}}</div></div>
+    <div class="b-card" style="padding:13px 16px"><div style="font-size:11px;color:#2F9E44;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Current Year</div><div style="font-size:14px;font-weight:700;font-family:var(--mono);color:#2F9E44">{{stats.currentName}}</div></div>
+    <div class="b-card" style="padding:13px 16px"><div style="font-size:11px;color:#3B5BDB;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Days Elapsed</div><div style="font-size:19px;font-weight:700;font-family:var(--mono);color:#3B5BDB">{{stats.elapsed}}</div></div>
+    <div class="b-card" style="padding:13px 16px"><div style="font-size:11px;color:#E67700;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Periods Locked</div><div style="font-size:19px;font-weight:700;font-family:var(--mono);color:#E67700">{{stats.locked}}</div></div>
+  </div>
+
+  <!-- Main grid -->
+  <div style="display:grid;grid-template-columns:400px 1fr;gap:20px;align-items:start">
+
+    <!-- Left: year cards -->
+    <div style="display:flex;flex-direction:column;gap:14px">
+      <div v-if="loading" class="b-card" style="padding:40px;text-align:center;color:#868E96">Loading fiscal years...</div>
+      <template v-else>
+        <div v-for="y in allYears" :key="y.name"
+          style="background:#fff;border:1.5px solid #E2E8F0;border-radius:10px;padding:20px;cursor:pointer;transition:all .15s;position:relative;overflow:hidden"
+          :style="{borderColor:selectedYear===y.name?'#3B5BDB':new Date()>=new Date(y.start)&&new Date()<=new Date(y.end)?'#2F9E44':'#E2E8F0',background:selectedYear===y.name?'#FAFBFF':'#fff'}"
+          @click="selectYear(y.name)">
+          <!-- ribbon -->
+          <div v-if="new Date()>=new Date(y.start)&&new Date()<=new Date(y.end)" style="position:absolute;top:0;right:0;background:#2F9E44;color:#fff;font-size:10px;font-weight:700;padding:3px 10px;border-radius:0 10px 0 6px;letter-spacing:.5px">CURRENT</div>
+          <div v-if="y.is_closed" style="position:absolute;top:0;right:0;background:#868E96;color:#fff;font-size:10px;font-weight:700;padding:3px 10px;border-radius:0 10px 0 6px;letter-spacing:.5px">CLOSED</div>
+          <div style="font-size:16px;font-weight:700;margin-bottom:4px">{{y.name}}</div>
+          <div style="font-size:12.5px;color:#868E96;margin-bottom:12px;font-family:var(--mono)">{{fmtDate(y.start)}} → {{fmtDate(y.end)}}</div>
+          <!-- Progress bar (current year only) -->
+          <template v-if="new Date()>=new Date(y.start)&&new Date()<=new Date(y.end)">
+            <div style="margin-bottom:10px">
+              <div style="display:flex;justify-content:space-between;font-size:11.5px;color:#868E96;margin-bottom:5px">
+                <span>Year progress</span>
+                <span style="font-weight:700">{{Math.round(daysElapsed(y.start,y.end)/daysBetween(y.start,y.end)*100)}}%</span>
+              </div>
+              <div style="background:#E8ECF0;border-radius:20px;height:8px;overflow:hidden">
+                <div style="height:100%;border-radius:20px;background:#3B5BDB;transition:width .4s ease" :style="{width:Math.round(daysElapsed(y.start,y.end)/daysBetween(y.start,y.end)*100)+'%'}"></div>
+              </div>
+            </div>
+          </template>
+          <!-- Chips -->
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+            <span style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:3px 9px;border-radius:20px;font-weight:500" :style="{background:new Date()>=new Date(y.start)&&new Date()<=new Date(y.end)?'rgba(59,91,219,.1)':'#F8F9FC',color:new Date()>=new Date(y.start)&&new Date()<=new Date(y.end)?'#3B5BDB':'#868E96'}">{{y.period_type}} periods</span>
+            <span v-if="(y.periods||[]).filter(p=>p.locked).length" style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:3px 9px;border-radius:20px;font-weight:500;background:#FFF5F5;color:#C92A2A">{{(y.periods||[]).filter(p=>p.locked).length}} locked</span>
+            <span v-if="y.is_default" style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:3px 9px;border-radius:20px;font-weight:500;background:#EBFBEE;color:#2F9E44">Default</span>
+            <span v-if="new Date()>new Date(y.end)&&!y.is_closed" style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:3px 9px;border-radius:20px;font-weight:500;background:#FFF3BF;color:#E67700">Needs closing</span>
+          </div>
+          <!-- Mini period grid -->
+          <div v-if="(y.periods||[]).length" style="display:grid;grid-template-columns:repeat(12,1fr);gap:3px;margin-top:6px">
+            <div v-for="(p,i) in (y.periods||[]).slice(0,12)" :key="i" style="height:6px;border-radius:2px" :style="{background:p.locked?'#E8ECF0':p.is_current?'#3B5BDB':new Date()>new Date(y.end)?'#B5D4F4':'#D3D1C7'}" :title="p.name+(p.locked?' (Locked)':p.is_current?' (Current)':'')"></div>
+          </div>
+        </div>
+        <button class="b-btn b-btn-ghost" @click="openAdd" style="width:100%"><span v-html="icon('plus',13)"></span>Add Fiscal Year</button>
+      </template>
+    </div>
+
+    <!-- Right: detail -->
+    <div>
+      <div v-if="!selectedYearData" class="b-card" style="padding:40px;text-align:center;color:#868E96">
+        <div style="font-size:36px;margin-bottom:12px">📅</div>
+        <div style="font-weight:600;font-size:15px;color:#1A1D23;margin-bottom:6px">Select a fiscal year</div>
+        <div style="font-size:13px">Click any year card to manage its accounting periods and year-end settings</div>
+      </div>
+      <template v-else>
+        <div class="b-card" style="padding:0;overflow:hidden;margin-bottom:14px">
+          <div style="padding:16px 20px;border-bottom:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;background:#F8F9FC">
+            <div>
+              <div style="font-size:15px;font-weight:700">{{selectedYearData.name}}</div>
+              <div style="font-size:12px;color:#868E96;margin-top:2px">{{fmtDate(selectedYearData.start)}} → {{fmtDate(selectedYearData.end)}} · {{daysBetween(selectedYearData.start,selectedYearData.end)}} days</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <span v-if="new Date()>=new Date(selectedYearData.start)&&new Date()<=new Date(selectedYearData.end)" style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#EBFBEE;color:#2F9E44">Current</span>
+              <span v-if="selectedYearData.is_closed" style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#F1F3F5;color:#868E96">Closed</span>
+              <button v-if="new Date()>new Date(selectedYearData.end)&&!selectedYearData.is_closed" class="b-btn b-btn-ghost" style="border-color:#E67700;color:#E67700;font-size:12px;padding:5px 10px" @click="openCloseYear(selectedYearData.name)">🔒 Close Year</button>
+              <button class="b-btn b-btn-ghost" style="font-size:12px;padding:5px 10px" @click="openEdit(selectedYearData.name)">Edit</button>
+            </div>
+          </div>
+          <!-- Progress bar for current year -->
+          <div v-if="new Date()>=new Date(selectedYearData.start)&&new Date()<=new Date(selectedYearData.end)" style="padding:14px 20px;border-bottom:1px solid #E2E8F0">
+            <div style="display:flex;justify-content:space-between;font-size:12px;color:#868E96;margin-bottom:6px">
+              <span>Year progress — {{daysElapsed(selectedYearData.start,selectedYearData.end)}} of {{daysBetween(selectedYearData.start,selectedYearData.end)}} days</span>
+              <span style="font-weight:700;color:#3B5BDB">{{Math.round(daysElapsed(selectedYearData.start,selectedYearData.end)/daysBetween(selectedYearData.start,selectedYearData.end)*100)}}%</span>
+            </div>
+            <div style="background:#E8ECF0;border-radius:20px;height:10px;overflow:hidden">
+              <div style="height:100%;border-radius:20px;background:#3B5BDB;transition:width .4s" :style="{width:Math.round(daysElapsed(selectedYearData.start,selectedYearData.end)/daysBetween(selectedYearData.start,selectedYearData.end)*100)+'%'}"></div>
+            </div>
+          </div>
+          <!-- Period table header -->
+          <div style="display:grid;grid-template-columns:1fr 130px 100px 90px;gap:10px;padding:8px 16px;background:#F8F9FC;border-bottom:1px solid #E2E8F0;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96">
+            <span>Period</span><span>Date Range</span><span>Status</span><span>Action</span>
+          </div>
+          <!-- Period rows -->
+          <div v-for="(p,i) in (selectedYearData.periods||[])" :key="i"
+            style="display:grid;grid-template-columns:1fr 130px 100px 90px;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #F1F3F5;font-size:13px;transition:background .12s"
+            :style="{background:p.locked?'#FFF5F5':p.is_current?'#EEF2FF':''}">
+            <div>
+              <div :style="{fontWeight:p.is_current?600:400}">{{p.name}}</div>
+              <div v-if="p.is_current" style="font-size:11px;color:#3B5BDB;font-weight:600">● Current period</div>
+            </div>
+            <div style="font-size:12px;color:#868E96;font-family:var(--mono)">{{fmtShort(p.start)}} – {{fmtShort(p.end)}}</div>
+            <div>
+              <span v-if="p.locked" style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#FFE3E3;color:#C92A2A">🔒 Locked</span>
+              <span v-else-if="p.is_current" style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#EEF2FF;color:#3B5BDB">Open</span>
+              <span v-else style="display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:#F1F3F5;color:#868E96">{{new Date(p.end)<new Date()?"Past":"Future"}}</span>
+            </div>
+            <div>
+              <button v-if="!p.is_current"
+                style="background:none;border:1px solid #E2E8F0;border-radius:5px;cursor:pointer;padding:3px 7px;font-size:11px;font-family:inherit;display:inline-flex;align-items:center;gap:3px;transition:all .15s"
+                :style="{borderColor:p.locked?'rgba(201,42,42,.3)':'#E2E8F0',color:p.locked?'#C92A2A':'#868E96',background:p.locked?'#FFF5F5':'#fff'}"
+                @click="togglePeriodLock(selectedYearData.name,i)">
+                {{p.locked?"🔓 Unlock":"🔒 Lock"}}
+              </button>
+              <span v-else style="color:#868E96">—</span>
+            </div>
+          </div>
+          <!-- Footer actions -->
+          <div style="padding:12px 16px;background:#F8F9FC;border-top:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center;font-size:12.5px">
+            <span style="color:#868E96">{{(selectedYearData.periods||[]).filter(p=>p.locked).length}} of {{(selectedYearData.periods||[]).length}} periods locked</span>
+            <div style="display:flex;gap:8px">
+              <button class="b-btn b-btn-ghost" style="font-size:12px;padding:5px 10px" @click="lockAllPeriods(selectedYearData.name,true)">Lock All Past</button>
+              <button class="b-btn b-btn-ghost" style="font-size:12px;padding:5px 10px" @click="lockAllPeriods(selectedYearData.name,false)">Unlock All</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Year-end config card -->
+        <div class="b-card" style="padding:0;overflow:hidden">
+          <div style="padding:14px 20px;border-bottom:1px solid #E2E8F0"><span style="font-size:13px;font-weight:600">Year-End Configuration</span></div>
+          <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:16px;font-size:13px">
+            <div><div style="font-size:11px;color:#868E96;margin-bottom:3px">Closing Account</div><div style="font-weight:500">{{selectedYearData.closing_acct||"Retained Earnings"}}</div></div>
+            <div><div style="font-size:11px;color:#868E96;margin-bottom:3px">Period Type</div><div style="font-weight:500">{{selectedYearData.period_type||"Monthly"}}</div></div>
+            <div><div style="font-size:11px;color:#868E96;margin-bottom:3px">Auto-close on End</div><div style="font-weight:500">{{selectedYearData.auto_close?"Yes":"No"}}</div></div>
+            <div><div style="font-size:11px;color:#868E96;margin-bottom:3px">Default Year</div><div style="font-weight:500">{{selectedYearData.is_default?"Yes":"No"}}</div></div>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Add / Edit Drawer -->
+  <teleport to="body">
+    <div v-if="showDrawer" class="fy-drawer-open" style="position:fixed;inset:0;z-index:9000;background:rgba(15,23,42,.45);display:flex;justify-content:flex-end;backdrop-filter:blur(2px)" @click.self="closeDrawer">
+      <div style="width:480px;max-width:95vw;height:100%;background:#fff;display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15)">
+        <div style="background:linear-gradient(135deg,#2563eb,#4f46e5);padding:18px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="color:#fff;font-size:16px;font-weight:700">{{editingName?"Edit Fiscal Year":"New Fiscal Year"}}</div>
+            <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:2px">Define start and end dates</div>
+          </div>
+          <button @click="closeDrawer" style="background:rgba(255,255,255,.15);border:none;cursor:pointer;width:30px;height:30px;border-radius:8px;color:#fff;display:grid;place-items:center;transition:.15s"><span v-html="icon('x',16)"></span></button>
+        </div>
+        <div style="flex:1;overflow-y:auto;padding:24px">
+          <div style="background:#EEF2FF;border:1px solid rgba(59,91,219,.15);border-radius:8px;padding:12px 14px;font-size:12.5px;color:#2f4ec4;line-height:1.6;margin-bottom:20px">
+            In India, the standard fiscal year runs <strong>1 April to 31 March</strong>. Companies can choose a different year-end with MCA approval.
+          </div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:10px">Year Definition</div>
+          <div style="display:grid;gap:14px;margin-bottom:14px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Year Name <span style="color:#C92A2A">*</span></label>
+              <input v-model="fForm.name" class="b-input" placeholder="e.g. 2025-26, FY2026"/>
+              <div style="font-size:11px;color:#868E96;margin-top:3px">Auto-filled when you set dates below</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Start Date <span style="color:#C92A2A">*</span></label>
+                <input v-model="fForm.start" class="b-input" type="date" @input="autoFillName"/>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">End Date <span style="color:#C92A2A">*</span></label>
+                <input v-model="fForm.end" class="b-input" type="date" @input="autoFillName"/>
+              </div>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Period Generation</label>
+              <select v-model="fForm.period_type" class="b-input">
+                <option value="Monthly">Monthly (12 periods)</option>
+                <option value="Quarterly">Quarterly (4 periods)</option>
+                <option value="Annual">Annual (1 period)</option>
+              </select>
+              <div style="font-size:11px;color:#868E96;margin-top:3px">Accounting periods let you lock past periods to prevent backdating</div>
+            </div>
+          </div>
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:10px;margin-top:20px;padding-top:20px;border-top:1px solid #E2E8F0">Year-End Settings</div>
+          <div style="display:grid;gap:14px;margin-bottom:14px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Closing Account for P&amp;L</label>
+              <input v-model="fForm.closing_acct" class="b-input" placeholder="e.g. Retained Earnings"/>
+              <div style="font-size:11px;color:#868E96;margin-top:3px">P&amp;L balances are transferred here at year end</div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Auto-close on Year End?</label>
+                <div style="display:flex;gap:12px;margin-top:6px">
+                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="radio" v-model="fForm.auto_close" :value="1" style="accent-color:#3B5BDB"/> Yes</label>
+                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="radio" v-model="fForm.auto_close" :value="0" style="accent-color:#3B5BDB"/> No</label>
+                </div>
+              </div>
+              <div>
+                <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Is Default Year?</label>
+                <div style="display:flex;gap:12px;margin-top:6px">
+                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="radio" v-model="fForm.is_default" :value="1" style="accent-color:#3B5BDB"/> Yes</label>
+                  <label style="display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px"><input type="radio" v-model="fForm.is_default" :value="0" style="accent-color:#3B5BDB"/> No</label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Period preview -->
+          <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868E96;margin-bottom:10px;margin-top:20px;padding-top:20px;border-top:1px solid #E2E8F0">Preview</div>
+          <div style="border:1px solid #E2E8F0;border-radius:8px;overflow:hidden">
+            <div v-if="!periodPreview.length" style="padding:16px;text-align:center;color:#868E96;font-size:13px">Set start and end dates to preview periods</div>
+            <div v-for="(p,i) in periodPreview.slice(0,6)" :key="i" style="display:flex;justify-content:space-between;padding:8px 14px;border-bottom:1px solid #F1F3F5;font-size:12.5px">
+              <span>{{p.name}}</span><span style="color:#868E96;font-family:var(--mono)">{{p.start}} – {{p.end}}</span>
+            </div>
+            <div v-if="periodPreview.length>6" style="padding:8px 14px;text-align:center;color:#868E96;font-size:12px;background:#F8F9FC">...and {{periodPreview.length-6}} more periods</div>
+          </div>
+        </div>
+        <div style="padding:16px 24px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:10px;background:#F8F9FC;flex-shrink:0">
+          <button class="b-btn b-btn-ghost" @click="closeDrawer">Cancel</button>
+          <button class="b-btn b-btn-primary" @click="saveYear" :disabled="saving" style="min-width:120px">{{saving?"Saving...":editingName?"Update Year":"Create Year"}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Close Year Modal -->
+  <teleport to="body">
+    <div v-if="showCloseModal" style="position:fixed;inset:0;z-index:9100;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(3px)" @click.self="showCloseModal=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:480px;width:100%">
+        <div style="font-size:18px;font-weight:700;margin-bottom:6px">Close Fiscal Year {{closeModalYear}}?</div>
+        <div style="font-size:13px;color:#868E96;margin-bottom:14px">All periods will be locked. This cannot be reversed without journal entries.</div>
+        <ul style="list-style:none;margin:12px 0 20px;display:flex;flex-direction:column;gap:8px">
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:#868E96"><span style="width:16px;height:16px;border-radius:50%;background:#EBFBEE;color:#2F9E44;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0">✓</span>All past periods will be locked</li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:#868E96"><span style="width:16px;height:16px;border-radius:50%;background:#F1F3F5;color:#868E96;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0">●</span>P&amp;L will be transferred to Retained Earnings</li>
+          <li style="display:flex;align-items:center;gap:8px;font-size:13px;color:#868E96"><span style="width:16px;height:16px;border-radius:50%;background:#F1F3F5;color:#868E96;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0">●</span>All transactions in this year become read-only</li>
+        </ul>
+        <div style="background:#FFF3BF;border:1px solid rgba(230,119,0,.2);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#7F3E00;margin-bottom:20px">⚠ Closing a year locks <strong>all periods</strong> and transfers P&amp;L to Retained Earnings. This cannot be reversed without journal entries.</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showCloseModal=false">Cancel</button>
+          <button class="b-btn b-btn-primary" @click="doCloseYear">Proceed &amp; Close Year</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
   const Reports = defineComponent({
     name: "Reports",
-    setup() {
+    props: { defaultTab: { type: String, default: "pl" } },
+    setup(props) {
+      const route = useRoute();
       const today_str = new Date().toISOString().slice(0, 10);
-      const from = ref(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0, 10));
+      const from = ref(new Date(new Date().getFullYear(), 3, 1).toISOString().slice(0, 10));
       const to = ref(today_str);
-      const tab = ref("pl"), running = ref(false);
-      const pl = ref(null), bs = ref(null), cf = ref(null), gst = ref(null);
-      const tabs = [{ k: "pl", lbl: "P & L" }, { k: "bs", lbl: "Balance Sheet" }, { k: "cf", lbl: "Cash Flow" }, { k: "gst", lbl: "GST Summary" }];
+      // If navigated to /reports/trial-balance or /reports/ar-aging, pick correct tab
+      const initTab = props.defaultTab || (route.name === "trial-balance" ? "tb" : route.name === "ar-aging" ? "aging" : "pl");
+      const tab = ref(initTab), running = ref(false);
+      const fyMode = ref("fy"); // "fy" | "custom"
+      const selectedFY = ref("");
+      const fiscalYears = ref([]);
+      const pl = ref(null), bs = ref(null), cf = ref(null), gst = ref(null), tb = ref(null), aging = ref(null);
+      const plBreakdown = ref([]);
+      const showBreakdown = ref(false);
+      const tabs = [
+        { k: "pl", lbl: "P & L" },
+        { k: "bs", lbl: "Balance Sheet" },
+        { k: "cf", lbl: "Cash Flow" },
+        { k: "tb", lbl: "Trial Balance" },
+        { k: "aging", lbl: "AR Aging" },
+        { k: "gst", lbl: "GST Summary" },
+      ];
+
+      function loadFY() {
+        const raw = localStorage.getItem("books_fy_data");
+        if (raw) { try { fiscalYears.value = JSON.parse(raw); } catch {} }
+        if (!fiscalYears.value.length) {
+          const yr = new Date().getFullYear();
+          const isBeforeApril = new Date().getMonth() < 3;
+          const curStart = isBeforeApril ? yr - 1 : yr;
+          fiscalYears.value = [
+            { name: `${curStart}-${curStart + 1}`, year_start_date: `${curStart}-04-01`, year_end_date: `${curStart + 1}-03-31` },
+            { name: `${curStart - 1}-${curStart}`, year_start_date: `${curStart - 1}-04-01`, year_end_date: `${curStart}-03-31` },
+            { name: `${curStart - 2}-${curStart - 1}`, year_start_date: `${curStart - 2}-04-01`, year_end_date: `${curStart - 1}-03-31` },
+          ];
+        }
+        const now = new Date();
+        const cur = fiscalYears.value.find(fy => new Date(fy.year_start_date) <= now && new Date(fy.year_end_date) >= now);
+        const pick = cur || fiscalYears.value[0];
+        if (pick) applyFY(pick);
+      }
+
+      function applyFY(fyOrName) {
+        const fy = typeof fyOrName === "string" ? fiscalYears.value.find(f => f.name === fyOrName) : fyOrName;
+        if (!fy) return;
+        selectedFY.value = fy.name;
+        from.value = fy.year_start_date;
+        to.value = fy.year_end_date > today_str ? today_str : fy.year_end_date;
+      }
+
+      function onFYChange() { if (fyMode.value === "fy") applyFY(selectedFY.value); }
+
       async function run() {
         running.value = true;
         const c = co(), args = { company: c, from_date: from.value, to_date: to.value };
         try {
-          if (tab.value === "pl") pl.value = await apiGET("zoho_books_clone.db.queries.get_profit_and_loss", args);
+          if (tab.value === "pl") {
+            [pl.value, plBreakdown.value] = await Promise.all([
+              apiGET("zoho_books_clone.db.queries.get_profit_and_loss", args),
+              apiGET("zoho_books_clone.db.queries.get_pl_monthly_breakdown", args),
+            ]);
+          }
           else if (tab.value === "bs") bs.value = await apiGET("zoho_books_clone.db.queries.get_balance_sheet_totals", { company: c, as_of_date: to.value });
           else if (tab.value === "cf") cf.value = await apiGET("zoho_books_clone.db.queries.get_cash_flow", args);
+          else if (tab.value === "tb") tb.value = await apiGET("zoho_books_clone.db.queries.get_trial_balance", args);
+          else if (tab.value === "aging") aging.value = await apiGET("zoho_books_clone.db.queries.get_ar_aging", { company: c, as_of_date: to.value });
           else gst.value = await apiGET("zoho_books_clone.db.queries.get_gst_summary", args);
         } catch (e) { toast(e.message, "error"); }
         finally { running.value = false; }
       }
-      return { from, to, tab, tabs, pl, bs, cf, gst, running, run, fmt, icon, flt };
+
+      const fyBadge = computed(() => {
+        if (!selectedFY.value) return null;
+        const fy = fiscalYears.value.find(f => f.name === selectedFY.value);
+        if (!fy) return null;
+        const now = new Date();
+        return { name: fy.name, isCurrent: new Date(fy.year_start_date) <= now && new Date(fy.year_end_date) >= now };
+      });
+
+      const tbTotals = computed(() => {
+        if (!tb.value) return { dr: 0, cr: 0 };
+        return { dr: tb.value.reduce((s, r) => s + r.debit, 0), cr: tb.value.reduce((s, r) => s + r.credit, 0) };
+      });
+
+      const agingTotal = computed(() => {
+        if (!aging.value) return 0;
+        return aging.value.reduce((s, r) => s + r.total, 0);
+      });
+
+      const bdMax = computed(() => {
+        if (!plBreakdown.value.length) return 1;
+        return Math.max(...plBreakdown.value.map(p => Math.max(p.income, p.expense)), 1);
+      });
+
+      onMounted(loadFY);
+
+      return { from, to, tab, tabs, pl, bs, cf, gst, tb, aging, plBreakdown, showBreakdown, running, run,
+               fyMode, selectedFY, fiscalYears, applyFY, onFYChange, fyBadge, tbTotals, agingTotal, bdMax, fmt, icon, flt };
     },
     template: `
 <div class="b-page">
-  <div class="b-report-tabs"><button v-for="t in tabs" :key="t.k" class="b-rtab" :class="{active:tab===t.k}" @click="tab=t.k;pl=null;bs=null;cf=null;gst=null">{{t.lbl}}</button></div>
-  <div class="b-card" style="display:flex;align-items:center;gap:12px;padding:14px 20px;flex-wrap:wrap">
-    <label style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3)">From</label>
-    <input type="date" v-model="from" class="b-input"/>
-    <label style="font-size:12px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--text-3)">To</label>
-    <input type="date" v-model="to" class="b-input"/>
-    <button class="b-btn b-btn-primary" @click="run" :disabled="running">{{running?'Running…':'▶ Run Report'}}</button>
+  <!-- Tab strip -->
+  <div class="b-report-tabs">
+    <button v-for="t in tabs" :key="t.k" class="b-rtab" :class="{active:tab===t.k}"
+      @click="tab=t.k;pl=null;bs=null;cf=null;gst=null;tb=null;aging=null;plBreakdown=[]">{{t.lbl}}</button>
   </div>
-  <div v-if="tab==='pl'" class="b-card b-card-body">
-    <div style="font-size:16px;font-weight:700;margin-bottom:16px">Profit & Loss Statement</div>
-    <div v-if="running" class="b-shimmer" style="height:80px"></div>
-    <template v-else-if="pl">
-      <div class="b-pl-row"><span>Total Income</span><span class="mono fw-700 c-green">{{fmt(pl.total_income)}}</span></div>
-      <div class="b-pl-row"><span>Total Expense</span><span class="mono fw-700 c-red">{{fmt(pl.total_expense)}}</span></div>
-      <div class="b-pl-row b-pl-net"><span>Net Profit</span><span class="mono fw-700" :class="flt(pl.net_profit)>=0?'c-green':'c-red'">{{fmt(pl.net_profit)}}</span></div>
-    </template>
-    <div v-else class="b-empty">Select a period and click Run Report.</div>
+
+  <!-- Filter bar -->
+  <div class="b-card" style="padding:14px 20px">
+    <!-- Mode toggle -->
+    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;background:#F0F2F5;border-radius:8px;padding:4px">
+        <button class="rpt-mode-btn" :class="{active:fyMode==='fy'}" @click="fyMode='fy'">
+          <span v-html="icon('fiscal',13)"></span> Fiscal Year
+        </button>
+        <button class="rpt-mode-btn" :class="{active:fyMode==='custom'}" @click="fyMode='custom'">
+          <span v-html="icon('calendar',13)"></span> Custom Range
+        </button>
+      </div>
+
+      <!-- FY picker -->
+      <template v-if="fyMode==='fy'">
+        <select class="b-input" style="min-width:160px" v-model="selectedFY" @change="onFYChange">
+          <option v-for="fy in fiscalYears" :key="fy.name" :value="fy.name">FY {{fy.name}}</option>
+        </select>
+        <div v-if="fyBadge" style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600"
+          :style="fyBadge.isCurrent?'background:#EEF2FF;color:#3B5BDB;border:1px solid #C5D0FA':'background:#F8F9FA;color:#868E96;border:1px solid #DEE2E6'">
+          <span v-html="icon('fiscal',11)"></span> {{fyBadge.isCurrent?'Current Year':'Past Year'}}
+        </div>
+      </template>
+
+      <!-- Custom date inputs -->
+      <template v-if="fyMode==='custom'">
+        <label style="font-size:12px;font-weight:700;color:var(--text-3)">From</label>
+        <input type="date" v-model="from" class="b-input"/>
+        <label style="font-size:12px;font-weight:700;color:var(--text-3)">To</label>
+        <input type="date" v-model="to" class="b-input"/>
+      </template>
+
+      <!-- Always show date range as info when FY mode -->
+      <div v-if="fyMode==='fy'" style="font-size:12px;color:#868E96;display:flex;align-items:center;gap:4px">
+        <span v-html="icon('calendar',12)"></span>
+        {{from}} → {{to}}
+      </div>
+
+      <button class="b-btn b-btn-primary" @click="run" :disabled="running" style="margin-left:auto">
+        <span v-html="icon('trend',13)"></span>&nbsp;{{running?'Running…':'Run Report'}}
+      </button>
+    </div>
   </div>
+
+  <!-- ── P & L ── -->
+  <div v-if="tab==='pl'">
+    <div class="b-card b-card-body">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:16px;font-weight:700">Profit &amp; Loss Statement</div>
+          <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-top:2px">FY {{fyBadge.name}} &nbsp;·&nbsp; {{from}} to {{to}}</div>
+        </div>
+        <button v-if="pl&&plBreakdown.length>1" class="b-btn b-btn-ghost" style="font-size:12px" @click="showBreakdown=!showBreakdown">
+          <span v-html="icon('chart',13)"></span>&nbsp;{{showBreakdown?'Hide':'Show'}} Period Breakdown
+        </button>
+      </div>
+      <div v-if="running" class="b-shimmer" style="height:80px"></div>
+      <template v-else-if="pl">
+        <div class="b-pl-row"><span>Total Income</span><span class="mono fw-700 c-green">{{fmt(pl.total_income)}}</span></div>
+        <div class="b-pl-row"><span>Total Expense</span><span class="mono fw-700 c-red">{{fmt(pl.total_expense)}}</span></div>
+        <div class="b-pl-row b-pl-net"><span>Net Profit / (Loss)</span><span class="mono fw-700" :class="flt(pl.net_profit)>=0?'c-green':'c-red'">{{fmt(pl.net_profit)}}</span></div>
+        <!-- profit margin badge -->
+        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
+          <div class="rpt-kpi-chip">
+            <div class="rpt-kpi-label">Gross Margin</div>
+            <div class="rpt-kpi-val" :style="flt(pl.total_income)>0?(flt(pl.net_profit)/flt(pl.total_income)*100>=0?'color:#2F9E44':'color:#C92A2A'):''">
+              {{flt(pl.total_income)>0?(flt(pl.net_profit)/flt(pl.total_income)*100).toFixed(1)+'%':'—'}}
+            </div>
+          </div>
+          <div class="rpt-kpi-chip">
+            <div class="rpt-kpi-label">Expense Ratio</div>
+            <div class="rpt-kpi-val">{{flt(pl.total_income)>0?(flt(pl.total_expense)/flt(pl.total_income)*100).toFixed(1)+'%':'—'}}</div>
+          </div>
+        </div>
+      </template>
+      <div v-else class="b-empty">Select a period and click Run Report.</div>
+    </div>
+
+    <!-- Period Breakdown -->
+    <div v-if="showBreakdown&&plBreakdown.length" class="b-card" style="padding:0;overflow:hidden">
+      <div class="b-card-head"><span class="b-card-title">Monthly Breakdown</span></div>
+      <div style="padding:16px 20px;overflow-x:auto">
+        <!-- Mini bar chart -->
+        <div style="display:flex;align-items:flex-end;gap:6px;height:80px;margin-bottom:12px">
+          <template v-for="p in plBreakdown" :key="p.label">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;height:100%">
+              <div style="flex:1;display:flex;align-items:flex-end;gap:2px;width:100%">
+                <div style="flex:1;border-radius:3px 3px 0 0;background:#2F9E44;transition:height .3s"
+                  :style="{height:bdMax>0?Math.round(p.income/bdMax*68)+'px':'0'}"></div>
+                <div style="flex:1;border-radius:3px 3px 0 0;background:#FA5252;transition:height .3s"
+                  :style="{height:bdMax>0?Math.round(p.expense/bdMax*68)+'px':'0'}"></div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <!-- Labels row -->
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <div v-for="p in plBreakdown" :key="p.label+'l'" style="flex:1;text-align:center;font-size:10px;color:#868E96;font-weight:600">{{p.label}}</div>
+        </div>
+        <!-- Legend -->
+        <div style="display:flex;gap:16px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#495057">
+            <div style="width:10px;height:10px;border-radius:2px;background:#2F9E44"></div>Income
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#495057">
+            <div style="width:10px;height:10px;border-radius:2px;background:#FA5252"></div>Expense
+          </div>
+        </div>
+        <!-- Table -->
+        <table class="b-table">
+          <thead><tr><th>Period</th><th class="ta-r">Income</th><th class="ta-r">Expense</th><th class="ta-r">Net Profit</th></tr></thead>
+          <tbody>
+            <tr v-for="p in plBreakdown" :key="p.label+'r'">
+              <td><span class="b-badge b-badge-blue">{{p.label}}</span></td>
+              <td class="ta-r mono fw-600 c-green">{{fmt(p.income)}}</td>
+              <td class="ta-r mono fw-600 c-red">{{fmt(p.expense)}}</td>
+              <td class="ta-r mono fw-700" :class="p.profit>=0?'c-green':'c-red'">{{fmt(p.profit)}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Balance Sheet ── -->
   <div v-if="tab==='bs'" class="b-card b-card-body">
-    <div style="font-size:16px;font-weight:700;margin-bottom:16px">Balance Sheet</div>
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px">Balance Sheet</div>
+    <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-bottom:16px">As of {{to}}&nbsp;·&nbsp;FY {{fyBadge.name}}</div>
     <div v-if="running" class="b-shimmer" style="height:80px"></div>
     <div v-else-if="bs" class="b-bs-grid">
       <div class="b-bs-block"><div class="b-bs-lbl">Assets</div><div class="b-bs-amt c-accent">{{fmt(bs.total_assets)}}</div></div>
@@ -8203,19 +11819,105 @@
     </div>
     <div v-else class="b-empty">Select a period and click Run Report.</div>
   </div>
+
+  <!-- ── Cash Flow ── -->
   <div v-if="tab==='cf'" class="b-card b-card-body">
-    <div style="font-size:16px;font-weight:700;margin-bottom:16px">Cash Flow Statement</div>
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px">Cash Flow Statement</div>
+    <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-bottom:16px">FY {{fyBadge.name}}&nbsp;·&nbsp;{{from}} to {{to}}</div>
     <div v-if="running" class="b-shimmer" style="height:80px"></div>
     <template v-else-if="cf">
-      <div class="b-pl-row"><span>Operating</span><span class="mono fw-700" :class="flt(cf.operating)>=0?'c-green':'c-red'">{{fmt(cf.operating)}}</span></div>
-      <div class="b-pl-row"><span>Investing</span><span class="mono fw-700" :class="flt(cf.investing)>=0?'c-green':'c-red'">{{fmt(cf.investing)}}</span></div>
-      <div class="b-pl-row"><span>Financing</span><span class="mono fw-700" :class="flt(cf.financing)>=0?'c-green':'c-red'">{{fmt(cf.financing)}}</span></div>
-      <div class="b-pl-row b-pl-net"><span>Net Change</span><span class="mono fw-700" :class="flt(cf.net_change)>=0?'c-green':'c-red'">{{fmt(cf.net_change)}}</span></div>
+      <div class="b-pl-row"><span>Operating Activities</span><span class="mono fw-700" :class="flt(cf.operating)>=0?'c-green':'c-red'">{{fmt(cf.operating)}}</span></div>
+      <div class="b-pl-row"><span>Investing Activities</span><span class="mono fw-700" :class="flt(cf.investing)>=0?'c-green':'c-red'">{{fmt(cf.investing)}}</span></div>
+      <div class="b-pl-row"><span>Financing Activities</span><span class="mono fw-700" :class="flt(cf.financing)>=0?'c-green':'c-red'">{{fmt(cf.financing)}}</span></div>
+      <div class="b-pl-row b-pl-net"><span>Net Change in Cash</span><span class="mono fw-700" :class="flt(cf.net_change)>=0?'c-green':'c-red'">{{fmt(cf.net_change)}}</span></div>
     </template>
     <div v-else class="b-empty">Select a period and click Run Report.</div>
   </div>
+
+  <!-- ── Trial Balance ── -->
+  <div v-if="tab==='tb'" class="b-card" style="padding:0;overflow:hidden">
+    <div class="b-card-head">
+      <span class="b-card-title">Trial Balance</span>
+      <span v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96">FY {{fyBadge.name}} · {{from}} to {{to}}</span>
+    </div>
+    <div v-if="running" style="padding:20px"><div class="b-shimmer" style="height:80px"></div></div>
+    <template v-else-if="tb">
+      <table class="b-table" v-if="tb.length">
+        <thead>
+          <tr>
+            <th>Account</th>
+            <th class="ta-r">Debit</th>
+            <th class="ta-r">Credit</th>
+            <th class="ta-r">Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-for="r in tb" :key="r.account">
+            <td style="font-weight:500">{{r.account}}</td>
+            <td class="ta-r mono">{{r.debit>0?fmt(r.debit):'—'}}</td>
+            <td class="ta-r mono">{{r.credit>0?fmt(r.credit):'—'}}</td>
+            <td class="ta-r mono fw-700" :class="r.debit-r.credit>=0?'c-accent':'c-red'">{{fmt(Math.abs(r.debit-r.credit))}} {{r.debit-r.credit>=0?'Dr':'Cr'}}</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr style="background:#F8F9FC;font-weight:700">
+            <td>Totals</td>
+            <td class="ta-r mono">{{fmt(tbTotals.dr)}}</td>
+            <td class="ta-r mono">{{fmt(tbTotals.cr)}}</td>
+            <td class="ta-r mono" :class="Math.abs(tbTotals.dr-tbTotals.cr)<0.01?'c-green':'c-red'">
+              {{Math.abs(tbTotals.dr-tbTotals.cr)<0.01?'✓ Balanced':'✗ Diff: '+fmt(Math.abs(tbTotals.dr-tbTotals.cr))}}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      <div v-else class="b-empty">No journal entries found for this period.</div>
+    </template>
+    <div v-else class="b-empty">Click Run Report to compute Trial Balance from journal entries.</div>
+  </div>
+
+  <!-- ── AR Aging ── -->
+  <div v-if="tab==='aging'">
+    <div class="b-card b-card-body">
+      <div style="font-size:16px;font-weight:700;margin-bottom:4px">AR Aging Report</div>
+      <div style="font-size:12px;color:#868E96;margin-bottom:16px">Outstanding receivables as of {{to}}</div>
+      <div v-if="running" class="b-shimmer" style="height:60px"></div>
+      <template v-else-if="aging">
+        <div v-if="agingTotal===0" class="b-empty">No outstanding receivables found.</div>
+        <template v-else>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px">
+            <div v-for="b in aging" :key="b.range" class="rpt-kpi-chip" :style="b.range==='91+ days'?'border-color:#FA5252':''">
+              <div class="rpt-kpi-label">{{b.range}}</div>
+              <div class="rpt-kpi-val" :style="b.range==='91+ days'&&b.total>0?'color:#C92A2A':''">{{fmt(b.total)}}</div>
+              <div style="font-size:11px;color:#868E96;margin-top:2px">{{b.count}} invoice{{b.count!==1?'s':''}}</div>
+            </div>
+          </div>
+          <div style="font-size:12px;font-weight:600;color:#495057;margin-bottom:8px">Aging Distribution</div>
+          <div v-for="b in aging" :key="b.range+'bar'" style="margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
+              <span style="color:#495057;font-weight:500">{{b.range}}</span>
+              <span class="mono fw-600">{{fmt(b.total)}} ({{b.pct}}%)</span>
+            </div>
+            <div style="height:8px;background:#E9ECEF;border-radius:4px;overflow:hidden">
+              <div style="height:100%;border-radius:4px;transition:width .4s"
+                :style="{width:b.pct+'%',background:b.range==='91+ days'?'#FA5252':b.range==='61-90 days'?'#FF922B':b.range==='31-60 days'?'#FCC419':'#51CF66'}"></div>
+            </div>
+          </div>
+          <div class="b-pl-row b-pl-net" style="margin-top:14px">
+            <span>Total Outstanding</span>
+            <span class="mono fw-700 c-red">{{fmt(agingTotal)}}</span>
+          </div>
+        </template>
+      </template>
+      <div v-else class="b-empty">Click Run Report to compute AR aging from invoices.</div>
+    </div>
+  </div>
+
+  <!-- ── GST Summary ── -->
   <div v-if="tab==='gst'" class="b-card" style="padding:0;overflow:hidden">
-    <div class="b-card-head"><span class="b-card-title">GST Summary</span></div>
+    <div class="b-card-head">
+      <span class="b-card-title">GST Summary</span>
+      <span v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96">FY {{fyBadge.name}}</span>
+    </div>
     <div v-if="running" style="padding:20px"><div class="b-shimmer" style="height:60px"></div></div>
     <table v-else-if="gst&&gst.length" class="b-table">
       <thead><tr><th>Tax Type</th><th class="ta-r">Invoice Count</th><th class="ta-r">Total Tax</th></tr></thead>
@@ -8251,10 +11953,34 @@
         { to: "/payments", lbl: "Payments", icon: "pay" },
       ]
     },
-    { section: "REPORTS", items: [{ to: "/reports", lbl: "P & L", icon: "trend" }, { to: "/accounts", lbl: "Balance Sheet", icon: "chart" }] },
-    { section: "", items: [{ to: "/banking", lbl: "Banking", icon: "bank" }] },
+    {
+      section: "ACCOUNTING", items: [
+        { to: "/accounting/chart-of-accounts", lbl: "Chart of Accounts", icon: "coa" },
+        { to: "/accounting/journal-entries", lbl: "Journal Entries", icon: "journal" },
+        { to: "/accounting/opening-balances", lbl: "Opening Balances", icon: "opening" },
+        { to: "/accounting/cost-centers", lbl: "Cost Centers", icon: "costcenter" },
+        { to: "/accounting/fiscal-years", lbl: "Fiscal Years", icon: "fiscal" },
+      ]
+    },
+    {
+      section: "REPORTS", items: [
+        { to: "/reports", lbl: "P & L", icon: "trend" },
+        { to: "/reports/trial-balance", lbl: "Trial Balance", icon: "journal" },
+        { to: "/reports/ar-aging", lbl: "AR Aging", icon: "pay" },
+        { to: "/accounts", lbl: "Balance Sheet", icon: "chart" },
+      ]
+    },
+    {
+      section: "BANKING", items: [
+        { to: "/banking/accounts",       lbl: "Bank Accounts",     icon: "bank"       },
+        { to: "/banking/transactions",   lbl: "Bank Transactions", icon: "pay"        },
+        { to: "/banking/reconciliation", lbl: "Bank Reconciliation",icon: "journal"   },
+        { to: "/banking/cheques",        lbl: "Cheque Management", icon: "creditnote" },
+        { to: "/banking/cash",           lbl: "Cash Management",   icon: "cash"       },
+      ]
+    },
   ];
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", banking: "Banking", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -8459,8 +12185,11 @@
 
   <aside class="b-sidebar">
     <div class="b-brand">
-      <div class="b-brand-icon">B</div>
+      <div class="b-brand-icon" @click="collapsed&&(collapsed=false)" :class="{'b-brand-icon-expand':collapsed}" title="">B</div>
       <div class="b-brand-info"><div class="b-brand-name">Books</div><div class="b-brand-sub">Accounting</div></div>
+      <button v-if="!collapsed" class="b-collapse-top" @click="collapsed=true" title="Collapse sidebar">
+        <span v-html="icon('chevL',15)"></span>
+      </button>
       <button class="b-mob-close" @click="closeMobile" title="Close menu">✕</button>
     </div>
     <nav class="b-nav">
@@ -8475,12 +12204,7 @@
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <!-- AI Automator button removed from sidebar — now a floating FAB -->
-      <button class="b-collapse-btn" @click="collapsed=!collapsed" :title="collapsed?'Expand':'Collapse'">
-        <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
-        <span class="b-nav-label">Collapse</span>
-      </button>
-      <div class="b-user-row" style="margin-top:6px">
+      <div class="b-user-row">
         <div class="b-user-avatar">{{initials}}</div>
         <div class="b-user-info"><div class="b-user-name">{{fullname}}</div><div class="b-user-role">Books Admin</div></div>
       </div>
@@ -8496,6 +12220,10 @@
       <div style="display:flex;align-items:center;gap:12px">
         <button class="b-hamburger" @click="mobileOpen=!mobileOpen" title="Menu">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+        <!-- Expand sidebar button — only shows when sidebar is collapsed -->
+        <button v-if="collapsed" class="b-topbar-expand" @click="collapsed=false" title="Expand sidebar">
+          <span v-html="icon('chevR',15)"></span>
         </button>
         <span class="b-page-title">{{title}}</span>
       </div>
@@ -8678,6 +12406,37 @@
 
   /* ── CSS for modal inputs (injected once) ── */
   const modalCSS = `
+/* ══ Opening Balances ══ */
+.ob-step-dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0}
+.ob-dot-done{background:#3B5BDB;color:#fff}
+.ob-dot-active{background:#3B5BDB;color:#fff;box-shadow:0 0 0 4px rgba(59,91,219,.1)}
+.ob-dot-pending{background:#E8ECF0;color:#868E96}
+.ob-step-lbl{font-size:12px;margin-left:7px;white-space:nowrap;font-weight:500}
+.ob-lbl-done{color:#1A1D23}
+.ob-lbl-active{color:#3B5BDB;font-weight:600}
+.ob-lbl-muted{color:#868E96}
+.ob-step-line{flex:1;height:2px;background:#E8ECF0;margin:0 8px;min-width:16px}
+.ob-line-done{background:#3B5BDB}
+.ob-eq-diff{padding:10px 18px;border-radius:8px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px}
+.ob-eq-ok{background:#EBFBEE;color:#2F9E44;border:1px solid rgba(47,158,68,.2)}
+.ob-eq-err{background:#FFF5F5;color:#C92A2A;border:1px solid rgba(201,42,42,.2)}
+.ob-eq-zero{background:#F8F9FC;color:#868E96;border:1px solid #E2E8F0}
+.ob-acct-row{display:grid;grid-template-columns:1fr 130px 130px;align-items:center;gap:10px;padding:9px 16px;border-bottom:1px solid #F8F9FC}
+.ob-acct-row:last-child{border-bottom:none}
+.ob-acct-row:hover{background:#FAFBFD}
+.ob-bal-input{border:1px solid #CDD5E0;border-radius:6px;padding:6px 10px;font-size:13px;font-family:var(--mono);text-align:right;width:100%;outline:none;color:#1A1D23;background:#fff;transition:border-color .15s}
+.ob-bal-input:focus{border-color:#3B5BDB;box-shadow:0 0 0 3px rgba(59,91,219,.08)}
+.ob-bal-input:disabled{background:#F8F9FC;color:#868E96;cursor:not-allowed}
+.ob-has-val{border-color:#3B5BDB!important;background:#EEF2FF!important}
+.ob-dr-cr-sel{border:1px solid #CDD5E0;border-radius:6px;padding:6px 8px;font-size:12px;outline:none;background:#fff;cursor:pointer;color:#1A1D23;appearance:none;width:100%;transition:border-color .15s;font-family:inherit}
+.ob-dr{border-color:rgba(201,42,42,.4)!important;background:#FFF5F5!important;color:#C92A2A!important}
+.ob-cr{border-color:rgba(47,158,68,.4)!important;background:#F0FBF3!important;color:#2F9E44!important}
+/* ══ Reports ══ */
+.rpt-mode-btn{display:flex;align-items:center;gap:5px;padding:6px 12px;border:none;border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer;background:transparent;color:#6c757d;transition:all .15s;font-family:inherit}
+.rpt-mode-btn.active{background:#fff;color:#1A1D23;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.1)}
+.rpt-kpi-chip{background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:12px 16px;min-width:110px;flex:1}
+.rpt-kpi-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9CA3AF;margin-bottom:4px}
+.rpt-kpi-val{font-size:20px;font-weight:700;color:#1A1D23;font-family:var(--mono);letter-spacing:-.02em}
 /* ══ Recurring Invoices ══ */
 .ri-next-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:20px;font-size:11.5px;font-weight:600}
 .ri-today{background:#fff3e0;color:#e65100}
@@ -8867,6 +12626,15 @@
   padding:5px 6px;border-radius:5px;transition:background .1s;
 }
 .nim-cell:focus{background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.2);}
+select.nim-cell{
+  -webkit-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"),none;
+  background-repeat:no-repeat;background-position:right 7px center;
+  padding-right:26px!important;cursor:pointer;
+  border:1px solid #e5e7eb;border-radius:6px;
+  transition:border-color .15s,box-shadow .15s;
+}
+select.nim-cell:focus{border-color:#2563eb;background-color:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.15);}
 .nim-num{text-align:right;width:80px;}
 .nim-amount{
   font-size:13px;font-weight:600;color:#111827;
@@ -8947,28 +12715,29 @@
 .dn-sum-lbl{font-size:11px;color:#868e96;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .dn-sum-val{font-size:20px;font-weight:700;font-family:monospace}
 .dn-pill{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;border:1px solid #e2e8f0;background:#fff;color:#868e96;cursor:pointer;transition:all .15s}
-.dn-pill:hover{border-color:#e67700;color:#1a1d23}.dn-pill.active{background:rgba(230,119,0,0.1);border-color:#e67700;color:#e67700}
+.dn-pill:hover{border-color:#2563eb;color:#2563eb}.dn-pill.active{background:rgba(37,99,235,0.1);border-color:#2563eb;color:#2563eb}
 .dn-pc{font-size:11px;font-weight:500;padding:1px 6px;border-radius:10px;margin-left:2px}
 .dn-tbl{width:100%;border-collapse:collapse;font-size:13px}
 .dn-tbl th{text-align:left;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#868e96;font-weight:600;white-space:nowrap;background:#f8f9fc}
 .dn-tbl td{padding:11px 14px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
-.dn-dh{background:#e67700;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.dn-dh{background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .dn-dh-title{color:#fff;font-size:16px;font-weight:700}
 .dn-dh-sub{color:rgba(255,255,255,0.7);font-size:12px;margin-top:2px}
 .dn-sec-lbl{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868e96;margin-bottom:10px;margin-top:20px;display:block;padding-top:20px;border-top:1px solid #e2e8f0}
 .dn-sec-lbl:first-child{border-top:none;padding-top:0;margin-top:0}
 .dn-fg{display:grid;gap:14px;margin-bottom:14px}.dn-fg2{grid-template-columns:1fr 1fr}.dn-fg3{grid-template-columns:1fr 1fr 1fr}
 .dn-fi{width:100%;border:1px solid #cdd5e0;border-radius:6px;padding:8px 10px;font-size:13.5px;color:#1a1d23;background:#fff;outline:none;transition:border-color .15s}
-.dn-fi:focus{border-color:#e67700;box-shadow:0 0 0 3px rgba(230,119,0,0.1)}
+.dn-fi:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,0.1)}
 .dn-bill-info{background:#fff3e0;border:1px solid rgba(230,119,0,0.2);border-radius:8px;padding:14px 16px;margin-bottom:16px}
 .dn-itbl{width:100%;border-collapse:collapse}
 .dn-itbl th{padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868e96;border-bottom:1px solid #e8ecf0;background:#fafbfc}
 .dn-itbl td{padding:7px 8px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
 .dn-ci{border:none;outline:none;background:transparent;font-size:13px;color:#1a1d23;width:100%;padding:4px 6px;border-radius:4px}
-.dn-ci:focus{background:#fff3e0;box-shadow:0 0 0 2px rgba(230,119,0,0.15)}
-.dn-totals{background:#fff3e0;border:1px solid rgba(230,119,0,0.15);border-radius:8px;overflow:hidden}
-.dn-t-row{display:flex;justify-content:space-between;padding:9px 16px;font-size:13px;border-bottom:1px solid rgba(230,119,0,0.1)}
-.dn-t-row:last-child{border-bottom:none;font-size:15px;font-weight:700;background:#ffe0b2;color:#e67700}
+.dn-ci:focus{background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
+.dn-sel{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 6px center;padding-right:22px;cursor:pointer;border-radius:5px;border:1px solid #e2e8f0;}
+.dn-totals{background:#f0f5ff;border:1px solid rgba(37,99,235,0.15);border-radius:8px;overflow:hidden}
+.dn-t-row{display:flex;justify-content:space-between;padding:9px 16px;font-size:13px;border-bottom:1px solid rgba(37,99,235,0.08)}
+.dn-t-row:last-child{border-bottom:none;font-size:15px;font-weight:700;background:#dbeafe;color:#1e40af}
 @media(max-width:640px){
   .nim-grid-3{grid-template-columns:1fr 1fr;}
   .nim-grid-2{grid-template-columns:1fr;}
@@ -9019,7 +12788,17 @@
 body:has(.nim-overlay) .ai-fab,
 body:has(.nim-overlay) .ai-panel,
 body:has(.cust-backdrop) .ai-fab,
-body:has(.cust-backdrop) .ai-panel {
+body:has(.cust-backdrop) .ai-panel,
+body:has(.coa-drawer-bg) .ai-fab,
+body:has(.coa-drawer-bg) .ai-panel,
+body:has(.bk-drawer-bg) .ai-fab,
+body:has(.bk-drawer-bg) .ai-panel,
+body:has(.bk-modal-bg) .ai-fab,
+body:has(.bk-modal-bg) .ai-panel,
+body:has(.cc-drawer-open) .ai-fab,
+body:has(.cc-drawer-open) .ai-panel,
+body:has(.fy-drawer-open) .ai-fab,
+body:has(.fy-drawer-open) .ai-panel {
   display:none !important;
 }
 .ai-fab{
@@ -9432,13 +13211,40 @@ body:has(.cust-backdrop) .ai-panel {
 .b-mob-close{display:none;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.5);font-size:16px;margin-left:auto;padding:4px 6px;border-radius:4px;transition:.15s}
 .b-mob-close:hover{color:#fff;background:rgba(255,255,255,.1)}
 .b-mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:49;backdrop-filter:blur(1px)}
+/* Sidebar top collapse toggle */
+.b-collapse-top{
+  background:none;border:none;cursor:pointer;
+  color:rgba(255,255,255,.7);
+  width:28px;height:28px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:6px;flex-shrink:0;margin-left:auto;
+  transition:background .15s,color .15s;
+}
+.b-collapse-top:hover{background:rgba(255,255,255,.15);color:#fff;}
+/* Topbar expand button — shown when sidebar is collapsed */
+.b-topbar-expand{
+  background:none;border:1px solid #e2e8f0;cursor:pointer;
+  color:#64748b;width:30px;height:30px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:6px;flex-shrink:0;
+  transition:background .15s,color .15s,border-color .15s;
+}
+.b-topbar-expand:hover{background:#f1f5f9;color:#1e293b;border-color:#cbd5e1;}
+/* When collapsed: B icon becomes the expand button */
+.b-brand-icon-expand{cursor:pointer!important;position:relative;}
+.b-brand-icon-expand::after{
+  content:'›';position:absolute;bottom:-6px;right:-6px;
+  width:16px;height:16px;background:rgba(255,255,255,.2);
+  border-radius:50%;font-size:11px;line-height:16px;text-align:center;
+  color:#fff;font-weight:700;
+}
+.b-brand-icon-expand:hover{background:rgba(255,255,255,.25)!important;transform:scale(1.07);}
 /* Collapsed */
 .books-root.collapsed .b-brand-info{opacity:0;width:0;pointer-events:none}
 .books-root.collapsed .b-nav-label{opacity:0;width:0;pointer-events:none}
 .books-root.collapsed .b-nav-section{opacity:0;height:0;padding:0;margin:0;overflow:hidden}
 .books-root.collapsed .b-nav-badge{display:none}
 .books-root.collapsed .b-user-info{opacity:0;width:0;overflow:hidden;pointer-events:none}
-.books-root.collapsed .b-collapse-btn{justify-content:center}
 .books-root.collapsed .b-nav-item{justify-content:center;padding:10px}
 .books-root.collapsed .b-nav-icon{margin:0}
 .books-root.collapsed .b-logout-btn{justify-content:center}
@@ -9529,7 +13335,297 @@ body:has(.cust-backdrop) .ai-panel {
   .nim-modal-body,.nim-modal-scroll{padding:10px!important}
   .zb-pdf-paper{padding:10px 8px!important}
 }
+
+/* ══════════════════════════════════════════════════
+   CHART OF ACCOUNTS
+══════════════════════════════════════════════════ */
+.coa-page{display:flex;flex-direction:column;gap:0;padding-bottom:72px}
+.coa-type-strip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:16px}
+.coa-type-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;cursor:pointer;transition:all .15s;border-left:3px solid #e2e8f0}
+.coa-type-card:hover{transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,.06)}
+.coa-type-card.active{transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,.08)}
+.coa-type-lbl{font-size:11px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;margin-bottom:4px}
+.coa-type-val{font-size:18px;font-weight:700;font-family:monospace}
+.coa-type-sub{font-size:11px;color:#868e96;margin-top:2px}
+
+.coa-tbl th{white-space:nowrap}
+.coa-row{cursor:pointer;transition:background .12s}
+.coa-group-row td{background:#fafbfd}
+.coa-group-row:hover td,.coa-leaf-row:hover td{background:#f1f4fd}
+.coa-tree-cell{display:flex;align-items:center;padding:9px 14px;gap:0}
+.coa-toggle{width:18px;height:18px;border-radius:4px;border:none;background:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;color:#868e96;flex-shrink:0;transition:transform .15s;padding:0}
+.coa-toggle.open{transform:rotate(90deg)}
+.coa-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;display:inline-block}
+.coa-acct-name{font-size:13px;flex:1;margin-left:6px}
+.coa-group-chip{font-size:10.5px;font-weight:600;padding:2px 7px;border-radius:10px;margin-left:6px;flex-shrink:0;white-space:nowrap}
+.coa-acct-type{font-family:monospace;font-size:11.5px;color:#868e96;margin-left:8px}
+.coa-dr{color:#c92a2a}
+.coa-cr{color:#2f9e44}
+
+/* COA Drawer */
+.coa-drawer-bg{position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.45);display:flex;justify-content:flex-end}
+.coa-drawer-panel{width:540px;max-width:95vw;height:100%;background:#fff;display:flex;flex-direction:column;transform:none;box-shadow:-20px 0 60px rgba(0,0,0,.15);overflow:hidden}
+.coa-dh{background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.coa-dh-title{color:#fff;font-size:16px;font-weight:700}
+.coa-dh-sub{color:rgba(255,255,255,.7);font-size:12px;margin-top:2px}
+.coa-dclose{background:rgba(255,255,255,.2);border:none;cursor:pointer;width:30px;height:30px;border-radius:6px;color:#fff;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.coa-dclose:hover{background:rgba(255,255,255,.35)}
+.coa-dbody{flex:1;overflow-y:auto;padding:24px}
+.coa-dfooter{padding:16px 24px;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;background:#f8f9fc;flex-shrink:0}
+.coa-sec-lbl{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868e96;margin-bottom:10px;margin-top:20px;display:block;padding-top:20px;border-top:1px solid #e2e8f0}
+.coa-sec-lbl:first-child{border-top:none;padding-top:0;margin-top:0}
+.coa-info-box{background:#eff6ff;border:1px solid rgba(37,99,235,.15);border-radius:8px;padding:12px 14px;font-size:12.5px;color:#2f4ec4;line-height:1.5;margin-bottom:16px;display:flex;align-items:flex-start;gap:8px}
+.coa-fg{display:grid;gap:14px;margin-bottom:14px}
+.coa-fg2{grid-template-columns:1fr 1fr}
+.coa-lbl{display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px}
+.coa-fi{width:100%;border:1px solid #cdd5e0;border-radius:6px;padding:8px 10px;font-size:13.5px;font-family:inherit;color:#1a1d23;background:#fff;outline:none;transition:border-color .15s;-webkit-appearance:none;appearance:none}
+.coa-fi:focus{border-color:#3b5bdb;box-shadow:0 0 0 3px rgba(59,91,219,.1)}
+.coa-fi::placeholder{color:#adb5bd}
+select.coa-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;padding-right:28px}
+
+/* b-icon-btn (shared) */
+.b-icon-btn{background:none;border:1px solid #e2e8f0;border-radius:5px;cursor:pointer;padding:5px 7px;display:inline-flex;color:#868e96;transition:all .15s;line-height:1}
+.b-icon-btn:hover{border-color:#3b5bdb;color:#3b5bdb;background:#eff6ff}
+.b-icon-btn.danger{border-color:rgba(201,42,42,.3);color:#c92a2a}
+.b-icon-btn.danger:hover{background:rgba(201,42,42,.07)}
+
+@media(max-width:900px){.coa-type-strip{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:600px){.coa-type-strip{grid-template-columns:repeat(2,1fr)}.coa-drawer-panel{width:100vw;max-width:100vw}}
+
+/* ══════════════════════════════════════════════════
+   JOURNAL ENTRIES
+══════════════════════════════════════════════════ */
+.jen-page{display:flex;flex-direction:column;padding-bottom:72px}
+.jen-info-banner{background:#eef2ff;border:1px solid rgba(59,91,219,.15);border-radius:8px;padding:11px 16px;margin-bottom:16px;font-size:13px;color:#2f4ec4;display:flex;align-items:center;gap:10px;line-height:1.5}
+.jen-sum-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}
+.jen-sum-card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 18px}
+.jen-sum-lbl{font-size:11px;color:#868e96;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.jen-sum-val{font-size:20px;font-weight:700;font-family:monospace}
+.jen-pill{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;border:1px solid #e2e8f0;background:#fff;color:#868e96;cursor:pointer;transition:all .15s;font-family:inherit}
+.jen-pill:hover{border-color:#3b5bdb;color:#1a1d23}
+.jen-pill.active{background:#eef2ff;border-color:#3b5bdb;color:#3b5bdb}
+.jen-pc{font-size:11px;font-weight:500;padding:1px 6px;border-radius:10px;margin-left:2px}
+.jen-date-input{border:1px solid #e2e8f0;border-radius:6px;padding:5px 8px;font-size:12px;font-family:inherit;color:#1a1d23;background:#fff;outline:none}
+.jen-date-input:focus{border-color:#3b5bdb}
+
+/* JE badge colours */
+.je-type-info{background:#eef2ff;color:#3b5bdb}
+.je-type-muted{background:#f1f3f5;color:#868e96}
+.je-s-draft{background:#f1f3f5;color:#868e96}
+.je-s-submitted{background:#ebfbee;color:#2f9e44}
+.je-s-cancelled{background:#ffe3e3;color:#c92a2a}
+
+/* JE Drawer (wider) */
+.jen-drawer-panel{width:860px;max-width:97vw;height:100%;background:#fff;display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15);overflow:hidden}
+
+/* Template grid */
+.jen-tpl-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:16px}
+.jen-tpl-card{border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;cursor:pointer;transition:all .15s}
+.jen-tpl-card:hover{border-color:#3b5bdb;background:#eef2ff}
+.jen-tpl-card.selected{border-color:#3b5bdb;background:#eef2ff}
+.jen-tpl-name{font-size:13px;font-weight:600;margin-bottom:3px}
+.jen-tpl-desc{font-size:11.5px;color:#868e96;line-height:1.4}
+
+/* fg4 for JE form */
+.jen-fg4{grid-template-columns:1fr 1fr 1fr 1fr}
+
+/* Balance bar */
+.jen-balance-bar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;border:1px solid transparent}
+.jen-bal-ok{background:#ebfbee;border-color:rgba(47,158,68,.2);color:#2f9e44}
+.jen-bal-err{background:#fff5f5;border-color:rgba(201,42,42,.2);color:#c92a2a}
+.jen-bal-zero{background:#f8f9fc;border-color:#e2e8f0;color:#868e96}
+
+/* Add line button */
+.jen-add-line-btn{background:none;border:1px solid;border-radius:6px;padding:5px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px;transition:background .12s}
+
+/* JE Lines table */
+.jen-lines-tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.jen-lines-tbl th{padding:8px 10px;text-align:left;font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868e96;border-bottom:1px solid #e8ecf0;background:#fafbfc;white-space:nowrap}
+.jen-lines-tbl td{padding:5px 6px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
+.jen-total-row td{background:#f0f4ff;border-top:2px solid #e2e8f0}
+.jen-ci{border:none;outline:none;background:transparent;font-family:inherit;font-size:12.5px;color:#1a1d23;width:100%;padding:4px 6px;border-radius:4px;-webkit-appearance:none;appearance:none}
+.jen-ci:focus{background:#eef2ff;box-shadow:0 0 0 2px rgba(59,91,219,.15)}
+select.jen-ci{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 5px center;padding-right:18px;cursor:pointer}
+
+@media(max-width:900px){.jen-sum-strip{grid-template-columns:repeat(2,1fr)}.jen-fg4{grid-template-columns:1fr 1fr}.jen-tpl-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){.jen-drawer-panel{width:100vw;max-width:100vw}.jen-fg4{grid-template-columns:1fr}.jen-tpl-grid{grid-template-columns:1fr}}
+
+/* ── SearchableSelect ─────────────────────────────────────── */
+.ss-wrap{position:relative;width:100%;display:block}
+.ss-trigger{
+  display:flex;align-items:center;justify-content:space-between;gap:6px;
+  width:100%;min-height:36px;padding:7px 10px;
+  border:1px solid #dde1e9;border-radius:8px;
+  background:#fff;cursor:pointer;font-size:13px;color:#1a1d23;
+  box-sizing:border-box;transition:border-color .15s,box-shadow .15s;
+  user-select:none;
+}
+.ss-trigger:hover{border-color:#a5b4fc}
+.ss-trigger.open{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.12)}
+.ss-trigger.ss-disabled{background:#f9fafb;cursor:not-allowed;opacity:.65}
+.ss-trigger.ss-compact{min-height:30px;padding:4px 8px;border-radius:6px;font-size:12px}
+.ss-display{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:left}
+.ss-ph{color:#9ca3af}
+.ss-caret{flex-shrink:0;display:flex;align-items:center;color:#9ca3af;transition:transform .15s}
+.ss-trigger.open .ss-caret{transform:rotate(180deg)}
+.ss-drop{
+  background:#fff;border:1px solid #e2e8f0;border-radius:10px;
+  box-shadow:0 8px 28px rgba(0,0,0,.13);
+  animation:ssDropIn .12s ease;
+  overflow:hidden;
+}
+@keyframes ssDropIn{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
+.ss-search-row{padding:8px;border-bottom:1px solid #f0f2f5}
+.ss-search-input{
+  width:100%;padding:6px 10px;border:1px solid #dde1e9;border-radius:6px;
+  font-size:13px;outline:none;box-sizing:border-box;background:#f9fafc;
+  transition:border-color .15s;
+}
+.ss-search-input:focus{border-color:#4f46e5;background:#fff}
+.ss-opts{max-height:220px;overflow-y:auto}
+.ss-opt{
+  padding:8px 14px;font-size:13px;cursor:pointer;color:#374151;
+  transition:background .1s;border-bottom:1px solid #f7f8fa;
+}
+.ss-opt:last-child{border-bottom:none}
+.ss-opt:hover{background:#f5f7ff;color:#1a1d23}
+.ss-opt.ss-opt-sel{background:#eff6ff;color:#2563eb;font-weight:600}
+.ss-no-match{padding:14px;text-align:center;color:#9ca3af;font-size:13px}
+/* compact variant for table cells */
+.ss-wrap.ss-cell-wrap .ss-trigger{border:none;border-radius:4px;background:transparent;padding:4px 6px;min-height:28px;font-size:12px}
+.ss-wrap.ss-cell-wrap .ss-trigger:hover{background:#f0f2ff}
+.ss-wrap.ss-cell-wrap .ss-trigger.open{background:#f0f2ff;border:1px solid #a5b4fc}
+
+/* ══════════════════════════════════════════════
+   BANKING MODULE — .bk-* styles
+══════════════════════════════════════════════ */
+/* Hero banner */
+.bk-hero{background:linear-gradient(135deg,#1a3a6b 0%,#2563eb 60%,#1e40af 100%);border-radius:16px;padding:32px 36px;color:#fff;display:flex;align-items:center;gap:36px;flex-wrap:wrap;margin-bottom:24px}
+.bk-hero-lbl{font-size:12px;font-weight:600;letter-spacing:.08em;opacity:.75;text-transform:uppercase;margin-bottom:4px}
+.bk-hero-val{font-size:36px;font-weight:800;letter-spacing:-.5px;line-height:1}
+.bk-hero-sub{font-size:13px;opacity:.7;margin-top:6px}
+.bk-hero-chips{display:flex;gap:12px;flex-wrap:wrap;margin-left:auto}
+.bk-hero-chip{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.18);border-radius:12px;padding:12px 20px;min-width:110px}
+.bk-hc-lbl{font-size:11px;opacity:.7;font-weight:600;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+.bk-hc-val{font-size:18px;font-weight:700}
+/* Account cards grid */
+.bk-acct-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px;margin-bottom:24px}
+.bk-acct-card{background:#fff;border:1px solid #e8eaf0;border-radius:14px;padding:20px;cursor:pointer;transition:box-shadow .15s,transform .15s;position:relative;overflow:hidden}
+.bk-acct-card:hover{box-shadow:0 6px 24px rgba(0,0,0,.1);transform:translateY(-2px)}
+.bk-acct-hdr{display:flex;align-items:flex-start;gap:12px;margin-bottom:16px}
+.bk-acct-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+.bk-acct-name{font-size:14px;font-weight:700;color:#1a1d23;line-height:1.2}
+.bk-acct-bank{font-size:12px;color:#868e96;margin-top:3px}
+.bk-acct-num{font-size:12px;color:#adb5bd;font-family:monospace;margin-top:2px}
+.bk-acct-bal{font-size:22px;font-weight:800;color:#1a1d23;margin-bottom:4px}
+.bk-acct-footer{display:flex;align-items:center;justify-content:space-between;margin-top:14px;padding-top:12px;border-top:1px solid #f1f3f5;font-size:12px;color:#868e96}
+.bk-add-card{border:2px dashed #d0d5e8;background:#f9faff;border-radius:14px;padding:20px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:160px;color:#6c7296;transition:border-color .15s,background .15s;gap:8px;font-size:13px;font-weight:600}
+.bk-add-card:hover{border-color:#4f46e5;background:#f0f0ff;color:#4f46e5}
+/* Reconciliation bar */
+.bk-rec-bar{background:#f1f5f9;border-radius:4px;height:6px;overflow:hidden;margin-top:8px}
+.bk-rec-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#22c55e,#16a34a);transition:width .4s}
+/* Summary strip */
+.bk-sum-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:20px}
+.bk-sum-card{background:#fff;border:1px solid #e8eaf0;border-radius:12px;padding:14px 16px}
+.bk-sum-lbl{font-size:11px;font-weight:600;color:#868e96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+.bk-sum-val{font-size:18px;font-weight:800;color:#1a1d23}
+/* Pills / filters */
+.bk-pill{padding:5px 13px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #dde1e9;background:#fff;cursor:pointer;color:#555;transition:all .15s}
+.bk-pill.active{background:#4f46e5;color:#fff;border-color:#4f46e5}
+.bk-pill:hover:not(.active){background:#f0f0ff;border-color:#a5b4fc;color:#4f46e5}
+.bk-pc{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0}
+/* Transaction row chip */
+.bk-txn-row td{padding:10px 12px;border-bottom:1px solid #f5f7fa;vertical-align:middle;font-size:13px}
+.bk-txn-row:hover td{background:#f9faff}
+/* Drawer */
+.bk-drawer-bg{position:fixed;inset:0;background:rgba(15,23,42,.45);z-index:9000;display:flex;justify-content:flex-end;backdrop-filter:blur(2px)}
+.bk-drawer-panel{width:520px;max-width:95vw;height:100%;background:#fff;box-shadow:-20px 0 60px rgba(0,0,0,.15);display:flex;flex-direction:column}
+.bk-drawer-slide-enter-active,.bk-drawer-slide-leave-active{transition:transform .25s cubic-bezier(.4,0,.2,1)}
+.bk-drawer-slide-enter-from,.bk-drawer-slide-leave-to{transform:translateX(100%)}
+.bk-drawer-fade-enter-active,.bk-drawer-fade-leave-active{transition:opacity .2s}
+.bk-drawer-fade-enter-from,.bk-drawer-fade-leave-to{opacity:0}
+.bk-dh{display:flex;align-items:center;justify-content:space-between;padding:18px 24px;background:linear-gradient(135deg,#2563eb,#4f46e5);flex-shrink:0}
+.bk-dh-left{display:flex;align-items:center;gap:12px}
+.bk-dh-icon{width:36px;height:36px;border-radius:9px;background:rgba(255,255,255,.18);display:grid;place-items:center;color:#fff;flex-shrink:0}
+.bk-dh h3{margin:0;font-size:16px;font-weight:700;color:#fff;letter-spacing:-.01em}
+.bk-dh-sub{font-size:11.5px;color:rgba(255,255,255,.6);margin-top:2px}
+.bk-d-close{background:rgba(255,255,255,.15);border:none;cursor:pointer;color:#fff;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;transition:.15s}
+.bk-d-close:hover{background:rgba(255,255,255,.28)}
+.bk-d-body{flex:1;overflow-y:auto;padding:22px 24px}
+.bk-d-footer{padding:16px 24px;border-top:1px solid #f0f2f5;display:flex;gap:10px;justify-content:flex-end;flex-shrink:0;background:#fafbfd}
+/* Form layout helpers */
+.bk-sec-lbl{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin:20px 0 10px;display:block;border-bottom:1px solid #f0f2f5;padding-bottom:8px}
+.bk-sec-lbl:first-child{margin-top:0}
+/* .bk-fl = field label (on <label> elements), .bk-fi = field input (on <input>/<select> elements) */
+.bk-fl{font-size:10.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:5px;display:block}
+.bk-fi{width:100%;padding:8px 12px;border:1.5px solid #e2e8f0;border-radius:8px;font-size:13px;font-family:inherit;background:#fff;color:#1a1d23;outline:none;box-sizing:border-box;transition:border-color .15s,box-shadow .15s;appearance:none}
+.bk-fi:focus{border-color:#3b5bdb;box-shadow:0 0 0 3px rgba(59,91,219,.1)}
+.bk-fi::placeholder{color:#adb5bd}
+select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:28px;cursor:pointer}
+.bk-fg{display:grid;gap:14px}
+/* Modal overlay */
+.bk-modal-bg{position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:9100;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(3px)}
+.bk-modal-box{background:#fff;border-radius:16px;padding:28px;width:400px;max-width:94vw;box-shadow:0 24px 80px rgba(0,0,0,.22);animation:bkModalIn .18s ease}
+@keyframes bkModalIn{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+.bk-modal-box h4{font-size:17px;font-weight:700;margin:0 0 8px;color:#1a1d23}
+.bk-modal-box p{font-size:13.5px;color:#6b7280;line-height:1.6;margin:0 0 22px}
+/* Category grid (12-cell) */
+.bk-cat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
+.bk-cat-cell{border:1.5px solid #e8eaf0;border-radius:10px;padding:10px 6px;cursor:pointer;text-align:center;font-size:11px;font-weight:600;color:#374151;transition:all .15s;background:#fff}
+.bk-cat-cell:hover{border-color:#a5b4fc;background:#f5f3ff;color:#4f46e5}
+.bk-cat-cell.active{border-color:#4f46e5;background:#ede9fe;color:#4f46e5}
+.bk-cat-cell .bk-cat-ico{font-size:20px;display:block;margin-bottom:4px}
+/* Cheque / Cash tabs */
+.bk-tab-bar{display:flex;border-bottom:2px solid #e8eaf0;margin-bottom:20px;gap:0}
+.bk-tab-btn{padding:9px 20px;font-size:13px;font-weight:600;color:#868e96;border:none;background:none;cursor:pointer;border-bottom:3px solid transparent;margin-bottom:-2px;transition:color .15s,border-color .15s}
+.bk-tab-btn.active{color:#4f46e5;border-bottom-color:#4f46e5}
+/* Cheque badge variants */
+.bk-badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.03em}
+.bk-badge-issued{background:#dbeafe;color:#1d4ed8}
+.bk-badge-received{background:#dcfce7;color:#166534}
+.bk-badge-cleared{background:#f0fdf4;color:#15803d}
+.bk-badge-bounced{background:#fee2e2;color:#b91c1c}
+.bk-badge-void{background:#f3f4f6;color:#6b7280}
+.bk-badge-presented{background:#fef9c3;color:#854d0e}
+/* Reconciliation panels */
+.bk-recon-cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.bk-recon-panel{border:1px solid #e8eaf0;border-radius:12px;padding:16px;background:#fff}
+.bk-recon-panel h4{margin:0 0 12px;font-size:13px;font-weight:700;color:#374151}
+.bk-recon-item{display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;border:1.5px solid transparent;margin-bottom:6px;transition:all .15s}
+.bk-recon-item:hover{background:#f5f7ff;border-color:#a5b4fc}
+.bk-recon-item.selected{background:#ede9fe;border-color:#4f46e5;color:#4f46e5}
+/* Cash denomination counter */
+.bk-denom-grid{display:grid;gap:8px}
+.bk-denom-row{display:grid;grid-template-columns:80px 1fr 120px 100px;align-items:center;gap:10px;padding:8px 12px;border-radius:10px;background:#fff;border:1px solid #f0f2f5}
+.bk-denom-note{font-size:13px;font-weight:700;color:#374151}
+.bk-denom-ctrl{display:flex;align-items:center;gap:8px}
+.bk-denom-btn{width:28px;height:28px;border-radius:8px;border:1.5px solid #dde1e9;background:#fff;cursor:pointer;font-size:16px;font-weight:700;color:#374151;display:flex;align-items:center;justify-content:center;transition:all .15s}
+.bk-denom-btn:hover{border-color:#4f46e5;color:#4f46e5;background:#f5f3ff}
+.bk-denom-inp{width:52px;border:1.5px solid #dde1e9;border-radius:8px;padding:4px 8px;font-size:13px;font-weight:600;text-align:center;outline:none}
+.bk-denom-inp:focus{border-color:#4f46e5}
+.bk-denom-sub{font-size:12px;color:#868e96;font-style:italic}
+.bk-denom-tot{font-size:13px;font-weight:700;color:#1a1d23;text-align:right}
+/* Balance panel (book vs bank) */
+.bk-bal-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+.bk-bal-card{border-radius:12px;padding:18px;text-align:center}
+.bk-bal-card.book{background:#eff6ff;border:1.5px solid #bfdbfe}
+.bk-bal-card.bank{background:#f0fdf4;border:1.5px solid #bbf7d0}
+.bk-bal-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px;opacity:.7}
+.bk-bal-amt{font-size:26px;font-weight:800;color:#1a1d23}
+.bk-bal-diff{font-size:13px;font-weight:600;margin-top:6px}
+/* Cash hero cards */
+.bk-cash-hero{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px;margin-bottom:24px}
+.bk-cash-card{border-radius:14px;padding:20px;color:#fff}
+.bk-cash-card.green{background:linear-gradient(135deg,#059669,#10b981)}
+.bk-cash-card.blue{background:linear-gradient(135deg,#2563eb,#3b82f6)}
+.bk-cash-card.red{background:linear-gradient(135deg,#dc2626,#ef4444)}
+.bk-cash-lbl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;opacity:.8;margin-bottom:6px}
+.bk-cash-val{font-size:24px;font-weight:800}
+.bk-cash-sub{font-size:11px;opacity:.7;margin-top:4px}
+@media(max-width:900px){.bk-recon-cols{grid-template-columns:1fr}.bk-acct-grid{grid-template-columns:1fr}.bk-bal-grid{grid-template-columns:1fr}.bk-cash-hero{grid-template-columns:1fr 1fr}}
+@media(max-width:600px){.bk-drawer-panel{width:100vw;max-width:100vw}.bk-cat-grid{grid-template-columns:repeat(3,1fr)}.bk-denom-row{grid-template-columns:70px 1fr 100px 80px}}
 `;
+
 
   if (!document.getElementById("books-modal-css")) {
     const s = document.createElement("style"); s.id = "books-modal-css"; s.textContent = modalCSS;
@@ -9930,9 +14026,21 @@ body:has(.cust-backdrop) .ai-panel {
       { path: "/purchases", component: Purchases, name: "purchases" },
       { path: "/debit-notes", component: DebitNotes, name: "debit-notes" },
       { path: "/payments", component: Payments, name: "payments" },
-      { path: "/banking", component: Banking, name: "banking" },
+      { path: "/banking",                   redirect: "/banking/accounts" },
+      { path: "/banking/accounts",          component: BankAccounts,      name: "bank-accounts"      },
+      { path: "/banking/transactions",      component: BankTransactions,  name: "bank-transactions"  },
+      { path: "/banking/reconciliation",    component: BankReconciliation,name: "bank-reconciliation"},
+      { path: "/banking/cheques",           component: ChequeManagement,  name: "cheque-management"  },
+      { path: "/banking/cash",              component: CashManagement,    name: "cash-management"    },
       { path: "/accounts", component: Accounts, name: "accounts" },
       { path: "/reports", component: Reports, name: "reports" },
+      { path: "/reports/trial-balance", component: Reports, name: "trial-balance", props: { defaultTab: "tb" } },
+      { path: "/reports/ar-aging", component: Reports, name: "ar-aging", props: { defaultTab: "aging" } },
+      { path: "/accounting/chart-of-accounts", component: ChartOfAccounts, name: "chart-of-accounts" },
+      { path: "/accounting/journal-entries", component: JournalEntries, name: "journal-entries" },
+      { path: "/accounting/opening-balances", component: OpeningBalances, name: "opening-balances" },
+      { path: "/accounting/cost-centers", component: CostCenters, name: "cost-centers" },
+      { path: "/accounting/fiscal-years", component: FiscalYears, name: "fiscal-years" },
     ]
   });
 
@@ -10011,7 +14119,7 @@ body:has(.cust-backdrop) .ai-panel {
   }
 
   bootstrapCsrf().then(() => {
-    createApp(App).use(router).mount("#books-app");
+    createApp(App).use(router).component("SearchableSelect", SearchableSelect).mount("#books-app");
   });
 
 })();

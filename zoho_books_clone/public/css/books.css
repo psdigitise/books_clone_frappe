@@ -371,6 +371,25 @@ input[type=date].b-input { color-scheme: light; }
 .b-mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);
   z-index:49;backdrop-filter:blur(1px);}
 
+/* ══ Top collapse toggle (desktop only) ══ */
+.b-collapse-top{
+  background:none;border:none;cursor:pointer;
+  color:rgba(255,255,255,.7);
+  width:28px;height:28px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:6px;flex-shrink:0;margin-left:auto;
+  transition:background .15s,color .15s;
+}
+.b-collapse-top:hover{background:rgba(255,255,255,.15);color:#fff;}
+/* When collapsed: B icon becomes expand trigger */
+.b-brand-icon-expand{cursor:pointer!important;position:relative;}
+.b-brand-icon-expand::after{
+  content:'›';position:absolute;bottom:-6px;right:-6px;
+  width:16px;height:16px;background:rgba(255,255,255,.2);
+  border-radius:50%;font-size:11px;line-height:16px;text-align:center;
+  color:#fff;font-weight:700;
+}
+.b-brand-icon-expand:hover{background:rgba(255,255,255,.25)!important;transform:scale(1.07);}
 /* ══ Additional collapsed fixes ══ */
 .books-root.collapsed .b-brand-info{opacity:0;width:0;pointer-events:none;}
 .books-root.collapsed .b-nav-label{opacity:0;width:0;pointer-events:none;}
@@ -378,7 +397,6 @@ input[type=date].b-input { color-scheme: light; }
 .books-root.collapsed .b-nav-badge{display:none;}
 .books-root.collapsed .b-nav-item{justify-content:center;padding:10px;}
 .books-root.collapsed .b-nav-icon{margin:0;}
-.books-root.collapsed .b-collapse-btn{justify-content:center;}
 
 /* ══ Tablet (≤ 900px) ══ */
 @media (max-width:900px){
@@ -393,6 +411,7 @@ input[type=date].b-input { color-scheme: light; }
   /* Shell */
   .b-hamburger{display:inline-flex!important;}
   .b-mob-close{display:block!important;}
+  .b-collapse-top{display:none!important;}
   .books-root{grid-template-columns:1fr!important;}
   .b-sidebar{
     position:fixed;left:-260px;top:0;bottom:0;z-index:50;

@@ -200,6 +200,7 @@ def get_bank_balance(bank_account: str) -> float:
 
 # ── Reports ───────────────────────────────────────────────────────────────────
 
+@frappe.whitelist()
 def get_profit_and_loss(company: str, from_date: str, to_date: str) -> dict:
     """Return income, expense, and net profit totals."""
     rows = frappe.db.sql("""
@@ -224,6 +225,7 @@ def get_profit_and_loss(company: str, from_date: str, to_date: str) -> dict:
     }
 
 
+@frappe.whitelist()
 def get_balance_sheet_totals(company: str, as_of_date: str) -> dict:
     """Asset, liability, equity totals as of a date."""
     rows = frappe.db.sql("""
@@ -246,6 +248,7 @@ def get_balance_sheet_totals(company: str, as_of_date: str) -> dict:
     }
 
 
+@frappe.whitelist()
 def get_cash_flow(company: str, from_date: str, to_date: str) -> dict:
     """Simplified cash-flow: operating (P&L accounts) + financing (equity) + investing (assets)."""
     rows = frappe.db.sql("""
@@ -273,6 +276,7 @@ def get_cash_flow(company: str, from_date: str, to_date: str) -> dict:
 
 # ── Tax ───────────────────────────────────────────────────────────────────────
 
+@frappe.whitelist()
 def get_gst_summary(company: str, from_date: str, to_date: str) -> list[dict]:
     """GST collected by tax type (CGST, SGST, IGST) for a period."""
     return frappe.db.sql("""
@@ -288,3 +292,178 @@ def get_gst_summary(company: str, from_date: str, to_date: str) -> list[dict]:
         GROUP BY t.tax_type
         ORDER BY t.tax_type
     """, {"company": company, "from_date": from_date, "to_date": to_date}, as_dict=True)
+
+
+@frappe.whitelist()
+def get_trial_balance(company: str, from_date: str, to_date: str) -> list[dict]:
+    """Account-wise debit/credit totals for a period (trial balance)."""
+    rows = frappe.db.sql("""
+        SELECT
+            g.account,
+            COALESCE(SUM(g.debit),  0) AS debit,
+            COALESCE(SUM(g.credit), 0) AS credit
+        FROM `tabGeneral Ledger Entry` g
+        WHERE g.company      = %(company)s
+          AND g.docstatus     = 1
+          AND g.posting_date BETWEEN %(from_date)s AND %(to_date)s
+        GROUP BY g.account
+        ORDER BY g.account
+    """, {"company": company, "from_date": from_date, "to_date": to_date}, as_dict=True)
+    return [{"account": r.account, "debit": flt(r.debit), "credit": flt(r.credit)} for r in rows]
+
+
+@frappe.whitelist()
+def get_ar_aging(company: str, as_of_date: str) -> list[dict]:
+    """AR Aging: buckets outstanding sales invoices by days past due date."""
+    rows = frappe.db.sql("""
+        SELECT name, customer, due_date, posting_date, outstanding_amount
+        FROM `tabSales Invoice`
+        WHERE company     = %(company)s
+          AND docstatus    = 1
+          AND outstanding_amount > 0
+    """, {"company": company}, as_dict=True)
+
+    as_of = getdate(as_of_date)
+    buckets = {
+        "0-30 days":  {"range": "0-30 days",  "count": 0, "total": 0.0},
+        "31-60 days": {"range": "31-60 days", "count": 0, "total": 0.0},
+        "61-90 days": {"range": "61-90 days", "count": 0, "total": 0.0},
+        "91+ days":   {"range": "91+ days",   "count": 0, "total": 0.0},
+    }
+    grand_total = 0.0
+    for r in rows:
+        due = getdate(r.due_date or r.posting_date or as_of_date)
+        days = max(0, (as_of - due).days)
+        amt  = flt(r.outstanding_amount)
+        grand_total += amt
+        bk = "0-30 days" if days <= 30 else "31-60 days" if days <= 60 else "61-90 days" if days <= 90 else "91+ days"
+        buckets[bk]["count"] += 1
+        buckets[bk]["total"] += amt
+
+    result = list(buckets.values())
+    for b in result:
+        b["pct"] = round(b["total"] / grand_total * 100) if grand_total > 0 else 0
+    return result
+
+
+@frappe.whitelist()
+def get_pl_monthly_breakdown(company: str, from_date: str, to_date: str) -> list[dict]:
+    """Monthly income / expense / net-profit breakdown within a date range."""
+    rows = frappe.db.sql("""
+        SELECT
+            DATE_FORMAT(g.posting_date, '%%b %%y')  AS label,
+            DATE_FORMAT(g.posting_date, '%%Y-%%m')  AS ym,
+            a.account_type,
+            COALESCE(SUM(g.credit) - SUM(g.debit), 0) AS amount
+        FROM `tabGeneral Ledger Entry` g
+        JOIN `tabAccount` a ON a.name = g.account
+        WHERE g.company      = %(company)s
+          AND g.docstatus     = 1
+          AND g.posting_date BETWEEN %(from_date)s AND %(to_date)s
+          AND a.account_type IN ('Income', 'Expense')
+        GROUP BY ym, a.account_type
+        ORDER BY ym
+    """, {"company": company, "from_date": from_date, "to_date": to_date}, as_dict=True)
+
+    periods: dict = {}
+    for r in rows:
+        key = r.ym
+        if key not in periods:
+            periods[key] = {"label": r.label, "income": 0.0, "expense": 0.0}
+        if r.account_type == "Income":
+            periods[key]["income"] += flt(r.amount)
+        else:
+            # Expense amount is (credit - debit), so positive means more debit = actual expense
+            periods[key]["expense"] += abs(flt(r.amount))
+
+    result = []
+    for key in sorted(periods.keys()):
+        p = periods[key]
+        result.append({
+            "label":   p["label"],
+            "income":  p["income"],
+            "expense": p["expense"],
+            "profit":  p["income"] - p["expense"],
+        })
+    return result
+
+
+# ── Banking ───────────────────────────────────────────────────────────────────
+
+@frappe.whitelist()
+def get_bank_accounts(company: str | None = None) -> list[dict]:
+    """Return Bank Account records from Frappe."""
+    filters = {}
+    if company:
+        filters["company"] = company
+    rows = frappe.get_list(
+        "Bank Account",
+        filters=filters,
+        fields=["name", "bank", "bank_account_no", "branch_code", "account",
+                "currency", "is_default", "disabled"],
+        limit=200,
+        order_by="is_default desc, name asc",
+    )
+    return rows
+
+
+@frappe.whitelist()
+def get_bank_transactions(
+    bank_account: str | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> list[dict]:
+    """Return Bank Transactions with optional filters."""
+    filters = {"docstatus": ["!=", 2]}
+    if bank_account:
+        filters["bank_account"] = bank_account
+    if from_date:
+        filters["date"] = [">=", from_date]
+    if to_date:
+        if "date" in filters:
+            filters["date"] = ["between", [from_date, to_date]]
+        else:
+            filters["date"] = ["<=", to_date]
+    rows = frappe.get_list(
+        "Bank Transaction",
+        filters=filters,
+        fields=["name", "date", "bank_account", "description", "deposit",
+                "withdrawal", "currency", "reference_number", "party_type",
+                "party", "docstatus", "unallocated_amount"],
+        limit=500,
+        order_by="date desc",
+    )
+    return rows
+
+
+@frappe.whitelist()
+def reconcile_bank_account(
+    bank_account: str,
+    statement_date: str,
+    statement_closing_balance: float,
+    matched_transaction_names: str = "[]",
+) -> dict:
+    """
+    Mark a set of Bank Transactions as reconciled for a given statement date.
+    `matched_transaction_names` — JSON array of Bank Transaction names.
+    Returns summary dict with reconciled count and closing balance.
+    """
+    import json
+    names = json.loads(matched_transaction_names)
+    reconciled = 0
+    for name in names:
+        try:
+            doc = frappe.get_doc("Bank Transaction", name)
+            if doc.docstatus == 1 and not doc.get("clearance_date"):
+                doc.clearance_date = statement_date
+                doc.save(ignore_permissions=True)
+                reconciled += 1
+        except Exception:
+            pass
+    frappe.db.commit()
+    return {
+        "bank_account": bank_account,
+        "statement_date": statement_date,
+        "statement_closing_balance": flt(statement_closing_balance),
+        "reconciled_count": reconciled,
+    }

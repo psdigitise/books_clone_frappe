@@ -556,7 +556,7 @@
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
               <td>
                 <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                  <option value="" disabled>Item name</option>
+                  <option value="" disabled selected>— Select Item —</option>
                   <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                 </select>
               </td>
@@ -1227,7 +1227,7 @@
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
               <td>
                 <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                  <option value="" disabled>Item name</option>
+                  <option value="" disabled selected>— Select Item —</option>
                   <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                 </select>
               </td>
@@ -2743,7 +2743,7 @@
                 <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
                 <td>
                   <select v-model="item.item_name" class="zb-cell-input" @change="onItemPick(item)" style="padding-left:8px;background:transparent;min-height:32px">
-                    <option value="" disabled>Item name</option>
+                    <option value="" disabled selected>— Select Item —</option>
                     <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                   </select>
                 </td>
@@ -4205,7 +4205,7 @@
               <div class="nim-table-wrap nim-mb">
                 <table class="nim-table">
                   <thead><tr>
-                    <th style="width:28%">Item / Service</th>
+                    <th style="width:28%">Item / Service </th>
                     <th style="width:25%">Description</th>
                     <th style="width:10%;text-align:center">Qty</th>
                     <th style="width:16%;text-align:right">Rate (₹)</th>
@@ -4216,7 +4216,7 @@
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
                         <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                          <option value="" disabled>Item / Service</option>
+                          <option value="" disabled selected>— Select Item —</option>
                           <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                         </select>
                       </td>
@@ -4859,7 +4859,7 @@
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
                         <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                          <option value="" disabled>Item / Service</option>
+                          <option value="" disabled selected>— Select Item —</option>
                           <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                         </select>
                       </td>
@@ -5499,7 +5499,7 @@
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
                         <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
-                          <option value="" disabled>Item / Service</option>
+                          <option value="" disabled selected>— Select Item —</option>
                           <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                         </select>
                       </td>
@@ -5975,10 +5975,9 @@
                   <th style="width:14%;text-align:right">Amount</th>
                   <th style="width:4%"></th>
                 </tr></thead>
-                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr" :style="!item.item_name ? 'background:#fff5f5' : ''">
+                <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                   <td>
-                    <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)" required
-                      :style="!item.item_name ? 'border:1.5px solid #e03131;color:#9ca3af;font-style:italic' : 'color:#1a1d23'">
+                    <select v-model="item.item_name" class="nim-cell" @change="onItemPick(item)">
                       <option value="" disabled selected>— Select Item —</option>
                       <option v-for="it in allItems" :key="it.name" :value="it.item_name">{{it.item_name}}</option>
                     </select>
@@ -7701,7 +7700,7 @@
         { val: "Other", lbl: "Other" }
       ];
 
-      const list = ref([]), vendors = ref([]), allBills = ref([]), loading = ref(true);
+      const list = ref([]), vendors = ref([]), allBills = ref([]), allItems = ref([]), loading = ref(true);
       const search = ref(""), activeFilter = ref("all");
       const showDrawer = ref(false), drawerMode = ref("add"), saving = ref(false);
       const viewNote = ref(null), editingName = ref(null);
@@ -7753,6 +7752,7 @@
         try {
           vendors.value = await apiList("Supplier", { fields: ["name", "supplier_name"], filters: [["disabled", "=", 0]], order: "supplier_name asc", limit: 300 });
           allBills.value = await apiList("Purchase Invoice", { fields: ["name", "supplier", "posting_date", "grand_total", "outstanding_amount"], filters: [["docstatus", "=", 1]], order: "posting_date desc", limit: 300 });
+          try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
         } catch (e) { console.error("Load failed", e); }
         finally { loading.value = false; }
       }
@@ -7782,10 +7782,20 @@
         form.items.forEach(r => { r.amount = flt(flt(r.qty) * flt(r.rate)); });
         form.debit_amount = form.items.reduce((s, r) => s + r.amount, 0);
       }
+      function onDnItemPick(row) {
+        const match = allItems.value.find(it => it.item_name === row.item_name);
+        if (match) {
+          if (!row.description) row.description = match.description || match.item_name || "";
+          row.rate = flt(match.standard_rate) || row.rate;
+          recalc();
+        }
+      }
 
       async function saveNote(status) {
         if (!form.vendor) { toast("Select a vendor", "error"); return; }
         if (!form.reason) { toast("Select a reason", "error"); return; }
+        const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
+        if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
         if (form.debit_amount <= 0) { toast("Amount must be > 0", "error"); return; }
 
         saving.value = true;
@@ -7815,23 +7825,23 @@
 
       onMounted(load);
       return {
-        list, vendors, allBills, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
+        list, vendors, allBills, allItems, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
         showDrawer, drawerMode, form, saving, viewNote, REASONS,
-        openAdd, openView, openEdit, addRow, removeRow, recalc, saveNote,
+        openAdd, openView, openEdit, addRow, removeRow, recalc, onDnItemPick, saveNote,
         showDelete, deleteTarget, confirmDelete, doDelete, applyDebit,
         fmt, fmtDate, flt, icon
       };
     },
     template: `
 <div class="b-page">
-  <div style="background:#fff3e0;border:1px solid rgba(230,119,0,0.2);border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13.3px;color:#495057">
+  <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px;font-size:13.3px;color:#1e40af">
     <span style="font-size:18px">ℹ️</span>
     <span>A <b>Debit Note</b> reduces an outstanding purchase bill — use it when you return goods to a vendor or were overcharged. It debits your Accounts Payable.</span>
   </div>
 
   <div class="dn-sum-strip">
     <div class="dn-sum-card"><div class="dn-sum-lbl">Total Notes</div><div class="dn-sum-val">{{summary.total}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#e67700">Total Debit Raised</div><div class="dn-sum-val" style="color:#e67700">{{fmt(summary.issued)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#2563eb">Total Debit Raised</div><div class="dn-sum-val" style="color:#2563eb">{{fmt(summary.issued)}}</div></div>
     <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#d97706">Pending Application</div><div class="dn-sum-val" style="color:#d97706">{{fmt(summary.pending)}}</div></div>
     <div class="dn-sum-card"><div class="dn-sum-lbl" style="color:#16a34a">Applied to Bills</div><div class="dn-sum-val" style="color:#16a34a">{{fmt(summary.applied)}}</div></div>
   </div>
@@ -7886,9 +7896,9 @@
               <div><div class="dn-dh-title">{{drawerMode==='add'?'New Debit Note':drawerMode==='edit'?'Edit Debit Note':'Debit Note Details'}}</div><div class="dn-dh-sub" v-if="form.name">{{form.name}}</div></div>
               <button class="nim-close" @click="showDrawer=false" style="color:#fff" v-html="icon('x',16)"></button>
             </div>
-            <div class="nim-body">
+            <div class="nim-body" style="background-color: #f5f5f5;">
               <template v-if="drawerMode==='view'">
-                <div class="dn-sec-lbl">Debit Note Information</div>
+                <div class="dn-sec-lbl" >Debit Note Information</div>
                 <div class="dn-fg dn-fg2">
                    <div><div class="c-muted" style="font-size:11px">Vendor</div><div class="fw-700">{{viewNote.vendor}}</div></div>
                    <div><div class="c-muted" style="font-size:11px">Date</div><div class="fw-700">{{fmtDate(viewNote.date)}}</div></div>
@@ -7924,7 +7934,7 @@
                 </div>
 
                 <div v-if="selectedBillDetails" class="dn-bill-info">
-                  <div style="font-size:11.5px;font-weight:700;color:#e67700;text-transform:uppercase;margin-bottom:8px">Original Bill Details</div>
+                  <div style="font-size:11.5px;font-weight:700;color:#2563eb;text-transform:uppercase;margin-bottom:8px">Original Bill Details</div>
                   <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                     <div><div style="font-size:11px;color:#868e96">Date</div><div style="font-size:13px;font-weight:600">{{fmtDate(selectedBillDetails.posting_date)}}</div></div>
                     <div><div style="font-size:11px;color:#868e96">Grand Total</div><div style="font-size:13px;font-weight:600">{{fmt(selectedBillDetails.grand_total)}}</div></div>
@@ -7943,12 +7953,17 @@
                 <div class="dn-fg" style="grid-template-columns:1fr"><label class="fl">Notes</label><textarea v-model="form.notes" class="dn-fi" rows="2" placeholder="Details about return..."></textarea></div>
 
                 <span class="dn-sec-lbl">Items Being Returned / Debited</span>
-                <div style="border:1px solid #ffe0b2;border-radius:8px;overflow:hidden;margin-bottom:16px">
+                <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-bottom:16px">
                   <table class="dn-itbl">
                     <thead><tr><th style="width:30%">Item</th><th>Description</th><th style="width:80px;text-align:center">Qty</th><th style="width:120px;text-align:right">Rate</th><th style="width:120px;text-align:right">Amount</th><th style="width:40px"></th></tr></thead>
                     <tbody>
                       <tr v-for="(it,i) in form.items" :key="i">
-                        <td><input v-model="it.item_name" class="dn-ci" placeholder="Item..."/></td>
+                        <td>
+                          <select v-model="it.item_name" class="dn-ci dn-sel" @change="onDnItemPick(it)">
+                            <option value="" disabled selected>— Select Item —</option>
+                            <option v-for="dnit in allItems" :key="dnit.name" :value="dnit.item_name">{{dnit.item_name}}</option>
+                          </select>
+                        </td>
                         <td><input v-model="it.description" class="dn-ci" placeholder="Desc..."/></td>
                         <td><input v-model.number="it.qty" type="number" class="dn-ci ta-c" @input="recalc"/></td>
                         <td><input v-model.number="it.rate" type="number" class="dn-ci ta-r" @input="recalc"/></td>
@@ -7957,8 +7972,8 @@
                       </tr>
                     </tbody>
                   </table>
-                  <div style="padding:8px 12px;background:#fff8f0;border-top:1px solid #ffe0b2">
-                    <button @click="addRow" style="background:none;border:none;cursor:pointer;color:#e67700;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px">+ Add Row</button>
+                  <div style="padding:8px 12px;background:#f8f9fc;border-top:1px solid #e8ecf0">
+                    <button @click="addRow" style="background:none;border:none;cursor:pointer;color:#2563eb;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px">+ Add Row</button>
                   </div>
                 </div>
 
@@ -7977,8 +7992,8 @@
                 <button class="b-btn b-btn-ghost" @click="openEdit(viewNote)">Edit</button>
               </div>
               <div v-else style="display:flex;gap:8px">
-                <button class="b-btn b-btn-ghost" @click="saveNote('Draft')" :disabled="saving" style="color:#e67700;border-color:#e67700">Save as Draft</button>
-                <button class="b-btn b-btn-primary" style="background:#e67700" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
+                <button class="b-btn b-btn-ghost" @click="saveNote('Draft')" :disabled="saving" style="color:#2563eb;border-color:#2563eb">Save as Draft</button>
+                <button class="b-btn b-btn-primary" style="background:#2563eb" @click="saveNote('Submitted')" :disabled="saving">Issue Debit Note</button>
               </div>
             </div>
           </div>
@@ -8459,8 +8474,11 @@
 
   <aside class="b-sidebar">
     <div class="b-brand">
-      <div class="b-brand-icon">B</div>
+      <div class="b-brand-icon" @click="collapsed&&(collapsed=false)" :class="{'b-brand-icon-expand':collapsed}" title="">B</div>
       <div class="b-brand-info"><div class="b-brand-name">Books</div><div class="b-brand-sub">Accounting</div></div>
+      <button v-if="!collapsed" class="b-collapse-top" @click="collapsed=true" title="Collapse sidebar">
+        <span v-html="icon('chevL',15)"></span>
+      </button>
       <button class="b-mob-close" @click="closeMobile" title="Close menu">✕</button>
     </div>
     <nav class="b-nav">
@@ -8475,12 +8493,7 @@
       </template>
     </nav>
     <div class="b-sidebar-footer">
-      <!-- AI Automator button removed from sidebar — now a floating FAB -->
-      <button class="b-collapse-btn" @click="collapsed=!collapsed" :title="collapsed?'Expand':'Collapse'">
-        <span v-html="icon(collapsed?'chevR':'chevL',14)"></span>
-        <span class="b-nav-label">Collapse</span>
-      </button>
-      <div class="b-user-row" style="margin-top:6px">
+      <div class="b-user-row">
         <div class="b-user-avatar">{{initials}}</div>
         <div class="b-user-info"><div class="b-user-name">{{fullname}}</div><div class="b-user-role">Books Admin</div></div>
       </div>
@@ -8867,6 +8880,15 @@
   padding:5px 6px;border-radius:5px;transition:background .1s;
 }
 .nim-cell:focus{background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.2);}
+select.nim-cell{
+  -webkit-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"),none;
+  background-repeat:no-repeat;background-position:right 7px center;
+  padding-right:26px!important;cursor:pointer;
+  border:1px solid #e5e7eb;border-radius:6px;
+  transition:border-color .15s,box-shadow .15s;
+}
+select.nim-cell:focus{border-color:#2563eb;background-color:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,.15);}
 .nim-num{text-align:right;width:80px;}
 .nim-amount{
   font-size:13px;font-weight:600;color:#111827;
@@ -8947,28 +8969,29 @@
 .dn-sum-lbl{font-size:11px;color:#868e96;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
 .dn-sum-val{font-size:20px;font-weight:700;font-family:monospace}
 .dn-pill{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;border:1px solid #e2e8f0;background:#fff;color:#868e96;cursor:pointer;transition:all .15s}
-.dn-pill:hover{border-color:#e67700;color:#1a1d23}.dn-pill.active{background:rgba(230,119,0,0.1);border-color:#e67700;color:#e67700}
+.dn-pill:hover{border-color:#2563eb;color:#2563eb}.dn-pill.active{background:rgba(37,99,235,0.1);border-color:#2563eb;color:#2563eb}
 .dn-pc{font-size:11px;font-weight:500;padding:1px 6px;border-radius:10px;margin-left:2px}
 .dn-tbl{width:100%;border-collapse:collapse;font-size:13px}
 .dn-tbl th{text-align:left;padding:10px 14px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#868e96;font-weight:600;white-space:nowrap;background:#f8f9fc}
 .dn-tbl td{padding:11px 14px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
-.dn-dh{background:#e67700;padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.dn-dh{background:linear-gradient(135deg,#1e3a5f 0%,#2563eb 100%);padding:20px 24px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
 .dn-dh-title{color:#fff;font-size:16px;font-weight:700}
 .dn-dh-sub{color:rgba(255,255,255,0.7);font-size:12px;margin-top:2px}
 .dn-sec-lbl{font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#868e96;margin-bottom:10px;margin-top:20px;display:block;padding-top:20px;border-top:1px solid #e2e8f0}
 .dn-sec-lbl:first-child{border-top:none;padding-top:0;margin-top:0}
 .dn-fg{display:grid;gap:14px;margin-bottom:14px}.dn-fg2{grid-template-columns:1fr 1fr}.dn-fg3{grid-template-columns:1fr 1fr 1fr}
 .dn-fi{width:100%;border:1px solid #cdd5e0;border-radius:6px;padding:8px 10px;font-size:13.5px;color:#1a1d23;background:#fff;outline:none;transition:border-color .15s}
-.dn-fi:focus{border-color:#e67700;box-shadow:0 0 0 3px rgba(230,119,0,0.1)}
+.dn-fi:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,0.1)}
 .dn-bill-info{background:#fff3e0;border:1px solid rgba(230,119,0,0.2);border-radius:8px;padding:14px 16px;margin-bottom:16px}
 .dn-itbl{width:100%;border-collapse:collapse}
 .dn-itbl th{padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868e96;border-bottom:1px solid #e8ecf0;background:#fafbfc}
 .dn-itbl td{padding:7px 8px;border-bottom:1px solid #f1f3f5;vertical-align:middle}
 .dn-ci{border:none;outline:none;background:transparent;font-size:13px;color:#1a1d23;width:100%;padding:4px 6px;border-radius:4px}
-.dn-ci:focus{background:#fff3e0;box-shadow:0 0 0 2px rgba(230,119,0,0.15)}
-.dn-totals{background:#fff3e0;border:1px solid rgba(230,119,0,0.15);border-radius:8px;overflow:hidden}
-.dn-t-row{display:flex;justify-content:space-between;padding:9px 16px;font-size:13px;border-bottom:1px solid rgba(230,119,0,0.1)}
-.dn-t-row:last-child{border-bottom:none;font-size:15px;font-weight:700;background:#ffe0b2;color:#e67700}
+.dn-ci:focus{background:#eff6ff;box-shadow:0 0 0 2px rgba(37,99,235,0.15)}
+.dn-sel{-webkit-appearance:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 6px center;padding-right:22px;cursor:pointer;border-radius:5px;border:1px solid #e2e8f0;}
+.dn-totals{background:#f0f5ff;border:1px solid rgba(37,99,235,0.15);border-radius:8px;overflow:hidden}
+.dn-t-row{display:flex;justify-content:space-between;padding:9px 16px;font-size:13px;border-bottom:1px solid rgba(37,99,235,0.08)}
+.dn-t-row:last-child{border-bottom:none;font-size:15px;font-weight:700;background:#dbeafe;color:#1e40af}
 @media(max-width:640px){
   .nim-grid-3{grid-template-columns:1fr 1fr;}
   .nim-grid-2{grid-template-columns:1fr;}
@@ -9432,13 +9455,31 @@ body:has(.cust-backdrop) .ai-panel {
 .b-mob-close{display:none;background:none;border:none;cursor:pointer;color:rgba(255,255,255,.5);font-size:16px;margin-left:auto;padding:4px 6px;border-radius:4px;transition:.15s}
 .b-mob-close:hover{color:#fff;background:rgba(255,255,255,.1)}
 .b-mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:49;backdrop-filter:blur(1px)}
+/* Sidebar top collapse toggle */
+.b-collapse-top{
+  background:none;border:none;cursor:pointer;
+  color:rgba(255,255,255,.7);
+  width:28px;height:28px;
+  display:flex;align-items:center;justify-content:center;
+  border-radius:6px;flex-shrink:0;margin-left:auto;
+  transition:background .15s,color .15s;
+}
+.b-collapse-top:hover{background:rgba(255,255,255,.15);color:#fff;}
+/* When collapsed: B icon becomes the expand button */
+.b-brand-icon-expand{cursor:pointer!important;position:relative;}
+.b-brand-icon-expand::after{
+  content:'›';position:absolute;bottom:-6px;right:-6px;
+  width:16px;height:16px;background:rgba(255,255,255,.2);
+  border-radius:50%;font-size:11px;line-height:16px;text-align:center;
+  color:#fff;font-weight:700;
+}
+.b-brand-icon-expand:hover{background:rgba(255,255,255,.25)!important;transform:scale(1.07);}
 /* Collapsed */
 .books-root.collapsed .b-brand-info{opacity:0;width:0;pointer-events:none}
 .books-root.collapsed .b-nav-label{opacity:0;width:0;pointer-events:none}
 .books-root.collapsed .b-nav-section{opacity:0;height:0;padding:0;margin:0;overflow:hidden}
 .books-root.collapsed .b-nav-badge{display:none}
 .books-root.collapsed .b-user-info{opacity:0;width:0;overflow:hidden;pointer-events:none}
-.books-root.collapsed .b-collapse-btn{justify-content:center}
 .books-root.collapsed .b-nav-item{justify-content:center;padding:10px}
 .books-root.collapsed .b-nav-icon{margin:0}
 .books-root.collapsed .b-logout-btn{justify-content:center}

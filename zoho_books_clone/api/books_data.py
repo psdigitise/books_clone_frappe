@@ -421,3 +421,151 @@ def ai_chat(messages, system=None):
         "action": "reply",
         "message": f"I can help with invoicing tasks. Here's what I understand:\n\n• \"Create invoice for [customer] ₹[amount]\"\n• \"Show overdue invoices\"\n• \"Find invoices for [customer]\"\n• \"Show total outstanding\"\n\nTry one of these!"
     })}
+
+
+# ── CHART OF ACCOUNTS ─────────────────────────────────────────────────────────
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_chart_of_accounts(company=None):
+    """Return all non-disabled accounts.
+    Dynamically checks which columns exist in tabAccount so it works
+    on plain Frappe installations that may not have root_type / opening_balance etc."""
+
+    # ── 1. Discover available columns via SHOW COLUMNS ──────────────────────
+    try:
+        col_rows = frappe.db.sql("SHOW COLUMNS FROM `tabAccount`", as_dict=True)
+        available = {r.get("Field") or r.get("field", "") for r in col_rows}
+    except Exception:
+        available = set()
+
+    # Always-safe fields that exist in every Frappe Account doctype
+    fields = ["name", "account_name", "account_number", "account_type",
+              "is_group", "parent_account"]
+
+    # Optional fields — only include if the column exists in this installation
+    for opt in ["root_type", "opening_balance", "balance_must_be", "lft", "rgt", "disabled"]:
+        if not available or opt in available:   # include if we couldn't detect columns
+            fields.append(opt)
+
+    # ── 2. Determine sort order ──────────────────────────────────────────────
+    order_by = "lft asc" if ("lft" in fields) else "account_name asc"
+
+    # ── 3. Build filters ─────────────────────────────────────────────────────
+    filters = {}
+    if "disabled" in fields:
+        filters["disabled"] = 0
+    if company:
+        try:
+            if frappe.db.has_column("Account", "company"):
+                filters["company"] = company
+        except Exception:
+            pass
+
+    # ── 4. Query ─────────────────────────────────────────────────────────────
+    try:
+        accounts = frappe.db.get_all(
+            "Account",
+            filters=filters,
+            fields=fields,
+            order_by=order_by,
+            limit=1000
+        )
+    except Exception as e:
+        frappe.log_error(title="get_chart_of_accounts SQL error", message=str(e))
+        # Last-resort: try with only the minimal safe fields
+        try:
+            accounts = frappe.db.get_all(
+                "Account",
+                fields=["name", "account_name", "account_type", "is_group", "parent_account"],
+                order_by="account_name asc",
+                limit=1000
+            )
+        except Exception:
+            accounts = []
+
+    return accounts
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def save_account(op, name=None, account_name=None, account_number=None,
+                 root_type=None, account_type=None, parent_account=None,
+                 is_group=0, opening_balance=0, balance_must_be="Debit",
+                 company=None):
+    """Create or update an Account document.
+    op = 'create' | 'update' | 'delete'
+    (named 'op' instead of 'action' — Frappe v15 strips 'action' from form_dict)
+    """
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+        except Exception:
+            company = ""
+
+    # Discover which optional fields exist in tabAccount
+    _has = {}
+    def _col_exists(col):
+        if col not in _has:
+            try:
+                _has[col] = frappe.db.has_column("Account", col)
+            except Exception:
+                _has[col] = False
+        return _has[col]
+
+    if op == "create":
+        if not account_name:
+            frappe.throw("Account name is required")
+        doc_dict = {
+            "doctype": "Account",
+            "account_name": account_name,
+            "account_type": account_type or "",
+            "is_group": int(is_group or 0),
+        }
+        if account_number and _col_exists("account_number"):
+            doc_dict["account_number"] = account_number
+        if root_type and _col_exists("root_type"):
+            doc_dict["root_type"] = root_type
+        if parent_account and _col_exists("parent_account"):
+            doc_dict["parent_account"] = parent_account
+        if opening_balance is not None and _col_exists("opening_balance"):
+            doc_dict["opening_balance"] = float(opening_balance or 0)
+        if balance_must_be and _col_exists("balance_must_be"):
+            doc_dict["balance_must_be"] = balance_must_be
+        if company and _col_exists("company"):
+            doc_dict["company"] = company
+        doc = frappe.get_doc(doc_dict)
+        doc.insert(ignore_permissions=True)
+        frappe.db.commit()
+        return {"name": doc.name, "status": "created"}
+
+    elif op == "update":
+        if not name:
+            frappe.throw("Account name (document name) is required for update")
+        doc = frappe.get_doc("Account", name)
+        if account_name is not None:
+            doc.account_name = account_name
+        if account_number is not None and _col_exists("account_number"):
+            doc.account_number = account_number
+        if root_type is not None and _col_exists("root_type"):
+            doc.root_type = root_type
+        if account_type is not None:
+            doc.account_type = account_type
+        if parent_account is not None and _col_exists("parent_account"):
+            doc.parent_account = parent_account
+        if is_group is not None:
+            doc.is_group = int(is_group)
+        if opening_balance is not None and _col_exists("opening_balance"):
+            doc.opening_balance = float(opening_balance)
+        if balance_must_be is not None and _col_exists("balance_must_be"):
+            doc.balance_must_be = balance_must_be
+        doc.save(ignore_permissions=True)
+        frappe.db.commit()
+        return {"name": doc.name, "status": "updated"}
+
+    elif op == "delete":
+        if not name:
+            frappe.throw("Account name is required for delete")
+        frappe.delete_doc("Account", name, ignore_permissions=True)
+        frappe.db.commit()
+        return {"status": "deleted"}
+
+    frappe.throw(f"Unknown action: {action}")
