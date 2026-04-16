@@ -296,8 +296,11 @@
     chevL: '<polyline points="15 18 9 12 15 6"/>',
     chevU: '<polyline points="18 15 12 9 6 15"/>',
     balance: '<path d="M12 3v18M3 9l9-6 9 6M3 15l9 6 9-6"/>',
-    expense: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
-    claim:   '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+    expense:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="13" y2="17"/>',
+    claim:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="9 13 11 15 15 11"/>',
+    warehouse: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><path d="M12 12h.01"/>',
+    ledger:    '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="12" y1="6" x2="16" y2="6"/><line x1="12" y1="10" x2="16" y2="10"/>',
+    bell:      '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -13751,6 +13754,993 @@
   });
 
   /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — WAREHOUSES
+  ═══════════════════════════════════════════════════════════════ */
+  const InventoryWarehouses = defineComponent({
+    name: "InventoryWarehouses",
+    setup() {
+      const WH_TYPE_META = {
+        "Stores":             { icon:"🏪", color:"#7048E8", bg:"#F3F0FF" },
+        "Finished Goods":     { icon:"📦", color:"#1971C2", bg:"#E7F5FF" },
+        "Raw Material":       { icon:"🧲", color:"#2F9E44", bg:"#EBFBEE" },
+        "Work In Progress":   { icon:"🔧", color:"#E67700", bg:"#FFF3BF" },
+        "Transit":            { icon:"🚚", color:"#C92A2A", bg:"#FFF5F5" },
+        "Virtual":            { icon:"🔒", color:"#868E96", bg:"#F8F9FA" },
+        "Scrap":              { icon:"♻️", color:"#5C7CFA", bg:"#EDF2FF" },
+      };
+      const WH_DEFAULT = { icon:"🏭", color:"#495057", bg:"#F1F3F5" };
+      const WH_TYPES = Object.keys(WH_TYPE_META);
+
+      const list           = ref([]);
+      const loading        = ref(false);
+      const selectedWH     = ref(null);
+      const stockItems     = ref([]);
+      const stockLoading   = ref(false);
+      const expanded       = ref(new Set());
+      const search         = ref("");
+      const showDrawer     = ref(false);
+      const showTransfer   = ref(false);
+      const showDel        = ref(false);
+      const delTarget      = ref(null);
+      const drawerMode     = ref("add");
+      const saving         = ref(false);
+      const transferSaving = ref(false);
+      const allItems       = ref([]);
+
+      const form = reactive({
+        name:"", warehouse_name:"", warehouse_type:"Stores",
+        parent_warehouse:"", city:"", state:"", address_line1:"", pincode:"",
+        is_group:0, disabled:0,
+      });
+      const transferForm = reactive({
+        from_warehouse:"", to_warehouse:"", item_code:"", qty:1,
+      });
+
+      function whMeta(type) { return WH_TYPE_META[type] || WH_DEFAULT; }
+
+      const flatFiltered = computed(() => {
+        const q = search.value.toLowerCase().trim();
+        if (!q) return list.value;
+        return list.value.filter(w =>
+          (w.warehouse_name||w.name).toLowerCase().includes(q) ||
+          (w.city||"").toLowerCase().includes(q)
+        );
+      });
+
+      const treeNodes = computed(() => {
+        if (search.value.trim()) {
+          return flatFiltered.value.map(w => ({...w, depth:0, _children:[]}));
+        }
+        const map = {};
+        list.value.forEach(w => { map[w.name] = {...w, _children:[]}; });
+        const roots = [];
+        list.value.forEach(w => {
+          if (w.parent_warehouse && map[w.parent_warehouse]) {
+            map[w.parent_warehouse]._children.push(map[w.name]);
+          } else {
+            roots.push(map[w.name]);
+          }
+        });
+        const flat = [];
+        function walk(node, depth) {
+          flat.push({...node, depth});
+          if (expanded.value.has(node.name)) {
+            node._children.forEach(c => walk(c, depth + 1));
+          }
+        }
+        roots.forEach(r => walk(r, 0));
+        return flat;
+      });
+
+      function toggleExpand(name, e) {
+        e.stopPropagation();
+        const s = new Set(expanded.value);
+        if (s.has(name)) s.delete(name); else s.add(name);
+        expanded.value = s;
+      }
+
+      function childCount(name) {
+        return list.value.filter(w => w.parent_warehouse === name).length;
+      }
+
+      async function load() {
+        loading.value = true;
+        try {
+          list.value = await apiList("Warehouse", {
+            fields:["name","warehouse_name","warehouse_type","parent_warehouse","city","is_group","disabled"],
+            limit:500,
+          }) || [];
+          list.value.filter(w => w.is_group && !w.parent_warehouse).forEach(w => {
+            const s = new Set(expanded.value); s.add(w.name); expanded.value = s;
+          });
+        } catch { list.value = []; toast("Could not load warehouses","error"); }
+        loading.value = false;
+      }
+
+      async function loadStockForWarehouse(name) {
+        stockLoading.value = true;
+        stockItems.value = [];
+        try {
+          stockItems.value = await apiGET("zoho_books_clone.api.inventory.get_stock_summary", {warehouse:name}) || [];
+        } catch { stockItems.value = []; }
+        stockLoading.value = false;
+      }
+
+      async function loadItems() {
+        try { allItems.value = await apiList("Item", {fields:["name","item_name"], limit:500, order:"item_name asc"}) || []; } catch {}
+      }
+
+      function selectWarehouse(wh) {
+        selectedWH.value = wh;
+        loadStockForWarehouse(wh.name);
+      }
+
+      function openAdd() {
+        drawerMode.value = "add";
+        Object.assign(form, {name:"", warehouse_name:"", warehouse_type:"Stores",
+          parent_warehouse:"", city:"", state:"", address_line1:"", pincode:"", is_group:0, disabled:0});
+        showDrawer.value = true;
+      }
+      function openEdit(wh) {
+        drawerMode.value = "edit";
+        Object.assign(form, {
+          name: wh.name, warehouse_name: wh.warehouse_name || wh.name,
+          warehouse_type: wh.warehouse_type || "Stores",
+          parent_warehouse: wh.parent_warehouse || "",
+          city: wh.city||"", state: wh.state||"",
+          address_line1: wh.address_line1||"", pincode: wh.pincode||"",
+          is_group: wh.is_group ? 1 : 0, disabled: wh.disabled ? 1 : 0,
+        });
+        showDrawer.value = true;
+      }
+
+      async function saveWarehouse() {
+        if (!form.warehouse_name.trim()) { toast("Warehouse name is required","error"); return; }
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Warehouse",
+            warehouse_name: form.warehouse_name,
+            warehouse_type: form.warehouse_type,
+            parent_warehouse: form.parent_warehouse || "",
+            city: form.city, state: form.state,
+            address_line1: form.address_line1, pincode: form.pincode,
+            is_group: form.is_group ? 1 : 0,
+            disabled: form.disabled ? 1 : 0,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast(drawerMode.value === "edit" ? "Warehouse updated" : "Warehouse created");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        saving.value = false;
+      }
+
+      function openTransfer() {
+        Object.assign(transferForm, {
+          from_warehouse: selectedWH.value?.name || "",
+          to_warehouse:"", item_code:"", qty:1,
+        });
+        showTransfer.value = true;
+      }
+
+      async function doTransfer() {
+        if (!transferForm.to_warehouse || !transferForm.item_code) {
+          toast("Target warehouse and item are required","error"); return;
+        }
+        transferSaving.value = true;
+        try {
+          await apiSave({
+            doctype: "Stock Entry",
+            stock_entry_type: "Material Transfer",
+            from_warehouse: transferForm.from_warehouse,
+            to_warehouse: transferForm.to_warehouse,
+            items: [{ item_code: transferForm.item_code, qty: flt(transferForm.qty) }],
+          });
+          toast("Stock transfer created");
+          showTransfer.value = false;
+          loadStockForWarehouse(selectedWH.value.name);
+        } catch(e) { toast("Transfer failed: " + e.message, "error"); }
+        transferSaving.value = false;
+      }
+
+      function confirmDel(wh) { delTarget.value = wh; showDel.value = true; }
+      async function doDelete() {
+        try {
+          await apiDelete("Warehouse", delTarget.value.name);
+          list.value = list.value.filter(w => w.name !== delTarget.value.name);
+          if (selectedWH.value?.name === delTarget.value.name) selectedWH.value = null;
+          toast("Warehouse deleted"); showDel.value = false;
+        } catch(e) { toast("Delete failed: " + e.message,"error"); }
+      }
+
+      const parentOptions = computed(() =>
+        list.value.filter(w => w.is_group).map(w => ({name: w.name, label: w.warehouse_name || w.name}))
+      );
+
+      const whStats = computed(() => {
+        if (!selectedWH.value || !stockItems.value.length) return {value:0,items:0,reserved:0,projected:0};
+        return {
+          value:     stockItems.value.reduce((s,r) => s + flt(r.stock_value), 0),
+          items:     stockItems.value.length,
+          reserved:  stockItems.value.reduce((s,r) => s + flt(r.reserved_qty), 0),
+          projected: stockItems.value.reduce((s,r) => s + flt(r.projected_qty), 0),
+        };
+      });
+
+      onMounted(() => { load(); loadItems(); });
+
+      return {
+        WH_TYPE_META, WH_DEFAULT, WH_TYPES, list, loading, selectedWH, stockItems,
+        stockLoading, expanded, search, showDrawer, showTransfer, showDel, delTarget,
+        drawerMode, saving, transferSaving, form, transferForm,
+        treeNodes, parentOptions, whStats, allItems,
+        whMeta, toggleExpand, childCount, selectWarehouse,
+        openAdd, openEdit, saveWarehouse, openTransfer, doTransfer, confirmDel, doDelete,
+        load, fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `
+<div style="display:flex;height:calc(100vh - 56px);overflow:hidden">
+
+  <!-- Left panel: tree -->
+  <div style="width:340px;min-width:340px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;background:#fff">
+    <div style="padding:16px 16px 12px;border-bottom:1px solid #f0f2f5">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div style="font-size:15px;font-weight:700;color:#1A1D23">Warehouses</div>
+        <button class="nim-btn nim-btn-primary" style="padding:5px 12px;font-size:12px" @click="openAdd">
+          <span v-html="icon('plus')"></span> New
+        </button>
+      </div>
+      <div style="position:relative">
+        <span v-html="icon('search')" style="position:absolute;left:9px;top:50%;transform:translateY(-50%);color:#9ca3af;pointer-events:none;width:14px"></span>
+        <input v-model="search" placeholder="Search warehouses…"
+          style="width:100%;border:1px solid #e4e8f0;border-radius:7px;padding:7px 10px 7px 30px;font-size:13px;outline:none;color:#1A1D23"/>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto">
+      <div v-if="loading" style="padding:20px 16px">
+        <div class="b-shimmer" style="height:28px;border-radius:6px;margin-bottom:8px"></div>
+        <div class="b-shimmer" style="height:28px;border-radius:6px;margin-bottom:8px;margin-left:20px"></div>
+        <div class="b-shimmer" style="height:28px;border-radius:6px;margin-bottom:8px;margin-left:20px"></div>
+        <div class="b-shimmer" style="height:28px;border-radius:6px;margin-left:40px"></div>
+      </div>
+      <div v-else-if="!treeNodes.length" style="padding:32px 16px;text-align:center;color:#868E96;font-size:13px">
+        No warehouses found
+      </div>
+      <div v-else v-for="node in treeNodes" :key="node.name"
+        @click="selectWarehouse(node)"
+        :style="{
+          paddingLeft: (14 + node.depth * 20) + 'px',
+          paddingRight:'12px', paddingTop:'8px', paddingBottom:'8px',
+          cursor:'pointer', display:'flex', alignItems:'center', gap:'6px',
+          borderLeft: selectedWH && selectedWH.name===node.name ? '3px solid #7048E8' : '3px solid transparent',
+          background: selectedWH && selectedWH.name===node.name ? '#F3F0FF' : 'transparent',
+          transition:'background 0.12s',
+        }"
+        @mouseenter="$event.currentTarget.style.background = (selectedWH && selectedWH.name===node.name) ? '#F3F0FF' : '#F8F9FA'"
+        @mouseleave="$event.currentTarget.style.background = (selectedWH && selectedWH.name===node.name) ? '#F3F0FF' : 'transparent'"
+      >
+        <span v-if="node.is_group" @click.stop="toggleExpand(node.name, $event)"
+          style="width:14px;height:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;color:#868E96;cursor:pointer">
+          {{expanded.has(node.name)?'▼':'▶'}}
+        </span>
+        <span v-else style="width:14px;flex-shrink:0"></span>
+        <span style="font-size:15px;flex-shrink:0">{{whMeta(node.warehouse_type).icon}}</span>
+        <span style="font-size:13px;color:#1A1D23;font-weight:500;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          {{node.warehouse_name || node.name}}
+        </span>
+        <span v-if="node.is_group && childCount(node.name)"
+          style="font-size:10px;background:#e4e8f0;color:#495057;border-radius:10px;padding:0 6px;flex-shrink:0">
+          {{childCount(node.name)}}
+        </span>
+        <span v-if="node.disabled" style="font-size:10px;background:#FFF5F5;color:#C92A2A;border-radius:10px;padding:0 6px;flex-shrink:0">off</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right panel: detail -->
+  <div style="flex:1;overflow-y:auto;background:#f0f2f5">
+    <div v-if="!selectedWH" style="display:flex;align-items:center;justify-content:center;height:100%">
+      <div style="text-align:center;color:#868E96">
+        <div style="font-size:48px;margin-bottom:12px">🏭</div>
+        <div style="font-size:15px;font-weight:600;color:#343A40;margin-bottom:4px">Select a Warehouse</div>
+        <div style="font-size:13px">Click a warehouse on the left to view its stock details</div>
+      </div>
+    </div>
+    <div v-else style="padding:24px">
+      <!-- Header -->
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;flex-wrap:wrap;gap:12px">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:22px">{{whMeta(selectedWH.warehouse_type).icon}}</span>
+            <h1 style="font-size:20px;font-weight:700;color:#1A1D23;margin:0">{{selectedWH.warehouse_name || selectedWH.name}}</h1>
+            <span :style="{background:whMeta(selectedWH.warehouse_type).bg,color:whMeta(selectedWH.warehouse_type).color,
+              padding:'3px 10px',borderRadius:'20px',fontSize:'12px',fontWeight:'600'}">
+              {{selectedWH.warehouse_type || 'Stores'}}
+            </span>
+            <span v-if="selectedWH.disabled" style="background:#FFF5F5;color:#C92A2A;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:600">Disabled</span>
+          </div>
+          <div v-if="selectedWH.parent_warehouse" style="font-size:12.5px;color:#868E96;margin-top:4px">
+            Parent: {{selectedWH.parent_warehouse}}
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;flex-shrink:0">
+          <button class="nim-btn nim-btn-ghost" @click="openEdit(selectedWH)"><span v-html="icon('edit')"></span> Edit</button>
+          <button class="nim-btn nim-btn-ghost" style="color:#1971C2;border-color:#1971C2" @click="openTransfer">
+            <span v-html="icon('refresh')"></span> Transfer
+          </button>
+          <button class="nim-btn" style="background:#FFF5F5;color:#C92A2A;border-color:#FFC9C9" @click="confirmDel(selectedWH)">
+            <span v-html="icon('trash')"></span>
+          </button>
+        </div>
+      </div>
+      <!-- Stats -->
+      <div class="dn-sum-strip" style="margin-bottom:20px">
+        <div class="dn-sum-card">
+          <div class="dn-sum-lbl">Stock Value</div>
+          <div class="dn-sum-val" style="color:#7048E8">{{fmt(whStats.value)}}</div>
+        </div>
+        <div class="dn-sum-card">
+          <div class="dn-sum-lbl">Items in Stock</div>
+          <div class="dn-sum-val">{{whStats.items}}</div>
+        </div>
+        <div class="dn-sum-card">
+          <div class="dn-sum-lbl">Reserved Qty</div>
+          <div class="dn-sum-val" style="color:#E67700">{{whStats.reserved.toFixed(2)}}</div>
+        </div>
+        <div class="dn-sum-card">
+          <div class="dn-sum-lbl">Projected Qty</div>
+          <div class="dn-sum-val" style="color:#1971C2">{{whStats.projected.toFixed(2)}}</div>
+        </div>
+      </div>
+      <!-- Stock table -->
+      <div class="cust-table-card">
+        <div style="padding:14px 16px 10px;border-bottom:1px solid #f0f2f5;display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:14px;font-weight:600;color:#1A1D23">Stock Items</div>
+          <button class="nim-btn nim-btn-ghost" style="font-size:12px;padding:4px 10px" @click="loadStockForWarehouse(selectedWH.name)">
+            <span v-html="icon('refresh')"></span> Refresh
+          </button>
+        </div>
+        <div v-if="stockLoading" style="padding:20px">
+          <div class="b-shimmer" style="height:32px;border-radius:6px;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:32px;border-radius:6px;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:32px;border-radius:6px"></div>
+        </div>
+        <div v-else-if="!stockItems.length" style="padding:40px;text-align:center;color:#868E96;font-size:13px">
+          <div style="font-size:32px;margin-bottom:8px">📦</div>
+          <div style="font-weight:600;color:#343A40;margin-bottom:4px">No stock in this warehouse</div>
+          <div>Stock will appear here once items are received</div>
+        </div>
+        <div v-else class="cust-table-wrap">
+          <table class="cust-table">
+            <thead><tr>
+              <th>Item Code</th><th>Item Name</th><th>Group</th><th>UOM</th>
+              <th style="text-align:right">Actual Qty</th>
+              <th style="text-align:right">Reserved</th>
+              <th style="text-align:right">Val. Rate</th>
+              <th style="text-align:right">Stock Value</th>
+              <th style="text-align:center">Alert</th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="r in stockItems" :key="r.item_code" class="cust-row">
+                <td style="font-family:var(--mono);font-size:12.5px;color:#5C7CFA">{{r.item_code}}</td>
+                <td style="font-weight:500">{{r.item_name}}</td>
+                <td style="font-size:12px;color:#868E96">{{r.item_group||'—'}}</td>
+                <td style="font-size:12px;color:#868E96">{{r.uom||'Nos'}}</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:600;color:#2F9E44">{{flt(r.actual_qty).toFixed(2)}}</td>
+                <td style="text-align:right;font-family:var(--mono);color:#E67700">{{flt(r.reserved_qty).toFixed(2)}}</td>
+                <td style="text-align:right;font-family:var(--mono)">{{fmt(r.valuation_rate)}}</td>
+                <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(r.stock_value)}}</td>
+                <td style="text-align:center">
+                  <span v-if="r.below_reorder" style="font-size:11px;background:#FFF3BF;color:#E67700;padding:2px 7px;border-radius:12px;font-weight:600">⚠ Low</span>
+                  <span v-else style="color:#d1d5db">—</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div v-if="stockItems.length" class="cust-row-count">{{stockItems.length}} items</div>
+      </div>
+    </div>
+  </div>
+
+  <teleport to="body">
+    <!-- Add/Edit drawer -->
+    <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+      <div class="nim-dialog" style="width:560px">
+        <div class="nim-header">
+          <div class="nim-header-title">{{drawerMode==='add'?'New Warehouse':'Edit Warehouse'}}</div>
+          <button class="nim-close" @click="showDrawer=false"><span v-html="icon('x')"></span></button>
+        </div>
+        <div class="nim-body">
+          <div class="nim-section-label">Warehouse Details</div>
+          <div class="nim-grid-2 nim-mb">
+            <div>
+              <label class="nim-label">Warehouse Name <span class="nim-req">*</span></label>
+              <input class="nim-input" v-model="form.warehouse_name" placeholder="e.g. Main Store"/>
+            </div>
+            <div>
+              <label class="nim-label">Warehouse Type</label>
+              <select class="nim-input" v-model="form.warehouse_type">
+                <option v-for="t in WH_TYPES" :key="t" :value="t">{{WH_TYPE_META[t].icon}} {{t}}</option>
+              </select>
+            </div>
+          </div>
+          <div class="nim-mb">
+            <label class="nim-label">Parent Warehouse</label>
+            <searchable-select v-model="form.parent_warehouse" :options="parentOptions"
+              value-key="name" label-key="label" placeholder="— None (top-level) —"/>
+          </div>
+          <div class="nim-section-label">Address</div>
+          <div class="nim-grid-2 nim-mb">
+            <div><label class="nim-label">City</label><input class="nim-input" v-model="form.city" placeholder="City"/></div>
+            <div><label class="nim-label">State</label><input class="nim-input" v-model="form.state" placeholder="State"/></div>
+          </div>
+          <div class="nim-grid-2 nim-mb">
+            <div><label class="nim-label">Address</label><input class="nim-input" v-model="form.address_line1" placeholder="Street address"/></div>
+            <div><label class="nim-label">Pincode</label><input class="nim-input" v-model="form.pincode" placeholder="Pincode"/></div>
+          </div>
+          <div class="nim-section-label">Flags</div>
+          <div style="display:flex;gap:24px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+              <input type="checkbox" :checked="form.is_group" @change="form.is_group=$event.target.checked?1:0"
+                style="width:16px;height:16px;cursor:pointer"/> Is Group
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+              <input type="checkbox" :checked="form.disabled" @change="form.disabled=$event.target.checked?1:0"
+                style="width:16px;height:16px;cursor:pointer"/> Disabled
+            </label>
+          </div>
+        </div>
+        <div class="nim-footer">
+          <div></div>
+          <div style="display:flex;gap:10px">
+            <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+            <button class="nim-btn nim-btn-primary" :disabled="saving" @click="saveWarehouse">
+              <span v-html="icon('check')"></span> {{saving?'Saving…':'Save'}}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Stock Transfer modal -->
+    <div v-if="showTransfer" class="nim-overlay" @click.self="showTransfer=false">
+      <div class="nim-dialog" style="width:480px">
+        <div class="nim-header">
+          <div class="nim-header-title">Stock Transfer</div>
+          <button class="nim-close" @click="showTransfer=false"><span v-html="icon('x')"></span></button>
+        </div>
+        <div class="nim-body">
+          <div class="nim-mb">
+            <label class="nim-label">From Warehouse</label>
+            <searchable-select v-model="transferForm.from_warehouse" :options="list.filter(w=>!w.is_group)" placeholder="Source warehouse"/>
+          </div>
+          <div class="nim-mb">
+            <label class="nim-label">To Warehouse <span class="nim-req">*</span></label>
+            <searchable-select v-model="transferForm.to_warehouse"
+              :options="list.filter(w=>!w.is_group&&w.name!==transferForm.from_warehouse)" placeholder="Target warehouse"/>
+          </div>
+          <div class="nim-mb">
+            <label class="nim-label">Item <span class="nim-req">*</span></label>
+            <searchable-select v-model="transferForm.item_code" :options="allItems"
+              value-key="name" label-key="item_name" placeholder="Select item"/>
+          </div>
+          <div class="nim-mb">
+            <label class="nim-label">Quantity <span class="nim-req">*</span></label>
+            <input class="nim-input" type="number" min="0.001" step="0.001" v-model="transferForm.qty"/>
+          </div>
+        </div>
+        <div class="nim-footer">
+          <div></div>
+          <div style="display:flex;gap:10px">
+            <button class="nim-btn nim-btn-ghost" @click="showTransfer=false">Cancel</button>
+            <button class="nim-btn nim-btn-primary" :disabled="transferSaving" @click="doTransfer">
+              <span v-html="icon('check')"></span> {{transferSaving?'Processing…':'Create Transfer'}}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Delete confirm -->
+    <div v-if="showDel" class="nim-overlay" @click.self="showDel=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:420px;width:100%;margin:auto">
+        <div style="font-size:16px;font-weight:700;color:#1A1D23;margin-bottom:8px">Delete Warehouse?</div>
+        <div style="font-size:14px;color:#868E96;margin-bottom:24px">Delete <b>{{delTarget?.warehouse_name}}</b>? This cannot be undone.</div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="nim-btn nim-btn-ghost" @click="showDel=false">Cancel</button>
+          <button class="nim-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" @click="doDelete">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — STOCK LEDGER
+  ═══════════════════════════════════════════════════════════════ */
+  const InventoryStockLedger = defineComponent({
+    name: "InventoryStockLedger",
+    setup() {
+      const VT_META = {
+        "Material Receipt":     { label:"Receipt",    color:"#2F9E44", bg:"#EBFBEE" },
+        "Delivery Note":        { label:"Delivery",   color:"#C92A2A", bg:"#FFF5F5" },
+        "Material Transfer":    { label:"Transfer",   color:"#1971C2", bg:"#E7F5FF" },
+        "Stock Reconciliation": { label:"Adjustment", color:"#E67700", bg:"#FFF3BF" },
+        "Opening Stock":        { label:"Opening",    color:"#868E96", bg:"#F1F3F5" },
+        "Purchase Return":      { label:"Return",     color:"#9C36B5", bg:"#F8F0FC" },
+        "Manufacture":          { label:"Production", color:"#0CA678", bg:"#E6FCF5" },
+      };
+      const VT_DEFAULT = { label:"Journal", color:"#495057", bg:"#F8F9FA" };
+      const VT_TYPES = Object.keys(VT_META);
+
+      const list          = ref([]);
+      const loading       = ref(false);
+      const items         = ref([]);
+      const warehouses    = ref([]);
+      const selectedEntry = ref(null);
+      const showDetail    = ref(false);
+
+      const filters = reactive({
+        item_code:"", warehouse:"", voucher_type:"", from_date:"", to_date:"",
+      });
+
+      function vtMeta(type) { return VT_META[type] || VT_DEFAULT; }
+
+      const maxAbsQty = computed(() =>
+        Math.max(1, ...list.value.map(r => Math.abs(flt(r.actual_qty))))
+      );
+
+      const summary = computed(() => {
+        const inQty  = list.value.filter(r => flt(r.actual_qty) > 0).reduce((s,r) => s + flt(r.actual_qty), 0);
+        const outQty = Math.abs(list.value.filter(r => flt(r.actual_qty) < 0).reduce((s,r) => s + flt(r.actual_qty), 0));
+        return {
+          entries:  list.value.length,
+          inQty,
+          outQty,
+          netQty:   inQty - outQty,
+          totalVal: list.value.reduce((s,r) => Math.max(s, flt(r.stock_value)), 0),
+        };
+      });
+
+      async function load() {
+        loading.value = true;
+        try {
+          const params = {};
+          if (filters.item_code)  params.item_code  = filters.item_code;
+          if (filters.warehouse)  params.warehouse  = filters.warehouse;
+          if (filters.from_date)  params.from_date  = filters.from_date;
+          if (filters.to_date)    params.to_date    = filters.to_date;
+          let data = await apiGET("zoho_books_clone.api.inventory.get_stock_ledger_entries", params) || [];
+          if (filters.voucher_type) {
+            data = data.filter(r => r.voucher_type === filters.voucher_type);
+          }
+          list.value = data;
+        } catch(e) { toast("Could not load stock ledger: " + e.message,"error"); list.value = []; }
+        loading.value = false;
+      }
+
+      async function loadFilters() {
+        try { items.value = await apiList("Item", {fields:["name","item_name"], order:"item_name asc", limit:500}) || []; } catch {}
+        try { warehouses.value = await apiList("Warehouse", {fields:["name","warehouse_name"], filters:[["disabled","=",0],["is_group","=",0]], limit:200}) || []; } catch {}
+      }
+
+      function clearFilters() {
+        Object.assign(filters, {item_code:"", warehouse:"", voucher_type:"", from_date:"", to_date:""});
+        list.value = [];
+      }
+
+      function openDetail(row) { selectedEntry.value = row; showDetail.value = true; }
+
+      function exportCSV() {
+        if (!list.value.length) { toast("No data to export","error"); return; }
+        const cols = ["posting_date","item_code","item_name","warehouse","voucher_type","voucher_no","actual_qty","qty_after_transaction","valuation_rate","stock_value"];
+        const header = cols.join(",");
+        const rows = list.value.map(r => cols.map(c => JSON.stringify(r[c] ?? '')).join(","));
+        const csv = [header, ...rows].join("\n");
+        const a = document.createElement("a");
+        a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        a.download = "stock_ledger_" + (new Date().toISOString().split("T")[0]) + ".csv";
+        a.click();
+      }
+
+      onMounted(loadFilters);
+
+      return {
+        VT_META, VT_DEFAULT, VT_TYPES, list, loading, items, warehouses,
+        selectedEntry, showDetail, filters, summary, maxAbsQty,
+        vtMeta, load, clearFilters, openDetail, exportCSV, fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `
+<div class="cust-page">
+  <!-- Filter bar -->
+  <div style="background:#fff;border:1px solid #e4e8f0;border-radius:10px;padding:16px;margin-bottom:16px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+      <div>
+        <label class="nim-label">Item</label>
+        <searchable-select v-model="filters.item_code" :options="items" value-key="name" label-key="item_name" placeholder="All items"/>
+      </div>
+      <div>
+        <label class="nim-label">Warehouse</label>
+        <searchable-select v-model="filters.warehouse" :options="warehouses" value-key="name" label-key="warehouse_name" placeholder="All warehouses"/>
+      </div>
+      <div>
+        <label class="nim-label">Voucher Type</label>
+        <select class="nim-input" v-model="filters.voucher_type">
+          <option value="">All Types</option>
+          <option v-for="vt in VT_TYPES" :key="vt" :value="vt">{{VT_META[vt].label}}</option>
+        </select>
+      </div>
+      <div>
+        <label class="nim-label">From Date</label>
+        <input class="nim-input" type="date" v-model="filters.from_date"/>
+      </div>
+      <div>
+        <label class="nim-label">To Date</label>
+        <input class="nim-input" type="date" v-model="filters.to_date"/>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:8px">
+        <button class="nim-btn nim-btn-primary" style="flex:1" @click="load">
+          <span v-html="icon('search')"></span> Search
+        </button>
+        <button class="nim-btn nim-btn-ghost" @click="clearFilters">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Entries</div><div class="dn-sum-val">{{summary.entries}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total In (Qty)</div><div class="dn-sum-val" style="color:#2F9E44">+{{summary.inQty.toFixed(2)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Out (Qty)</div><div class="dn-sum-val" style="color:#C92A2A">-{{summary.outQty.toFixed(2)}}</div></div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Net Qty</div>
+      <div class="dn-sum-val" :style="summary.netQty>=0?'color:#2F9E44':'color:#C92A2A'">
+        {{summary.netQty>=0?'+':''}}{{summary.netQty.toFixed(2)}}
+      </div>
+    </div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Peak Stock Value</div><div class="dn-sum-val" style="color:#1971C2">{{fmt(summary.totalVal)}}</div></div>
+  </div>
+
+  <!-- Table card -->
+  <div class="cust-table-card">
+    <div style="padding:12px 16px;border-bottom:1px solid #f0f2f5;display:flex;justify-content:space-between;align-items:center">
+      <div style="font-size:14px;font-weight:600;color:#1A1D23">
+        Stock Ledger Entries
+        <span v-if="list.length" style="font-size:12px;color:#868E96;font-weight:400;margin-left:6px">({{list.length}} rows)</span>
+      </div>
+      <button v-if="list.length" class="nim-btn nim-btn-ghost" style="font-size:12px;padding:4px 10px" @click="exportCSV">
+        ↓ Export CSV
+      </button>
+    </div>
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr>
+          <th style="white-space:nowrap">Date</th>
+          <th>Item Code</th>
+          <th>Item Name</th>
+          <th>Warehouse</th>
+          <th>Voucher Type</th>
+          <th>Voucher No</th>
+          <th style="text-align:right">In / Out</th>
+          <th style="text-align:right">Balance</th>
+          <th style="text-align:right">Val. Rate</th>
+          <th style="text-align:right">Stock Value</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="loading"><td colspan="10" style="padding:16px">
+            <div class="b-shimmer" style="height:28px;border-radius:6px;margin-bottom:6px"></div>
+            <div class="b-shimmer" style="height:28px;border-radius:6px;margin-bottom:6px"></div>
+            <div class="b-shimmer" style="height:28px;border-radius:6px"></div>
+          </td></tr>
+          <tr v-else-if="!list.length"><td colspan="10" class="cust-empty">
+            <div class="cust-empty-icon">📊</div>
+            <div class="cust-empty-title">No stock ledger entries</div>
+            <div class="cust-empty-sub">Select filters and click Search to view entries</div>
+          </td></tr>
+          <tr v-else v-for="r in list" :key="r.name" class="cust-row" style="cursor:pointer" @click="openDetail(r)">
+            <td style="font-size:12.5px;white-space:nowrap;color:#495057">{{fmtDate(r.posting_date)}}</td>
+            <td style="font-family:var(--mono);font-size:12px;color:#5C7CFA">{{r.item_code}}</td>
+            <td style="font-weight:500;font-size:13px">{{r.item_name || r.item_code}}</td>
+            <td style="font-size:12px;color:#868E96;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{r.warehouse}}</td>
+            <td>
+              <span :style="{background:vtMeta(r.voucher_type).bg,color:vtMeta(r.voucher_type).color,
+                padding:'2px 8px',borderRadius:'20px',fontSize:'11.5px',fontWeight:'600',whiteSpace:'nowrap'}">
+                {{vtMeta(r.voucher_type).label}}
+              </span>
+            </td>
+            <td style="font-size:12px;font-family:var(--mono);color:#3B5BDB;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              {{r.voucher_no||'—'}}
+            </td>
+            <td style="text-align:right">
+              <div style="font-family:var(--mono);font-weight:700;font-size:13px"
+                :style="flt(r.actual_qty)>=0?'color:#2F9E44':'color:#C92A2A'">
+                {{flt(r.actual_qty)>=0?'+':''}}{{flt(r.actual_qty).toFixed(2)}}
+              </div>
+              <div :style="{height:'3px',borderRadius:'2px',marginTop:'3px',
+                background: flt(r.actual_qty)>=0 ? '#2F9E44' : '#C92A2A',
+                width: Math.min(100, Math.abs(flt(r.actual_qty)) / maxAbsQty * 100) + '%',
+                marginLeft: flt(r.actual_qty)>=0 ? 'auto' : '0'}">
+              </div>
+            </td>
+            <td style="text-align:right;font-family:var(--mono);font-size:13px">{{flt(r.qty_after_transaction).toFixed(2)}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-size:13px">{{fmt(r.valuation_rate)}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:600;font-size:13px">{{fmt(r.stock_value)}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Entry detail drawer -->
+  <teleport to="body">
+    <div v-if="showDetail" class="nim-overlay" @click.self="showDetail=false">
+      <div class="nim-dialog" style="width:520px">
+        <div class="nim-header">
+          <div class="nim-header-title">
+            <span :style="{background:vtMeta(selectedEntry?.voucher_type).bg,color:vtMeta(selectedEntry?.voucher_type).color,
+              padding:'2px 8px',borderRadius:'20px',fontSize:'12px',fontWeight:'600',marginRight:'8px'}">
+              {{vtMeta(selectedEntry?.voucher_type).label}}
+            </span>
+            Stock Ledger Entry
+          </div>
+          <button class="nim-close" @click="showDetail=false"><span v-html="icon('x')"></span></button>
+        </div>
+        <div class="nim-body" v-if="selectedEntry">
+          <div class="nim-grid-2 nim-mb">
+            <div><div class="nim-label">Date</div><div style="font-size:14px;color:#1A1D23">{{fmtDate(selectedEntry.posting_date)}}</div></div>
+            <div><div class="nim-label">Voucher No</div><div style="font-size:14px;font-family:var(--mono);color:#3B5BDB">{{selectedEntry.voucher_no||'—'}}</div></div>
+          </div>
+          <div class="nim-grid-2 nim-mb">
+            <div><div class="nim-label">Item Code</div><div style="font-size:14px;font-family:var(--mono);color:#5C7CFA">{{selectedEntry.item_code}}</div></div>
+            <div><div class="nim-label">Item Name</div><div style="font-size:14px">{{selectedEntry.item_name||selectedEntry.item_code}}</div></div>
+          </div>
+          <div class="nim-mb">
+            <div class="nim-label">Warehouse</div>
+            <div style="font-size:14px">{{selectedEntry.warehouse}}</div>
+          </div>
+          <div class="nim-grid-2 nim-mb">
+            <div>
+              <div class="nim-label">In / Out Qty</div>
+              <div :style="{fontSize:'16px',fontWeight:'700',fontFamily:'var(--mono)',color:flt(selectedEntry.actual_qty)>=0?'#2F9E44':'#C92A2A'}">
+                {{flt(selectedEntry.actual_qty)>=0?'+':''}}{{flt(selectedEntry.actual_qty).toFixed(4)}}
+              </div>
+            </div>
+            <div>
+              <div class="nim-label">Balance Qty</div>
+              <div style="font-size:16px;font-weight:700;font-family:var(--mono)">{{flt(selectedEntry.qty_after_transaction).toFixed(4)}}</div>
+            </div>
+          </div>
+          <div class="nim-grid-2 nim-mb">
+            <div><div class="nim-label">Valuation Rate</div><div style="font-size:14px;font-family:var(--mono)">{{fmt(selectedEntry.valuation_rate)}}</div></div>
+            <div><div class="nim-label">Stock Value</div><div style="font-size:14px;font-family:var(--mono);font-weight:600">{{fmt(selectedEntry.stock_value)}}</div></div>
+          </div>
+        </div>
+        <div class="nim-footer">
+          <div></div>
+          <button class="nim-btn nim-btn-ghost" @click="showDetail=false">Close</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — STOCK VALUATION
+  ═══════════════════════════════════════════════════════════════ */
+  const InventoryValuation = defineComponent({
+    name: "InventoryValuation",
+    setup() {
+      const list       = ref([]);
+      const loading    = ref(true);
+      const search     = ref("");
+      const warehouse  = ref("");
+      const warehouses = ref([]);
+
+      const summary = computed(() => ({
+        items:      list.value.length,
+        totalValue: list.value.reduce((s,r) => s + flt(r.stock_value), 0),
+        totalQty:   list.value.reduce((s,r) => s + flt(r.actual_qty), 0),
+        zeroStock:  list.value.filter(r => flt(r.actual_qty) <= 0).length,
+      }));
+
+      const filtered = computed(() => {
+        const q = search.value.toLowerCase().trim();
+        return q
+          ? list.value.filter(r => (r.item_code + (r.item_name||"") + (r.warehouse||"")).toLowerCase().includes(q))
+          : list.value;
+      });
+
+      async function load() {
+        loading.value = true;
+        try {
+          const params = {};
+          if (warehouse.value) params.warehouse = warehouse.value;
+          list.value = await apiGET("zoho_books_clone.api.inventory.get_stock_summary", params) || [];
+        } catch(e) { toast("Could not load valuation: " + e.message,"error"); list.value = []; }
+        loading.value = false;
+      }
+
+      onMounted(async () => {
+        try { warehouses.value = await apiList("Warehouse", { fields:["name"], filters:[["disabled","=",0],["is_group","=",0]], order:"name asc", limit:200 }) || []; } catch {}
+        load();
+      });
+
+      return { list, loading, search, warehouse, warehouses, filtered, summary,
+        load, fmt, fmtDate, icon, flt };
+    },
+    template: `
+<div class="cust-page">
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Items Tracked</div><div class="dn-sum-val">{{summary.items}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Stock Value</div><div class="dn-sum-val" style="color:#E67700;font-size:16px">{{fmt(summary.totalValue)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Qty</div><div class="dn-sum-val">{{summary.totalQty.toFixed(2)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Zero Stock Items</div><div class="dn-sum-val" style="color:#C92A2A">{{summary.zeroStock}}</div></div>
+  </div>
+
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-search">
+        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
+        <input class="cust-search-input" v-model="search" placeholder="Search items…"/>
+      </div>
+      <div style="min-width:220px">
+        <searchable-select v-model="warehouse" :options="warehouses" placeholder="All warehouses" @update:modelValue="load"/>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <button class="nim-btn nim-btn-ghost" @click="load"><span v-html="icon('refresh')"></span> Refresh</button>
+    </div>
+  </div>
+
+  <div class="cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr>
+          <th>Item Code</th><th>Item Name</th><th>Warehouse</th><th>UOM</th>
+          <th style="text-align:right">Qty in Hand</th>
+          <th style="text-align:right">Reserved</th>
+          <th style="text-align:right">Valuation Rate</th>
+          <th style="text-align:right">Stock Value</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="loading"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td></tr>
+          <tr v-else-if="!filtered.length"><td colspan="8" class="cust-empty">
+            <div class="cust-empty-icon">📦</div>
+            <div class="cust-empty-title">{{search?'No items match':'No stock data'}}</div>
+            <div class="cust-empty-sub">{{search?'Try a different search':'Stock entries will appear here once items are received'}}</div>
+          </td></tr>
+          <tr v-else v-for="r in filtered" :key="r.item_code+(r.warehouse||'')" class="cust-row"
+              :style="flt(r.actual_qty)<=0?'opacity:.6':''">
+            <td style="font-family:var(--mono);font-size:12px;font-weight:700;color:#3B5BDB">{{r.item_code}}</td>
+            <td style="font-weight:500">{{r.item_name||r.item_code}}</td>
+            <td style="font-size:12.5px;color:var(--muted)">{{r.warehouse||'—'}}</td>
+            <td style="font-size:12px;color:var(--muted)">{{r.stock_uom||'Nos'}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700" :style="flt(r.actual_qty)>0?'color:#2F9E44':'color:#C92A2A'">
+              {{flt(r.actual_qty).toFixed(2)}}
+            </td>
+            <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{flt(r.reserved_qty).toFixed(2)}}</td>
+            <td style="text-align:right;font-family:var(--mono)">{{fmt(r.valuation_rate)}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{fmt(r.stock_value)}}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cust-row-count" v-if="filtered.length">{{filtered.length}} items · Total Value: <b>{{fmt(summary.totalValue)}}</b></div>
+  </div>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — REORDER ALERTS
+  ═══════════════════════════════════════════════════════════════ */
+  const InventoryReorderAlerts = defineComponent({
+    name: "InventoryReorderAlerts",
+    setup() {
+      const list    = ref([]);
+      const loading = ref(true);
+      const search  = ref("");
+
+      const summary = computed(() => ({
+        total:    list.value.length,
+        critical: list.value.filter(r => flt(r.actual_qty) <= 0).length,
+        warning:  list.value.filter(r => flt(r.actual_qty) > 0 && flt(r.actual_qty) < flt(r.reorder_level) * 0.5).length,
+        totalShortage: list.value.reduce((s,r) => s + flt(r.shortage_qty), 0),
+      }));
+
+      const filtered = computed(() => {
+        const q = search.value.toLowerCase().trim();
+        return q
+          ? list.value.filter(r => (r.item_code + (r.item_name||"") + (r.warehouse||"")).toLowerCase().includes(q))
+          : list.value;
+      });
+
+      function urgency(r) {
+        if (flt(r.actual_qty) <= 0) return { cls:"b-badge-red",    lbl:"Critical"  };
+        if (flt(r.actual_qty) < flt(r.reorder_level) * 0.5) return { cls:"b-badge-amber", lbl:"Warning"  };
+        return { cls:"b-badge-blue", lbl:"Low Stock" };
+      }
+
+      async function load() {
+        loading.value = true;
+        try {
+          list.value = await apiGET("zoho_books_clone.api.inventory.get_reorder_items", {}) || [];
+        } catch(e) { toast("Could not load reorder alerts: " + e.message,"error"); list.value = []; }
+        loading.value = false;
+      }
+
+      onMounted(load);
+      return { list, loading, search, filtered, summary, urgency,
+        load, fmt, fmtDate, flt, icon };
+    },
+    template: `
+<div class="cust-page">
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Items Below Reorder</div><div class="dn-sum-val">{{summary.total}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Critical (Zero Stock)</div><div class="dn-sum-val" style="color:#C92A2A">{{summary.critical}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Warning (&lt;50% Level)</div><div class="dn-sum-val" style="color:#E67700">{{summary.warning}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Shortage Qty</div><div class="dn-sum-val" style="color:#3B5BDB">{{summary.totalShortage.toFixed(2)}}</div></div>
+  </div>
+
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <div class="cust-search">
+        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
+        <input class="cust-search-input" v-model="search" placeholder="Search items…"/>
+      </div>
+    </div>
+    <div class="cust-toolbar-right">
+      <button class="nim-btn nim-btn-ghost" @click="load"><span v-html="icon('refresh')"></span> Refresh</button>
+    </div>
+  </div>
+
+  <div class="cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr>
+          <th>Item Code</th><th>Item Name</th><th>Warehouse</th>
+          <th style="text-align:right">Current Qty</th>
+          <th style="text-align:right">Reorder Level</th>
+          <th style="text-align:right">Reorder Qty</th>
+          <th style="text-align:right">Shortage</th>
+          <th style="text-align:center">Urgency</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="loading"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td></tr>
+          <tr v-else-if="!filtered.length"><td colspan="8" class="cust-empty">
+            <div class="cust-empty-icon">✅</div>
+            <div class="cust-empty-title">{{search?'No items match':'All stock levels are healthy'}}</div>
+            <div class="cust-empty-sub">{{search?'Try a different search':'No items are currently below their reorder level'}}</div>
+          </td></tr>
+          <tr v-else v-for="r in filtered" :key="r.item_code+(r.warehouse||'')" class="cust-row">
+            <td style="font-family:var(--mono);font-size:12px;font-weight:700;color:#3B5BDB">{{r.item_code}}</td>
+            <td style="font-weight:500">{{r.item_name||r.item_code}}</td>
+            <td style="font-size:12.5px;color:var(--muted)">{{r.warehouse||'—'}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#C92A2A">{{flt(r.actual_qty).toFixed(2)}}</td>
+            <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{flt(r.reorder_level).toFixed(2)}}</td>
+            <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{flt(r.reorder_qty).toFixed(2)}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{flt(r.shortage_qty).toFixed(2)}}</td>
+            <td style="text-align:center">
+              <span class="b-badge" :class="urgency(r).cls">{{urgency(r).lbl}}</span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cust-row-count" v-if="filtered.length">{{filtered.length}} items need restocking</div>
+  </div>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
      APP SHELL
   ═══════════════════════════════════════════════════════════════ */
   const NAV = [
@@ -13806,15 +14796,19 @@
     },
     {
       section: "INVENTORY", items: [
-        { to: "/inventory/items",       lbl: "Items / Products", icon: "box"    },
-        { to: "/inventory/item-groups", lbl: "Item Groups",      icon: "folder" },
+        { to: "/inventory/items",         lbl: "Items / Products", icon: "box"      },
+        { to: "/inventory/item-groups",   lbl: "Item Groups",      icon: "folder"   },
+        { to: "/inventory/warehouses",    lbl: "Warehouses",        icon: "warehouse"},
+        { to: "/inventory/stock-ledger",  lbl: "Stock Ledger",      icon: "ledger"   },
+        { to: "/inventory/valuation",     lbl: "Stock Valuation",   icon: "trend"    },
+        { to: "/inventory/reorder-alerts",lbl: "Reorder Alerts",    icon: "bell"     },
       ]
     },
   ];
   // Pre-built Set of every exact nav path — used to prevent parent routes from
   // stealing the "active" highlight when a child route has its own nav entry.
   const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "expenses": "Expenses", "expense-claims": "Expense Claims" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -15884,9 +16878,13 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/accounting/fiscal-years", component: FiscalYears, name: "fiscal-years" },
       { path: "/expenses",       component: Expenses,       name: "expenses"       },
       { path: "/expense-claims", component: ExpenseClaims,  name: "expense-claims"  },
-      { path: "/inventory",             redirect: "/inventory/items" },
-      { path: "/inventory/items",       component: InventoryItems,      name: "inventory-items"       },
-      { path: "/inventory/item-groups", component: InventoryItemGroups, name: "inventory-item-groups" },
+      { path: "/inventory",                  redirect: "/inventory/items"            },
+      { path: "/inventory/items",            component: InventoryItems,          name: "inventory-items"          },
+      { path: "/inventory/item-groups",      component: InventoryItemGroups,     name: "inventory-item-groups"    },
+      { path: "/inventory/warehouses",       component: InventoryWarehouses,     name: "inventory-warehouses"     },
+      { path: "/inventory/stock-ledger",     component: InventoryStockLedger,    name: "inventory-stock-ledger"   },
+      { path: "/inventory/valuation",        component: InventoryValuation,      name: "inventory-valuation"      },
+      { path: "/inventory/reorder-alerts",   component: InventoryReorderAlerts,  name: "inventory-reorder-alerts" },
     ]
   });
 
