@@ -1,6 +1,5 @@
 import frappe
 import json
-from frappe.utils import get_url
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
@@ -142,10 +141,14 @@ def save_doc(doc):
             # child rows added via d.update() have no DB name yet, so
             # validate_update_after_submit would throw DoesNotExistError on them.
             d.flags.ignore_validate_update_after_submit = True
+        d.save(ignore_permissions=False)
     else:
+        # New document: must call insert() explicitly.
+        # frappe.get_doc(dict) with name already set does NOT mark the doc as
+        # new (is_new() returns False), so save() would call db_update() and
+        # raise DoesNotExistError.  insert() always creates a new row.
         d = frappe.get_doc(doc)
-
-    d.save(ignore_permissions=False)
+        d.insert(ignore_permissions=False)
     frappe.db.commit()
     return d.as_dict()
 

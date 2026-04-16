@@ -16,13 +16,23 @@ fixtures = [
     "Property Setter",
 ]
 
-# No doc_events for submit/cancel — handled by the DocType classes directly
-doc_events = {}
+# Central validation layer (P2/Issue 10) — runs on every financial document
+_CV = "zoho_books_clone.accounts.central_validator"
+doc_events = {
+    "Sales Invoice":    {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Purchase Invoice": {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Payment Entry":    {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Journal Entry":    {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Credit Note":      {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Expense":          {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Expense Claim":    {"validate": f"{_CV}.on_validate"},
+}
 
 scheduler_events = {
     "daily": [
         "zoho_books_clone.utils.scheduler.send_payment_reminders",
         "zoho_books_clone.banking.utils.auto_match_bank_transactions",
+        "zoho_books_clone.inventory.utils.get_reorder_alerts",   # logs reorder items daily
     ],
     "monthly": [
         "zoho_books_clone.utils.scheduler.generate_monthly_reports",
@@ -43,6 +53,16 @@ global_search_doctypes = {
     ],
     "Payments": [
         {"doctype": "Payment Entry"},
+    ],
+    "Expenses": [
+        {"doctype": "Expense"},
+        {"doctype": "Expense Claim"},
+    ],
+    "Inventory": [
+        {"doctype": "Warehouse"},
+        {"doctype": "Stock Entry"},
+        {"doctype": "Item Price"},
+        {"doctype": "Price List"},
     ],
     "Books Setup": [
         {"doctype": "Currency"},

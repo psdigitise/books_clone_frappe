@@ -2,7 +2,9 @@ import frappe
 from frappe import _
 from frappe.utils import flt, nowdate
 from frappe.model.document import Document
-from zoho_books_clone.accounts.doctype.general_ledger_entry.general_ledger_entry import make_gl_entries
+from zoho_books_clone.accounts.accounting_engine import post_payment_entry, reverse_voucher
+from zoho_books_clone.accounts.doctype.general_ledger_entry.general_ledger_entry import recompute_outstanding_from_gl
+from zoho_books_clone.db.validators import validate_account_company, validate_account_type
 
 
 class PaymentEntry(Document):
@@ -20,6 +22,21 @@ class PaymentEntry(Document):
             frappe.throw(_("'Paid From' account {0} does not exist").format(self.paid_from))
         if self.paid_to and not frappe.db.exists("Account", self.paid_to):
             frappe.throw(_("'Paid To' account {0} does not exist").format(self.paid_to))
+
+        # P1/Issue 7 — enforce correct account types per payment direction
+        if self.company:
+            for acct in filter(None, [self.paid_from, self.paid_to]):
+                validate_account_company(acct, self.company)
+
+        if self.paid_from and self.paid_to:
+            if self.payment_type == "Receive":
+                # Customer pays us: paid_from = Receivable, paid_to = Bank/Cash
+                validate_account_type(self.paid_from, ["Receivable"])
+                validate_account_type(self.paid_to,   ["Bank", "Cash"])
+            elif self.payment_type == "Pay":
+                # We pay supplier: paid_from = Bank/Cash, paid_to = Payable
+                validate_account_type(self.paid_from, ["Bank", "Cash"])
+                validate_account_type(self.paid_to,   ["Payable"])
 
     def validate_references(self):
         total_allocated = sum(flt(r.allocated_amount) for r in (self.references or []))
@@ -39,89 +56,32 @@ class PaymentEntry(Document):
                 ).format(ref.allocated_amount, outstanding, ref.reference_name))
 
     def on_submit(self):
-        self._make_gl_entries()
+        post_payment_entry(self)
         self._update_invoice_outstanding(cancel=False)
 
     def on_cancel(self):
-        make_gl_entries([{"voucher_type": self.doctype, "voucher_no": self.name}], cancel=True)
+        reverse_voucher(self.doctype, self.name)
         self._update_invoice_outstanding(cancel=True)
-
-    def _make_gl_entries(self):
-        if not self.paid_from:
-            frappe.throw(_("Please set the 'Paid From' account"))
-        if not self.paid_to:
-            frappe.throw(_("Please set the 'Paid To' account"))
-
-        if self.payment_type == "Receive":
-            # Money comes IN: debit bank/cash, credit receivable
-            gl_map = [
-                {
-                    "account":      self.paid_to,          # Bank / Cash
-                    "debit":        self.paid_amount,
-                    "credit":       0,
-                    "voucher_type": self.doctype,
-                    "voucher_no":   self.name,
-                    "posting_date": self.payment_date,
-                    "company":      self.company,
-                    "remarks":      f"Payment received — {self.name}",
-                },
-                {
-                    "account":      self.paid_from,        # Receivable
-                    "debit":        0,
-                    "credit":       self.paid_amount,
-                    "voucher_type": self.doctype,
-                    "voucher_no":   self.name,
-                    "posting_date": self.payment_date,
-                    "party_type":   self.party_type,
-                    "party":        self.party,
-                    "company":      self.company,
-                    "remarks":      f"Payment received from {self.party} — {self.name}",
-                },
-            ]
-        elif self.payment_type == "Pay":
-            # Money goes OUT: debit payable, credit bank/cash
-            gl_map = [
-                {
-                    "account":      self.paid_to,          # Payable
-                    "debit":        self.paid_amount,
-                    "credit":       0,
-                    "voucher_type": self.doctype,
-                    "voucher_no":   self.name,
-                    "posting_date": self.payment_date,
-                    "party_type":   self.party_type,
-                    "party":        self.party,
-                    "company":      self.company,
-                    "remarks":      f"Payment to {self.party} — {self.name}",
-                },
-                {
-                    "account":      self.paid_from,        # Bank / Cash
-                    "debit":        0,
-                    "credit":       self.paid_amount,
-                    "voucher_type": self.doctype,
-                    "voucher_no":   self.name,
-                    "posting_date": self.payment_date,
-                    "company":      self.company,
-                    "remarks":      f"Payment made — {self.name}",
-                },
-            ]
-        else:
-            frappe.throw(_("Payment type '{0}' not supported").format(self.payment_type))
-
-        make_gl_entries(gl_map)
 
     def _update_invoice_outstanding(self, cancel: bool = False):
         for ref in (self.references or []):
             dt  = ref.reference_doctype
             dn  = ref.reference_name
-            amt = flt(ref.allocated_amount)
 
-            current = flt(frappe.db.get_value(dt, dn, "outstanding_amount"))
-            new_amt = (current + amt) if cancel else (current - amt)
-            new_amt = max(0, new_amt)  # never go below 0
+            # P2/Issue 4 — recompute from GL so the value is always consistent
+            # with actual ledger entries rather than accumulated arithmetic.
+            try:
+                new_amt = recompute_outstanding_from_gl(dt, dn)
+            except Exception:
+                # Fallback to arithmetic update if GL recompute fails
+                # (e.g. during first-time setup before GL entries are committed)
+                amt = flt(ref.allocated_amount)
+                current = flt(frappe.db.get_value(dt, dn, "outstanding_amount"))
+                new_amt = (current + amt) if cancel else (current - amt)
+                new_amt = max(0.0, new_amt)
+                frappe.db.set_value(dt, dn, "outstanding_amount", new_amt,
+                                    update_modified=False)
 
-            frappe.db.set_value(dt, dn, "outstanding_amount", new_amt, update_modified=False)
-
-            # Update status on the invoice
             _refresh_invoice_status(dt, dn, new_amt)
 
 

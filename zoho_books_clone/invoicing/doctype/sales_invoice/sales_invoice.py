@@ -2,7 +2,9 @@ import frappe
 from frappe import _
 from frappe.utils import flt, today, getdate
 from frappe.model.document import Document
-from zoho_books_clone.accounts.doctype.general_ledger_entry.general_ledger_entry import make_gl_entries
+from zoho_books_clone.accounts.accounting_engine import (
+    post_sales_invoice, reverse_voucher,
+)
 from zoho_books_clone.db.validators import (
     validate_fiscal_year, validate_account_company, validate_account_type,
 )
@@ -85,40 +87,12 @@ class SalesInvoice(Document):
     def on_submit(self):
         self.status = "Submitted"
         self.outstanding_amount = self.grand_total
-        self._make_gl_entries()
-
-    def _make_gl_entries(self):
-        if not self.debit_to:
-            frappe.throw(_("Please set the 'Debit To' (Accounts Receivable) account"))
-        if not self.income_account:
-            frappe.throw(_("Please set the 'Income Account'"))
-        gl_map = [
-            {"account": self.debit_to, "debit": self.grand_total, "credit": 0,
-             "voucher_type": self.doctype, "voucher_no": self.name,
-             "posting_date": self.posting_date, "party_type": "Customer",
-             "party": self.customer, "company": self.company,
-             "fiscal_year": self.fiscal_year,
-             "remarks": f"Invoice {self.name} — {self.customer_name}"},
-            {"account": self.income_account, "debit": 0, "credit": self.net_total,
-             "voucher_type": self.doctype, "voucher_no": self.name,
-             "posting_date": self.posting_date, "company": self.company,
-             "fiscal_year": self.fiscal_year,
-             "remarks": f"Income from Invoice {self.name}"},
-        ]
-        for tax in (self.taxes or []):
-            if flt(tax.tax_amount) and tax.account_head:
-                gl_map.append({
-                    "account": tax.account_head, "debit": 0, "credit": flt(tax.tax_amount),
-                    "voucher_type": self.doctype, "voucher_no": self.name,
-                    "posting_date": self.posting_date, "company": self.company,
-                    "remarks": f"{tax.description} on {self.name}",
-                })
-        make_gl_entries(gl_map)
+        post_sales_invoice(self)
 
     def on_cancel(self):
         self.status = "Cancelled"
         self._check_no_payments_before_cancel()
-        make_gl_entries([{"voucher_type": self.doctype, "voucher_no": self.name}], cancel=True)
+        reverse_voucher(self.doctype, self.name)
 
     def _check_no_payments_before_cancel(self):
         linked = frappe.db.sql("""

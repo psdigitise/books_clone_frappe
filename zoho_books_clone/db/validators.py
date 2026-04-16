@@ -10,21 +10,34 @@ from frappe.utils import getdate
 def validate_fiscal_year(posting_date: str, company: str) -> str:
     """
     Return fiscal year name for the given posting date + company.
-    Throws if no open fiscal year covers the date.
+    Throws if:
+      - no open fiscal year covers the date, OR
+      - the posting_date falls on or before the period lock_date (P1/Issue 6)
     """
     fy = frappe.db.sql("""
-        SELECT name FROM `tabFiscal Year`
-        WHERE company   = %(company)s
-          AND is_closed  = 0
-          AND year_start_date <= %(date)s
-          AND year_end_date   >= %(date)s
+        SELECT name, lock_date FROM `tabFiscal Year`
+        WHERE company          = %(company)s
+          AND is_closed         = 0
+          AND year_start_date  <= %(date)s
+          AND year_end_date    >= %(date)s
         LIMIT 1
     """, {"company": company, "date": posting_date}, as_dict=True)
 
     if not fy:
         frappe.throw(
-            _("No open Fiscal Year found for date {0} in company {1}").format(posting_date, company)
+            _("No open Fiscal Year found for date {0} in company {1}").format(
+                posting_date, company
+            )
         )
+
+    # Period lock check
+    lock_date = fy[0].get("lock_date")
+    if lock_date and getdate(posting_date) <= getdate(lock_date):
+        frappe.throw(_(
+            "Posting date {0} is on or before the period lock date {1}. "
+            "Remove the lock date on the Fiscal Year to post to this period."
+        ).format(posting_date, lock_date))
+
     return fy[0].name
 
 

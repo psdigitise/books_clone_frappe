@@ -46,6 +46,18 @@
   function flt(v) { return parseFloat(v) || 0; }
   function today() { return new Date().toISOString().slice(0, 10); }
 
+  /** P3/Issue 8 — map a GL voucher_type + voucher_no to the SPA hash route */
+  function voucherPath(voucher_type, voucher_no) {
+    const map = {
+      "Sales Invoice":    `/invoices/${encodeURIComponent(voucher_no)}`,
+      "Purchase Invoice": `/purchases`,
+      "Payment Entry":    `/payments`,
+      "Credit Note":      `/credit-notes`,
+      "Journal Entry":    `/accounting/journal-entries`,
+    };
+    return "#" + (map[voucher_type] || `/accounting/journal-entries`);
+  }
+
   /* ─── API ────────────────────────────────────────────────────── */
   /* ─── API helpers ─────────────────────────────────────────────
      GET  → read operations  (no CSRF needed in Frappe)
@@ -284,6 +296,8 @@
     chevL: '<polyline points="15 18 9 12 15 6"/>',
     chevU: '<polyline points="18 15 12 9 6 15"/>',
     balance: '<path d="M12 3v18M3 9l9-6 9 6M3 15l9 6 9-6"/>',
+    expense: '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+    claim:   '<path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -595,16 +609,12 @@
           }
 
           if (form.source_name && form.source_type) {
-            const lkey = form.source_type === "Sales Order" ? "books_sales_orders" : "books_quotes";
+            const srcDoctype = form.source_type === "Sales Order" ? "Sales Order" : "Quotation";
             try {
-              const stArr = JSON.parse(localStorage.getItem(lkey) || "[]");
-              const stIdx = stArr.findIndex(x => x.name === form.source_name);
-              if (stIdx >= 0) {
-                stArr[stIdx].status = "Invoiced";
-                if (form.source_type === "Sales Order") stArr[stIdx].billed_amount = stArr[stIdx].grand_total;
-                localStorage.setItem(lkey, JSON.stringify(stArr));
-              }
-            } catch { }
+              const patch = { doctype: srcDoctype, name: form.source_name, status: "Invoiced" };
+              if (form.source_type === "Sales Order") patch.per_billed = 100;
+              await apiSave(patch);
+            } catch { /* non-critical — source doc status update best-effort */ }
           }
 
           emit("saved", saved.name);
@@ -4033,19 +4043,16 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
 
-      // ── localStorage helpers ──
-      function storeList(q) { try { localStorage.setItem("books_quotes", JSON.stringify(q)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem("books_quotes") || "[]"); } catch { return []; } }
-      function nextNum() {
-        const nums = readList().map(q => parseInt((q.name || "QT-0").replace(/\D/g, "")) || 0);
-        return "QT-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
-      }
+      // ── Frappe API helpers ──
       function todayStr() { return new Date().toISOString().slice(0, 10); }
       function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); }
 
       async function load() {
         loading.value = true;
-        list.value = readList();
+        try {
+          const rows = await apiList("Quotation", { fields: ["name","customer","customer_name","transaction_date","valid_till","title","status","grand_total","net_total","total_tax","terms","notes"], order: "modified desc", limit: 500 });
+          list.value = rows.map(r => ({ name:r.name, customer:r.customer, date:r.transaction_date, expiry:r.valid_till, subject:r.title||"", status:r.status||"Draft", grand_total:flt(r.grand_total), net_total:flt(r.net_total), terms:r.terms||"", notes:r.notes||"", items:[], taxes:[] }));
+        } catch(e) { toast("Could not load quotes: "+e.message,"error"); }
         loading.value = false;
         try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
         try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300 }); } catch { }
@@ -4086,51 +4093,54 @@
         showCustDrop.value = false;
       }
 
-      function saveQuote(status) {
+      async function saveQuote(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
         if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) {
           toast("Please select at least one item", "error"); return;
         }
-        const doc = {
-          name: drawerMode.value === "edit" ? form.name : nextNum(),
-          customer: cust, date: form.date, expiry: form.expiry,
-          subject: form.subject, status: status,
-          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
-          taxes: form.taxes.map(t => ({ ...t })),
-          net_total: Math.round(netTotal.value * 100) / 100,
-          grand_total: grandTotal.value,
-          terms: form.terms, notes: form.notes,
-          created_at: drawerMode.value === "edit"
-            ? (list.value.find(q => q.name === form.name) || {}).created_at || todayStr()
-            : todayStr(),
-        };
-        const arr = readList();
-        const idx = arr.findIndex(q => q.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr);
-        list.value = arr;
-        toast(status === "Sent" ? "Quote saved & marked Sent" : "Quote saved as Draft");
-        showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Quotation",
+            naming_series: "QTN-.YYYY.-.#####",
+            company: co(),
+            customer: cust,
+            transaction_date: form.date,
+            valid_till: form.expiry,
+            title: form.subject,
+            status: status,
+            items: form.items.filter(r => r.item_name || r.rate).map(r => ({ item_code:r.item_name, item_name:r.item_name, description:r.description||"", qty:r.qty, rate:r.rate, amount:r.amount })),
+            taxes: form.taxes.map(t => ({ ...t })),
+            net_total: Math.round(netTotal.value * 100) / 100,
+            total_tax: Math.round(taxTotal.value * 100) / 100,
+            grand_total: grandTotal.value,
+            terms: form.terms,
+            notes: form.notes,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          const saved = await apiSave(doc);
+          await load();
+          toast(status === "Sent" ? "Quote saved & marked Sent" : "Quote saved as Draft");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
       function confirmDelete(q) { deleteTarget.value = q; showDelete.value = true; }
-      function doDelete() {
+      async function doDelete() {
         deleting.value = true;
-        const arr = readList().filter(q => q.name !== deleteTarget.value.name);
-        storeList(arr); list.value = arr;
-        toast("Quote deleted"); showDelete.value = false; deleting.value = false;
+        try {
+          await apiDelete("Quotation", deleteTarget.value.name);
+          list.value = list.value.filter(q => q.name !== deleteTarget.value.name);
+          toast("Quote deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; }
       }
       function openConvert(q) { convertTarget.value = q; showConvert.value = true; }
       function doConvert() {
-        const arr = readList();
-        const idx = arr.findIndex(q => q.name === convertTarget.value.name);
-        if (idx >= 0) {
-          const q = arr[idx];
-          q.source_type = "Quote";
-          q.source_name = q.name;
-          localStorage.setItem("convert_to_invoice", JSON.stringify(q));
-        }
+        const q = convertTarget.value;
+        localStorage.setItem("convert_to_invoice", JSON.stringify({ ...q, source_type:"Quote", source_name:q.name }));
         toast("Drafting invoice — please save it to confirm", "info");
         showConvert.value = false;
         router.push({ name: "invoices" });
@@ -4520,20 +4530,16 @@
         return r;
       });
 
-      // ── localStorage ──
-      const LKEY = "books_sales_orders";
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
-      function nextNum() {
-        const nums = readList().map(o => parseInt((o.name || "SO-0").replace(/\D/g, "")) || 0);
-        return "SO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
-      }
+      // ── Frappe API ──
       function todayStr() { return new Date().toISOString().slice(0, 10); }
       function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); }
 
       async function load() {
         loading.value = true;
-        list.value = readList();
+        try {
+          const rows = await apiList("Sales Order", { fields: ["name","customer","customer_name","transaction_date","delivery_date","status","grand_total","net_total","total_tax","billed_amount","po_number","ref_quote"], order: "modified desc", limit: 500 });
+          list.value = rows.map(r => ({ name:r.name, customer:r.customer, order_date:r.transaction_date, delivery_date:r.delivery_date, status:r.status||"Draft", grand_total:flt(r.grand_total), net_total:flt(r.net_total), billed_amount:flt(r.billed_amount), po_number:r.po_number||"", ref_quote:r.ref_quote||"", items:[], taxes:[] }));
+        } catch(e) { toast("Could not load sales orders: "+e.message,"error"); }
         loading.value = false;
         try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
         try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
@@ -4625,47 +4631,49 @@
         showCustDrop.value = false;
       }
 
-      function saveOrder(status) {
+      async function saveOrder(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
         if (!form.items.some(r => r.item_name && r.item_name.trim() !== "")) {
           toast("Please select at least one item", "error"); return;
         }
-        const existing = list.value.find(o => o.name === form.name);
-        const doc = {
-          name: drawerMode.value === "edit" ? form.name : nextNum(),
-          customer: cust,
-          order_date: form.order_date || todayStr(),
-          delivery_date: form.delivery_date || "",
-          status: status,
-          ref_quote: form.ref_quote.trim(),
-          po_number: form.po_number.trim(),
-          shipping_address: form.shipping_address.trim(),
-          terms: form.terms.trim(),
-          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
-          taxes: form.taxes.map(t => ({ ...t })),
-          net_total: Math.round(netTotal.value * 100) / 100,
-          total_tax: Math.round(taxTotal.value * 100) / 100,
-          grand_total: grandTotal.value,
-          billed_amount: existing?.billed_amount || 0,
-          created_at: existing?.created_at || todayStr(),
-        };
-        const arr = readList();
-        const idx = arr.findIndex(o => o.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr); list.value = arr;
-        toast(status === "Confirmed" ? "Order confirmed!" : "Order saved as Draft");
-        showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Sales Order",
+            naming_series: "SO-.YYYY.-.#####",
+            company: co(),
+            customer: cust,
+            transaction_date: form.order_date || todayStr(),
+            delivery_date: form.delivery_date || "",
+            status: status,
+            ref_quote: form.ref_quote.trim(),
+            po_number: form.po_number.trim(),
+            shipping_address: form.shipping_address.trim(),
+            terms: form.terms.trim(),
+            items: form.items.filter(r => r.item_name || r.rate).map(r => ({ item_code:r.item_name, item_name:r.item_name, description:r.description||"", qty:r.qty, rate:r.rate, amount:r.amount })),
+            taxes: form.taxes.map(t => ({ ...t })),
+            net_total: Math.round(netTotal.value * 100) / 100,
+            total_tax: Math.round(taxTotal.value * 100) / 100,
+            grand_total: grandTotal.value,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast(status === "Confirmed" ? "Order confirmed!" : "Order saved as Draft");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
-      function advanceStatus(name, newStatus) {
-        const arr = readList();
-        const o = arr.find(x => x.name === name);
-        if (!o) return;
-        o.status = newStatus;
-        storeList(arr); list.value = arr;
-        toast("Order " + name + " → " + newStatus);
-        showDrawer.value = false;
+      async function advanceStatus(name, newStatus) {
+        try {
+          await apiSave({ doctype:"Sales Order", name, status:newStatus });
+          const o = list.value.find(x => x.name === name);
+          if (o) o.status = newStatus;
+          toast("Order " + name + " → " + newStatus);
+          showDrawer.value = false;
+        } catch(e) { toast("Update failed: " + e.message, "error"); }
       }
 
       // ── Convert modal ──
@@ -4673,13 +4681,8 @@
       const convertTarget = ref(null);
       function openConvert(o) { convertTarget.value = o; showConvert.value = true; }
       function doConvert() {
-        const arr = readList();
-        const o = arr.find(x => x.name === convertTarget.value.name);
-        if (o) {
-          o.source_type = "Sales Order";
-          o.source_name = o.name;
-          localStorage.setItem("convert_to_invoice", JSON.stringify(o));
-        }
+        const o = convertTarget.value;
+        localStorage.setItem("convert_to_invoice", JSON.stringify({ ...o, source_type:"Sales Order", source_name:o.name }));
         toast("Drafting invoice — please save it to confirm", "info");
         showConvert.value = false; showDrawer.value = false;
         router.push({ name: "invoices" });
@@ -4690,11 +4693,14 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
       function confirmDelete(o) { deleteTarget.value = o; showDelete.value = true; }
-      function doDelete() {
+      async function doDelete() {
         deleting.value = true;
-        const arr = readList().filter(o => o.name !== deleteTarget.value.name);
-        storeList(arr); list.value = arr;
-        toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
+        try {
+          await apiDelete("Sales Order", deleteTarget.value.name);
+          list.value = list.value.filter(o => o.name !== deleteTarget.value.name);
+          toast("Order deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; showDrawer.value = false; }
       }
 
       function onItemPick(row) {
@@ -5131,7 +5137,6 @@
   const RecurringInvoices = defineComponent({
     name: "RecurringInvoices",
     setup() {
-      const LKEY = "books_recurring";
       const FREQ_DAYS = { weekly: 7, biweekly: 14, monthly: 30, quarterly: 91, halfyearly: 182, yearly: 365 };
       const FREQ_LABEL = { weekly: "Weekly", biweekly: "Every 2 Weeks", monthly: "Monthly", quarterly: "Quarterly", halfyearly: "Half Yearly", yearly: "Yearly" };
 
@@ -5142,13 +5147,6 @@
       const search = ref("");
       const activeFilter = ref("all");
 
-      // ── Storage ──
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
-      function nextNum() {
-        const nums = readList().map(s => parseInt((s.name || "REC-0").replace(/\D/g, "")) || 0);
-        return "REC-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
-      }
       function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       // ── Frequency helpers ──
@@ -5289,53 +5287,62 @@
         showDrawer.value = true;
       }
 
-      function saveSchedule(status) {
+      async function saveSchedule(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
         if (!form.start_date) { toast("Please set a Start Date", "error"); return; }
-        const existing = list.value.find(s => s.name === form.name);
-        const doc = {
-          name: drawerMode.value === "edit" ? form.name : nextNum(),
-          customer: cust, schedule_name: form.schedule_name.trim(),
-          frequency: form.frequency, start_date: form.start_date,
-          end_date: form.end_date, payment_terms: form.payment_terms,
-          status: status, notes: form.notes.trim(),
-          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
-          taxes: form.taxes.map(t => ({ ...t })),
-          net_total: Math.round(netTotal.value * 100) / 100,
-          total_tax: Math.round(taxTotal.value * 100) / 100,
-          grand_total: grandTotal.value,
-          history: existing?.history || form.history || [],
-          created_at: existing?.created_at || todayStr(),
-        };
-        const arr = readList();
-        const idx = arr.findIndex(s => s.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr); list.value = arr;
-        toast(status === "Active" ? (drawerMode.value === "edit" ? "Schedule updated" : "Schedule activated!") : "Schedule saved");
-        showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Sales Invoice",
+            is_recurring: 1,
+            company: co(),
+            customer: cust,
+            title: form.schedule_name.trim() || "Recurring Schedule",
+            frequency: form.frequency,
+            start_date: form.start_date,
+            end_date: form.end_date || null,
+            payment_terms_template: form.payment_terms || null,
+            status,
+            remarks: form.notes.trim(),
+            posting_date: form.start_date,
+            items: form.items.filter(r => r.item_name || r.rate).map(r => ({
+              item_code: r.item_name, item_name: r.item_name, description: r.description || "",
+              qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+            })),
+            taxes: form.taxes.map(t => ({ charge_type: "On Net Total", description: t.description, account_head: t.tax_type, rate: t.rate })),
+            net_total: Math.round(netTotal.value * 100) / 100,
+            grand_total: grandTotal.value,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast(status === "Active" ? (drawerMode.value === "edit" ? "Schedule updated" : "Schedule activated!") : "Schedule saved");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
-      function toggleStatus(s) {
-        const arr = readList();
-        const o = arr.find(x => x.name === s.name); if (!o) return;
-        o.status = o.status === "Active" ? "Paused" : "Active";
-        storeList(arr); list.value = arr;
-        toast("Schedule " + o.status.toLowerCase());
+      async function toggleStatus(s) {
+        const newStatus = s.status === "Active" ? "Paused" : "Active";
+        try {
+          await apiSave({ doctype: "Sales Invoice", name: s.name, status: newStatus });
+          await load();
+          toast("Schedule " + newStatus.toLowerCase());
+        } catch(e) { toast("Update failed: " + e.message, "error"); }
       }
 
       // ── Generate modal ──
       const showGenerate = ref(false);
       const generateTarget = ref(null);
       function openGenerate(s) { generateTarget.value = s; showGenerate.value = true; }
-      function doGenerate() {
-        const arr = readList();
-        const s = arr.find(x => x.name === generateTarget.value.name); if (!s) { showGenerate.value = false; return; }
-        const entry = { date: todayStr(), amount: s.grand_total, inv_ref: "INV-AUTO-" + Date.now().toString(36).toUpperCase() };
-        s.history = (s.history || []);
-        s.history.push(entry);
-        storeList(arr); list.value = arr;
-        toast(`Invoice ${entry.inv_ref} generated for ${s.customer}`, "info");
+      async function doGenerate() {
+        try {
+          const s = generateTarget.value;
+          const inv = { doctype: "Sales Invoice", company: co(), customer: s.customer, posting_date: todayStr(), title: "Auto-" + (s.schedule_name || s.name), is_recurring: 0, items: (s.items || []).map(r => ({ item_code: r.item_name, item_name: r.item_name, description: r.description || "", qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount) })), grand_total: s.grand_total };
+          await apiSave(inv);
+          toast("Invoice generated for " + s.customer, "info");
+        } catch(e) { toast("Generate failed: " + e.message, "error"); }
         showGenerate.value = false;
       }
 
@@ -5349,19 +5356,37 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
       function confirmDelete(s) { deleteTarget.value = s; showDelete.value = true; }
-      function doDelete() {
+      async function doDelete() {
         deleting.value = true;
-        const arr = readList().filter(s => s.name !== deleteTarget.value.name);
-        storeList(arr); list.value = arr;
-        toast("Schedule deleted"); showDelete.value = false; deleting.value = false;
+        try {
+          await apiDelete("Sales Invoice", deleteTarget.value.name);
+          list.value = list.value.filter(s => s.name !== deleteTarget.value.name);
+          toast("Schedule deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; }
       }
 
       async function load() {
         loading.value = true;
-        list.value = readList();
+        try {
+          const rows = await apiList("Sales Invoice", {
+            fields: ["name","customer","customer_name","posting_date","due_date","status","grand_total","net_total","notes"],
+            filters: [["status","!=","Cancelled"]],
+            order: "modified desc", limit: 500
+          });
+          list.value = (rows || []).map(r => ({
+            name: r.name, customer: r.customer, schedule_name: r.name || "",
+            frequency: "monthly",
+            start_date: r.posting_date || "",
+            end_date: r.due_date || "",
+            status: r.status || "Submitted",
+            grand_total: flt(r.grand_total), net_total: flt(r.net_total),
+            items: [], taxes: [], history: []
+          }));
+        } catch(e) { toast("Could not load recurring invoices: " + e.message, "error"); }
         loading.value = false;
-        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
-        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], limit: 300, order: "item_name asc" }); } catch { }
+        try { customers.value = await apiList("Customer", { fields: ["name","customer_name"], filters: [["disabled","=",0]], order: "customer_name asc", limit: 300 }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], limit: 300, order: "item_name asc" }); } catch { }
       }
 
       onMounted(load);
@@ -5785,7 +5810,6 @@
   const CreditNotes = defineComponent({
     name: "CreditNotes",
     setup() {
-      const LKEY = "books_credit_notes";
       const list = ref([]);
       const allInvoices = ref([]);
       const customers = ref([]);
@@ -5794,12 +5818,6 @@
       const search = ref("");
       const activeFilter = ref("all");
 
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
-      function nextNum() {
-        const n = readList().map(x => parseInt((x.name || "CN-0").replace(/\D/g, "")) || 0);
-        return "CN-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(4, "0");
-      }
       function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       const STATUS_CFG = {
@@ -5890,20 +5908,38 @@
       function openEdit(n) { const s = list.value.find(x => x.name === n); if (!s) return; drawerMode.value = "edit"; resetForm(s); showDrawer.value = true; }
       function openView(n) { const s = list.value.find(x => x.name === n); if (!s) return; viewNote.value = s; drawerMode.value = "view"; showDrawer.value = true; }
 
-      function saveNote(status) {
+      async function saveNote(status) {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
-        // Validate: every item row must have an item selected
         const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
         if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
         if (!form.items.length) { toast("Please add at least one item", "error"); return; }
-        const existing = list.value.find(s => s.name === form.name);
-        const doc = { name: drawerMode.value === "edit" ? form.name : nextNum(), customer: cust, against_invoice: invSearch.value.trim(), date: form.date || todayStr(), reason: form.reason, status, notes: form.notes, items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })), taxes: form.taxes.map(t => ({ ...t })), net_total: Math.round(netTotal.value * 100) / 100, total_tax: Math.round(taxTotal.value * 100) / 100, grand_total: grandTotal.value, created_at: existing?.created_at || todayStr() };
-        const arr = readList(); const idx = arr.findIndex(s => s.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr); list.value = arr;
-        toast(status === "Submitted" ? "Credit note submitted!" : "Credit note saved as Draft");
-        showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Sales Invoice",
+            is_return: 1,
+            company: co(),
+            customer: cust,
+            return_against: invSearch.value.trim() || null,
+            posting_date: form.date || todayStr(),
+            remark: form.reason,
+            status,
+            items: form.items.filter(r => r.item_name || r.rate).map(r => ({
+              item_code: r.item_name, item_name: r.item_name, description: r.description || "",
+              qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+            })),
+            taxes: form.taxes.map(t => ({ charge_type: "On Net Total", description: t.description, account_head: t.tax_type, rate: t.rate })),
+            net_total: Math.round(netTotal.value * 100) / 100,
+            grand_total: grandTotal.value,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast(status === "Submitted" ? "Credit note submitted!" : "Credit note saved as Draft");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
       // ── Delete ──
@@ -5911,13 +5947,36 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
       function confirmDelete(n) { deleteTarget.value = n; showDelete.value = true; }
-      function doDelete() { deleting.value = true; const arr = readList().filter(s => s.name !== deleteTarget.value.name); storeList(arr); list.value = arr; toast("Credit note deleted"); showDelete.value = false; deleting.value = false; }
+      async function doDelete() {
+        deleting.value = true;
+        try {
+          await apiDelete("Sales Invoice", deleteTarget.value.name);
+          list.value = list.value.filter(s => s.name !== deleteTarget.value.name);
+          toast("Credit note deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; }
+      }
 
       async function load() {
-        loading.value = true; list.value = readList(); loading.value = false;
-        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
-        try { allInvoices.value = await apiList("Sales Invoice", { fields: ["name", "customer", "customer_name", "posting_date", "grand_total", "outstanding_amount"], filters: [["docstatus", "=", 1]], order: "posting_date desc", limit: 300 }); } catch { }
-        try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
+        loading.value = true;
+        try {
+          const rows = await apiList("Sales Invoice", {
+            fields: ["name","customer","customer_name","posting_date","due_date","status","grand_total","net_total","outstanding_amount","notes"],
+            filters: [["status","!=","Cancelled"]],
+            order: "modified desc", limit: 500
+          });
+          list.value = (rows || []).map(r => ({
+            name: r.name, customer: r.customer, date: r.posting_date,
+            against_invoice: "", reason: r.notes || "",
+            status: r.status || "Draft",
+            grand_total: flt(r.grand_total), net_total: flt(r.net_total),
+            items: [], taxes: []
+          }));
+        } catch(e) { toast("Could not load credit notes: " + e.message, "error"); }
+        loading.value = false;
+        try { customers.value = await apiList("Customer", { fields: ["name","customer_name"], filters: [["disabled","=",0]], order: "customer_name asc", limit: 300 }); } catch { }
+        try { allInvoices.value = await apiList("Sales Invoice", { fields: ["name","customer","customer_name","posting_date","grand_total","outstanding_amount"], filters: [["docstatus","=",1]], order: "posting_date desc", limit: 300 }); } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], order: "item_name asc", limit: 300 }); } catch { }
       }
       onMounted(load);
 
@@ -6159,19 +6218,12 @@
   const PaymentsReceived = defineComponent({
     name: "PaymentsReceived",
     setup() {
-      const LKEY = "books_payments_received";
       const list = ref([]);
       const customers = ref([]);
       const loading = ref(true);
       const search = ref("");
       const activeFilter = ref("all");
 
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
-      function nextNum() {
-        const n = readList().map(x => parseInt((x.name || "PAY-0").replace(/\D/g, "")) || 0);
-        return "PAY-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(4, "0");
-      }
       function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       const MODES = ["Cash", "Bank Transfer", "UPI", "Cheque", "Card", "Other"];
@@ -6225,16 +6277,31 @@
       function openAdd() { drawerMode.value = "add"; resetForm(); showDrawer.value = true; }
       function openEdit(n) { const s = list.value.find(x => x.name === n); if (!s) return; drawerMode.value = "edit"; resetForm(s); showDrawer.value = true; }
 
-      function savePayment() {
+      async function savePayment() {
         const cust = selCustomer.value || custSearch.value.trim();
         if (!cust) { toast("Please select a customer", "error"); return; }
         if (!flt(form.amount)) { toast("Please enter an amount", "error"); return; }
-        const existing = list.value.find(s => s.name === form.name);
-        const doc = { name: drawerMode.value === "edit" ? form.name : nextNum(), customer: cust, date: form.date || todayStr(), mode: form.mode, amount: flt(form.amount), ref: form.ref.trim(), remarks: form.remarks.trim(), cheque_no: form.cheque_no, cheque_date: form.cheque_date, bank_name: form.bank_name, created_at: existing?.created_at || todayStr() };
-        const arr = readList(); const idx = arr.findIndex(s => s.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr); list.value = arr;
-        toast("Payment recorded!"); showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Payment Entry",
+            payment_type: "Receive",
+            party_type: "Customer",
+            party: cust,
+            payment_date: form.date || todayStr(),
+            mode_of_payment: form.mode,
+            paid_amount: flt(form.amount),
+            reference_no: form.ref.trim(),
+            remarks: form.remarks.trim(),
+            reference_date: form.cheque_date || null,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast("Payment recorded!");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
       // Receipt modal
@@ -6247,17 +6314,34 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
       function confirmDelete(n) { deleteTarget.value = n; showDelete.value = true; }
-      function doDelete() { deleting.value = true; const arr = readList().filter(s => s.name !== deleteTarget.value.name); storeList(arr); list.value = arr; toast("Payment deleted"); showDelete.value = false; deleting.value = false; }
+      async function doDelete() {
+        deleting.value = true;
+        try {
+          await apiDelete("Payment Entry", deleteTarget.value.name);
+          list.value = list.value.filter(s => s.name !== deleteTarget.value.name);
+          toast("Payment deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; }
+      }
 
       async function load() {
-        loading.value = true; list.value = readList(); loading.value = false;
+        loading.value = true;
         try {
-          const frappe = await apiList("Payment Entry", { fields: ["name", "party", "posting_date", "mode_of_payment", "paid_amount", "reference_no", "remarks", "docstatus"], filters: [["payment_type", "=", "Receive"], ["docstatus", "=", 1]], order: "posting_date desc", limit: 300 });
-          const existing = new Set(list.value.filter(p => p.from_frappe).map(p => p.frappe_ref));
-          const newFromFrappe = (frappe || []).filter(r => !existing.has(r.name)).map(r => ({ name: nextNum(), frappe_ref: r.name, from_frappe: true, customer: r.party, date: r.posting_date, mode: r.mode_of_payment || "Bank Transfer", amount: r.paid_amount, ref: r.reference_no || "", remarks: r.remarks || "", created_at: r.posting_date }));
-          if (newFromFrappe.length) { const arr = [...readList(), ...newFromFrappe]; storeList(arr); list.value = arr; }
-        } catch { }
-        try { customers.value = await apiList("Customer", { fields: ["name", "customer_name"], filters: [["disabled", "=", 0]], order: "customer_name asc", limit: 300 }); } catch { }
+          const rows = await apiList("Payment Entry", {
+            fields: ["name","party","payment_date","mode_of_payment","paid_amount","reference_no","remarks","reference_date"],
+            filters: [["payment_type","=","Receive"]],
+            order: "payment_date desc", limit: 500
+          });
+          list.value = (rows || []).map(r => ({
+            name: r.name, customer: r.party, date: r.payment_date,
+            mode: r.mode_of_payment || "Bank Transfer",
+            amount: flt(r.paid_amount),
+            ref: r.reference_no || "", remarks: r.remarks || "",
+            cheque_date: r.reference_date || "", bank_name: ""
+          }));
+        } catch(e) { toast("Could not load payments: " + e.message, "error"); }
+        loading.value = false;
+        try { customers.value = await apiList("Customer", { fields: ["name","customer_name"], filters: [["disabled","=",0]], order: "customer_name asc", limit: 300 }); } catch { }
       }
       onMounted(load);
 
@@ -6419,18 +6503,11 @@
   const EwayBills = defineComponent({
     name: "EwayBills",
     setup() {
-      const LKEY = "books_eway_bills";
       const list = ref([]);
       const loading = ref(true);
       const search = ref("");
       const activeFilter = ref("all");
 
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
-      function nextNum() {
-        const n = readList().map(x => parseInt((x.name || "EWB-0").replace(/\D/g, "")) || 0);
-        return "EWB-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(6, "0");
-      }
       function todayStr() { return new Date().toISOString().slice(0, 10); }
 
       function calcValidDays(dist, vehicleType) {
@@ -6491,18 +6568,48 @@
       function openView(n) { const b = list.value.find(x => x.name === n); if (!b) return; viewBill.value = b; drawerMode.value = "view"; showDrawer.value = true; }
       function openEdit(n) { const b = list.value.find(x => x.name === n); if (!b) return; drawerMode.value = "edit"; resetForm(b); showDrawer.value = true; }
 
-      function saveEWB() {
+      async function saveEWB() {
         if (!form.invoice_no.trim()) { toast("Please enter Invoice No.", "error"); return; }
-        const existing = list.value.find(s => s.name === form.name);
-        const doc = { ...form, name: drawerMode.value === "edit" ? form.name : nextNum(), created_at: existing?.created_at || todayStr() };
-        const arr = readList(); const idx = arr.findIndex(s => s.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr); list.value = arr; toast("E-Way Bill saved!"); showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "E Way Bill",
+            naming_series: "EWB-.YYYY.-.#####",
+            company: co(),
+            ewb_no: form.ewb_no,
+            invoice_no: form.invoice_no,
+            invoice_date: form.invoice_date || todayStr(),
+            doc_type: form.doc_type,
+            supply_type: form.supply_type,
+            from_gstin: form.from_gstin, from_name: form.from_name, from_address: form.from_address,
+            to_gstin: form.to_gstin, to_name: form.to_name, to_address: form.to_address,
+            taxable_value: flt(form.taxable_value),
+            igst: flt(form.igst), cgst: flt(form.cgst), sgst: flt(form.sgst), cess: flt(form.cess),
+            hsn_code: form.hsn_code, description: form.description,
+            quantity: flt(form.quantity), unit: form.unit,
+            transport_mode: form.transport_mode, distance: flt(form.distance),
+            transporter_id: form.transporter_id, transporter_name: form.transporter_name,
+            vehicle_no: form.vehicle_no, vehicle_type: form.vehicle_type,
+            generated_date: form.generated_date || todayStr(),
+            expiry_date: form.expiry_date,
+            status: form.status,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast("E-Way Bill saved!");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
-      function cancelBill(b) {
-        const arr = readList(); const o = arr.find(x => x.name === b.name); if (!o) return;
-        o.status = "Cancelled"; storeList(arr); list.value = arr; toast("E-Way Bill cancelled"); showDrawer.value = false;
+      async function cancelBill(b) {
+        try {
+          await apiSave({ doctype: "E Way Bill", name: b.name, status: "Cancelled" });
+          await load();
+          toast("E-Way Bill cancelled");
+          showDrawer.value = false;
+        } catch(e) { toast("Cancel failed: " + e.message, "error"); }
       }
 
       // Delete
@@ -6510,14 +6617,42 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
       function confirmDelete(b) { deleteTarget.value = b; showDelete.value = true; }
-      function doDelete() { deleting.value = true; const arr = readList().filter(s => s.name !== deleteTarget.value.name); storeList(arr); list.value = arr; toast("E-Way Bill deleted"); showDelete.value = false; deleting.value = false; }
+      async function doDelete() {
+        deleting.value = true;
+        try {
+          await apiDelete("E Way Bill", deleteTarget.value.name);
+          list.value = list.value.filter(s => s.name !== deleteTarget.value.name);
+          toast("E-Way Bill deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; }
+      }
 
       function daysLeft(b) {
         if (!b.expiry_date || effectiveStatus(b) !== "Active") return null;
         return Math.round((new Date(b.expiry_date) - new Date()) / (1000 * 60 * 60 * 24));
       }
 
-      async function load() { loading.value = true; list.value = readList(); loading.value = false; }
+      async function load() {
+        loading.value = true;
+        try {
+          const rows = await apiList("E Way Bill", {
+            fields: ["name","ewb_no","invoice_no","invoice_date","from_gstin","to_gstin","vehicle_no","grand_total","valid_upto","status","supply_type","vehicle_type"],
+            order: "modified desc", limit: 500
+          });
+          list.value = (rows || []).map(r => ({
+            name: r.name, ewb_no: r.ewb_no || "", invoice_no: r.invoice_no || "",
+            invoice_date: r.invoice_date || "", from_gstin: r.from_gstin || "",
+            to_gstin: r.to_gstin || "", vehicle_no: r.vehicle_no || "",
+            taxable_value: flt(r.grand_total), generated_date: "",
+            expiry_date: r.valid_upto || "", status: r.status || "Active",
+            supply_type: r.supply_type || "Outward", transport_mode: "Road",
+            doc_type: "Tax Invoice", from_name: "", from_address: "", to_name: "", to_address: "",
+            igst: 0, cgst: 0, sgst: 0, cess: 0, hsn_code: "", description: "", quantity: 0,
+            unit: "NOS", distance: 0, transporter_id: "", transporter_name: "", vehicle_type: r.vehicle_type || "Regular"
+          }));
+        } catch(e) { toast("Could not load e-way bills: " + e.message, "error"); }
+        loading.value = false;
+      }
       onMounted(load);
 
       return { list, loading, search, activeFilter, filtered, counts, summary, STATUS_CFG, effectiveStatus, daysLeft, showDrawer, drawerMode, saving, viewBill, form, updateExpiry, resetForm, saveEWB, cancelBill, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
@@ -6727,16 +6862,8 @@
     name: "PurchaseOrders",
     setup() {
       const router = useRouter();
-      const LKEY = "books_purchase_orders";
       const STEPS = ["Draft", "Sent", "Confirmed", "Received", "Billed"];
 
-      /* ── localStorage helpers ── */
-      function storeList(d) { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } }
-      function readList() { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } }
-      function nextNum() {
-        const nums = readList().map(o => parseInt((o.name || "PO-0").replace(/\D/g, "")) || 0);
-        return "PO-" + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0");
-      }
       function todayStr() { return new Date().toISOString().slice(0, 10); }
       function addDays(d, n) { const dt = new Date(d); dt.setDate(dt.getDate() + n); return dt.toISOString().slice(0, 10); }
 
@@ -6821,10 +6948,23 @@
       /* ── Load ── */
       async function load() {
         loading.value = true;
-        list.value = readList();
+        try {
+          const rows = await apiList("Purchase Order", {
+            fields: ["name","supplier","supplier_name","transaction_date","expected_delivery_date","status","ref_rfq","delivery_address","net_total","total_tax","grand_total"],
+            order: "modified desc", limit: 500
+          });
+          list.value = (rows || []).map(r => ({
+            name: r.name, vendor: r.supplier, order_date: r.transaction_date,
+            expected_date: r.expected_delivery_date || "", status: r.status || "Draft",
+            vendor_ref: r.ref_rfq || "", delivery_address: r.delivery_address || "",
+            net_total: flt(r.net_total), total_tax: flt(r.total_tax),
+            grand_total: flt(r.grand_total), received_value: 0, terms: "",
+            items: [], taxes: [], created_at: r.transaction_date
+          }));
+        } catch(e) { toast("Could not load purchase orders: " + e.message, "error"); }
         loading.value = false;
         try { vendors.value = await apiList("Supplier", { fields: ["name", "supplier_name"], filters: [["disabled", "=", 0]], order: "supplier_name asc", limit: 300 }); } catch { }
-        try { allItems.value = await apiGET("zoho_books_clone.api.books_data.get_items", {}) || []; } catch { }
+        try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], order: "item_name asc", limit: 300 }) || []; } catch { }
       }
 
       /* ── Vendor dropdown helpers ── */
@@ -6927,66 +7067,74 @@
       }
 
       /* ── Save ── */
-      function saveOrder(status) {
+      async function saveOrder(status) {
         const vendor = selVendor.value || vendSearch.value.trim();
         if (!vendor) { toast("Please select a Vendor", "error"); return; }
         recalc();
-        const existing = list.value.find(o => o.name === form.name);
-        const doc = {
-          name: form.name || nextNum(),
-          vendor,
-          order_date: form.order_date || todayStr(),
-          expected_date: form.expected_date,
-          status,
-          vendor_ref: form.vendor_ref.trim(),
-          delivery_address: form.delivery_address.trim(),
-          items: form.items.filter(r => r.item_name || r.rate).map(r => ({ ...r })),
-          taxes: form.taxes.map(t => ({ ...t })),
-          net_total: form.net_total,
-          total_tax: form.total_tax,
-          grand_total: form.grand_total,
-          received_value: existing?.received_value || 0,
-          terms: form.terms.trim(),
-          created_at: existing?.created_at || todayStr(),
-        };
-        const arr = readList();
-        const idx = arr.findIndex(o => o.name === doc.name);
-        if (idx >= 0) arr[idx] = doc; else arr.unshift(doc);
-        storeList(arr); list.value = arr;
-        toast(status === "Sent" ? "Order sent to vendor!" : drawerMode.value === "edit" ? "Order updated" : "Order saved as Draft");
-        showDrawer.value = false;
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Purchase Order",
+            naming_series: "PO-.YYYY.-.#####",
+            company: co(),
+            supplier: vendor,
+            transaction_date: form.order_date || todayStr(),
+            expected_delivery_date: form.expected_date || addDays(todayStr(), 14),
+            status,
+            ref_rfq: form.vendor_ref.trim(),
+            delivery_address: form.delivery_address.trim(),
+            items: form.items.filter(r => r.item_name || r.rate).map(r => ({
+              item_code: r.item_name, item_name: r.item_name, description: r.description || "",
+              qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+            })),
+            taxes: form.taxes.map(t => ({ charge_type: "On Net Total", description: t.description, account_head: t.tax_type, rate: t.rate })),
+            net_total: form.net_total,
+            grand_total: form.grand_total,
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast(status === "Sent" ? "Order sent to vendor!" : drawerMode.value === "edit" ? "Order updated" : "Order saved as Draft");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
       /* ── Advance status ── */
-      function advanceStatus(name, newStatus) {
-        const arr = readList();
-        const o = arr.find(x => x.name === name); if (!o) return;
-        o.status = newStatus;
-        storeList(arr); list.value = arr;
-        toast("Order " + name + " → " + newStatus);
-        showDrawer.value = false;
-        if (viewOrder.value?.name === name) viewOrder.value = { ...o };
+      async function advanceStatus(name, newStatus) {
+        try {
+          await apiSave({ doctype: "Purchase Order", name, status: newStatus });
+          await load();
+          toast("Order " + name + " → " + newStatus);
+          showDrawer.value = false;
+          const updated = list.value.find(o => o.name === name);
+          if (updated && viewOrder.value?.name === name) viewOrder.value = { ...updated };
+        } catch(e) { toast("Update failed: " + e.message, "error"); }
       }
 
       /* ── Convert to Bill ── */
       function openConvert(name) { convertTarget.value = name; showConvert.value = true; }
-      function doConvert() {
-        const arr = readList();
-        const o = arr.find(x => x.name === convertTarget.value); if (!o) { showConvert.value = false; return; }
-        o.status = "Billed"; o.received_value = o.grand_total;
-        storeList(arr); list.value = arr;
-        toast("Order billed. Open Purchase Bills to see the new bill.", "info");
+      async function doConvert() {
+        const o = list.value.find(x => x.name === convertTarget.value); if (!o) { showConvert.value = false; return; }
+        try {
+          await apiSave({ doctype: "Purchase Order", name: convertTarget.value, status: "Billed" });
+          await load();
+          toast("Order billed. Open Purchase Bills to see the new bill.", "info");
+        } catch(e) { toast("Convert failed: " + e.message, "error"); }
         showConvert.value = false; showDrawer.value = false;
         router.push("/purchases");
       }
 
       /* ── Delete ── */
       function confirmDelete(name) { deleteTarget.value = name; showDelete.value = true; }
-      function doDelete() {
+      async function doDelete() {
         deleting.value = true;
-        const arr = readList().filter(o => o.name !== deleteTarget.value);
-        storeList(arr); list.value = arr;
-        toast("Order deleted"); showDelete.value = false; deleting.value = false; showDrawer.value = false;
+        try {
+          await apiDelete("Purchase Order", deleteTarget.value);
+          list.value = list.value.filter(o => o.name !== deleteTarget.value);
+          toast("Order deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; deleting.value = false; showDrawer.value = false; }
       }
 
       const nextStatusMap = { Draft: "Sent", Sent: "Confirmed", Confirmed: "Received", Received: "Billed" };
@@ -7797,7 +7945,7 @@
   const DebitNotes = defineComponent({
     name: "DebitNotes",
     setup() {
-      const LKEY = "books_debit_notes";
+      // DebitNotes uses Frappe Purchase Invoice with is_return=1
       const REASONS = [
         { val: "Goods Returned", lbl: "Goods Returned to Vendor" },
         { val: "Overcharged", lbl: "Overcharged by Vendor" },
@@ -7822,13 +7970,7 @@
 
       const showDelete = ref(false), deleteTarget = ref(null);
 
-      // Helpers
-      const store = (d) => { try { localStorage.setItem(LKEY, JSON.stringify(d)); } catch { } };
-      const loadLocal = () => { try { return JSON.parse(localStorage.getItem(LKEY) || "[]"); } catch { return []; } };
-      const nextNum = () => {
-        const n = loadLocal().map(x => parseInt((x.name || "DN-0").replace(/\D/g, "")) || 0);
-        return "DN-" + String((n.length ? Math.max(...n) : 0) + 1).padStart(4, "0");
-      };
+      // No localStorage helpers needed — using Frappe API directly
 
       const summary = computed(() => {
         const issued = list.value.reduce((s, n) => s + flt(n.debit_amount), 0);
@@ -7857,12 +7999,22 @@
 
       async function load() {
         loading.value = true;
-        list.value = loadLocal();
         try {
-          vendors.value = await apiList("Supplier", { fields: ["name", "supplier_name"], filters: [["disabled", "=", 0]], order: "supplier_name asc", limit: 300 });
-          allBills.value = await apiList("Purchase Invoice", { fields: ["name", "supplier", "posting_date", "grand_total", "outstanding_amount"], filters: [["docstatus", "=", 1]], order: "posting_date desc", limit: 300 });
-          try { allItems.value = await apiList("Item", { fields: ["name", "item_name", "item_code", "standard_rate", "description"], order: "item_name asc", limit: 300 }); } catch { }
-        } catch (e) { console.error("Load failed", e); }
+          const rows = await apiList("Purchase Invoice", {
+            fields: ["name","supplier","supplier_name","posting_date","due_date","status","grand_total","net_total","outstanding_amount"],
+            filters: [["status","!=","Cancelled"]],
+            order: "modified desc", limit: 500
+          });
+          list.value = (rows || []).map(r => ({
+            name: r.name, vendor: r.supplier, against_bill: "",
+            date: r.posting_date, reason: "", status: r.status || "Draft",
+            debit_type: "Partial", notes: "",
+            debit_amount: flt(r.grand_total), items: []
+          }));
+          vendors.value = await apiList("Supplier", { fields: ["name","supplier_name"], filters: [["disabled","=",0]], order: "supplier_name asc", limit: 300 });
+          allBills.value = await apiList("Purchase Invoice", { fields: ["name","supplier","posting_date","grand_total","outstanding_amount"], filters: [["docstatus","=",1]], order: "posting_date desc", limit: 300 });
+          try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], order: "item_name asc", limit: 300 }); } catch { }
+        } catch(e) { toast("Could not load debit notes: " + e.message, "error"); }
         finally { loading.value = false; }
       }
 
@@ -7906,30 +8058,49 @@
         const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
         if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
         if (form.debit_amount <= 0) { toast("Amount must be > 0", "error"); return; }
-
         saving.value = true;
-        const doc = { ...form, name: editingName.value || nextNum(), status, created_at: form.created_at || new Date().toISOString() };
-        const idx = list.value.findIndex(n => n.name === doc.name);
-        if (idx >= 0) list.value[idx] = doc; else list.value.unshift(doc);
-        store(list.value);
-        toast(status === "Draft" ? "Saved as draft" : "Debit note issued");
-        showDrawer.value = false;
-        saving.value = false;
-        await load();
+        try {
+          const doc = {
+            doctype: "Purchase Invoice",
+            is_return: 1,
+            company: co(),
+            supplier: form.vendor,
+            return_against: form.against_bill || null,
+            posting_date: form.date || new Date().toISOString().slice(0, 10),
+            remark: form.reason,
+            status,
+            items: form.items.filter(r => r.item_name).map(r => ({
+              item_code: r.item_name, item_name: r.item_name, description: r.description || "",
+              qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+            })),
+            grand_total: form.debit_amount,
+          };
+          if (editingName.value) doc.name = editingName.value;
+          await apiSave(doc);
+          await load();
+          toast(status === "Draft" ? "Saved as draft" : "Debit note issued");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
       }
 
       function confirmDelete(n) { deleteTarget.value = n; showDelete.value = true; }
-      function doDelete() {
-        list.value = list.value.filter(n => n.name !== deleteTarget.value.name);
-        store(list.value);
-        toast("Deleted");
-        showDelete.value = false;
-        load();
+      async function doDelete() {
+        try {
+          await apiDelete("Purchase Invoice", deleteTarget.value.name);
+          list.value = list.value.filter(n => n.name !== deleteTarget.value.name);
+          toast("Deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; }
       }
 
-      function applyDebit() {
-        const n = list.value.find(x => x.name === viewNote.value.name);
-        if (n) { n.status = "Applied"; store(list.value); toast("Applied"); showDrawer.value = false; load(); }
+      async function applyDebit() {
+        try {
+          await apiSave({ doctype: "Purchase Invoice", name: viewNote.value.name, status: "Applied" });
+          await load();
+          toast("Applied");
+          showDrawer.value = false;
+        } catch(e) { toast("Apply failed: " + e.message, "error"); }
       }
 
       onMounted(load);
@@ -8254,23 +8425,20 @@
         loading.value = true;
         let ok = false;
         try {
-          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name","account_name","bank","bank_account_no","branch_code","account","currency","is_default","disabled"]), order_by:"creation desc", limit_page_length:50 });
+          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name","account_name","bank_name","account_number","ifsc_code","gl_account","currency","is_default","account_type"]), order_by:"creation desc", limit_page_length:50 });
           if (r && r.length) {
-            allAccounts.value = r.map(a => ({ name:a.name, type:"Current", bank:a.bank||"", acct_no:a.bank_account_no||"", ifsc:a.branch_code||"", branch:"", holder:"", currency:a.currency||"INR", opening:0, balance:0, od_limit:0, gl_account:a.account||"", is_default:a.is_default?1:0, status:a.disabled?"Inactive":"Active", rm:"", rm_phone:"", reconcile_pct:0, source:"frappe" }));
+            allAccounts.value = r.map(a => ({ name:a.name, type:a.account_type||"Current", bank:a.bank_name||"", acct_no:a.account_number||"", ifsc:a.ifsc_code||"", branch:"", holder:"", currency:a.currency||"INR", opening:0, balance:0, od_limit:0, gl_account:a.gl_account||"", is_default:a.is_default?1:0, status:"Active", rm:"", rm_phone:"", reconcile_pct:0, source:"frappe" }));
             ok = true;
           }
         } catch {}
         if (!ok) {
-          const saved = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
-          allAccounts.value = saved.length ? saved : DEFAULT_BANK_ACCOUNTS;
-          if (!saved.length) localStorage.setItem("books_bank_accounts", JSON.stringify(allAccounts.value));
+          allAccounts.value = DEFAULT_BANK_ACCOUNTS;
         }
         try {
           const gl = await apiGET("frappe.client.get_list", { doctype:"Account", fields:JSON.stringify(["name"]), filters:JSON.stringify([["account_type","in",["Bank","Cash"]],["is_group","=",0]]), limit_page_length:100 });
           glAccounts.value = (gl || []).map(a => a.name);
         } catch {
-          const coa = JSON.parse(localStorage.getItem("books_coa") || "[]");
-          glAccounts.value = coa.filter(a => !a.is_group && ["Bank","Cash"].includes(a.account_type)).map(a => a.account_name || a.name);
+          glAccounts.value = [];
         }
         loading.value = false;
       }
@@ -8290,14 +8458,13 @@
         if (form.is_default) allAccounts.value.forEach(a => { a.is_default = 0; });
         const doc = { ...form, source: "local" };
         try {
-          const fdoc = { doctype:"Bank Account", account_name:form.name, bank:form.bank, bank_account_no:form.acct_no, branch_code:form.ifsc, account:form.gl_account, currency:form.currency, is_default:form.is_default };
+          const fdoc = { doctype:"Bank Account", account_name:form.name, bank_name:form.bank, account_number:form.acct_no, ifsc_code:form.ifsc, gl_account:form.gl_account, currency:form.currency, is_default:form.is_default };
           if (drawerMode.value === "edit") { fdoc.name = editingName.value; await apiPOST("frappe.client.save", { doc: JSON.stringify(fdoc) }); }
           else await apiPOST("frappe.client.insert", { doc: JSON.stringify(fdoc) });
           doc.source = "frappe"; toast(drawerMode.value === "edit" ? "Updated in Frappe" : "Created in Frappe");
         } catch { toast(drawerMode.value === "edit" ? "Saved locally" : "Added locally", "info"); }
         const idx = allAccounts.value.findIndex(a => a.name === (editingName.value || form.name));
         if (idx >= 0) allAccounts.value[idx] = doc; else allAccounts.value.unshift(doc);
-        localStorage.setItem("books_bank_accounts", JSON.stringify(allAccounts.value.filter(a => a.source !== "frappe")));
         drawerOpen.value = false;
       }
       function confirmDel(a) { deleteTarget.value = a; showDel.value = true; }
@@ -8305,10 +8472,9 @@
         const name = deleteTarget.value?.name;
         try { await apiPOST("frappe.client.delete", { doctype:"Bank Account", name }); } catch {}
         allAccounts.value = allAccounts.value.filter(a => a.name !== name);
-        localStorage.setItem("books_bank_accounts", JSON.stringify(allAccounts.value.filter(a => a.source !== "frappe")));
         toast("Account removed"); showDel.value = false; deleteTarget.value = null;
       }
-      const recentTxns = computed(() => (JSON.parse(localStorage.getItem("books_bank_txns") || "[]")).slice(0, 6));
+      const recentTxns = ref([]);
 
       onMounted(load);
       return { allAccounts, loading, drawerOpen, drawerMode, form, showBankFields, showOD, glAccounts, heroStats, recentTxns, openAdd, openEdit, saveAccount, showDel, deleteTarget, confirmDel, doDelete, fmtINR, fmtINRc, fmtDate, maskAcct, icon, flt, BANK_TYPE_META, BANK_COLORS, CAT_MAP_BANK };
@@ -8531,19 +8697,21 @@
         loading.value = true;
         let ok = false;
         try {
-          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Transaction", fields:JSON.stringify(["name","date","bank_account","description","withdrawal","deposit","closing_balance","status"]), order_by:"date desc", limit_page_length:500 });
+          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Transaction", fields:JSON.stringify(["name","date","bank_account","description","debit","credit","balance","status"]), order_by:"date desc", limit_page_length:500 });
           if (r && r.length) {
-            allTxns.value = r.map(t => ({ id:t.name, date:t.date, account:t.bank_account||"", description:t.description||"", type:flt(t.deposit)>0?"Credit":"Debit", amount:flt(t.deposit)||flt(t.withdrawal), balance:flt(t.closing_balance), category:autoCat(t.description||""), reconciled:t.status==="Reconciled", notes:"" }));
+            allTxns.value = r.map(t => ({ id:t.name, date:t.date, account:t.bank_account||"", description:t.description||"", type:flt(t.credit)>0?"Credit":"Debit", amount:flt(t.credit)||flt(t.debit), balance:flt(t.balance), category:autoCat(t.description||""), reconciled:t.status==="Reconciled", notes:"" }));
             ok = true;
           }
         } catch {}
         if (!ok) {
-          const saved = JSON.parse(localStorage.getItem("books_bank_txns") || "[]");
-          allTxns.value = saved.length ? saved : DEFAULT_BANK_TXNS;
-          if (!saved.length) localStorage.setItem("books_bank_txns", JSON.stringify(allTxns.value));
+          allTxns.value = DEFAULT_BANK_TXNS;
         }
-        const ba = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
-        bankAccounts.value = ba.length ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        try {
+          const ba = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name","account_name"]), order_by:"creation desc", limit_page_length:50 });
+          bankAccounts.value = (ba && ba.length) ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        } catch {
+          bankAccounts.value = DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        }
         loading.value = false;
       }
 
@@ -8571,12 +8739,14 @@
         if (dateFrom.value) r = r.filter(t => t.date >= dateFrom.value);
         if (dateTo.value) r = r.filter(t => t.date <= dateTo.value);
         if (searchQ.value) { const q = searchQ.value.toLowerCase(); r = r.filter(t => (t.description + t.account).toLowerCase().includes(q)); }
-        return r.sort((a, b) => b.date.localeCompare(a.date));
+        return [...r].sort((a, b) => b.date.localeCompare(a.date));
       });
 
       const stats = computed(() => ({
         cr: allTxns.value.filter(t => t.type === "Credit").reduce((s, t) => s + flt(t.amount), 0),
         dr: allTxns.value.filter(t => t.type === "Debit").reduce((s, t) => s + flt(t.amount), 0),
+        cr_count: allTxns.value.filter(t => t.type === "Credit").length,
+        dr_count: allTxns.value.filter(t => t.type === "Debit").length,
         rec: allTxns.value.filter(t => t.reconciled).length,
         uncat: allTxns.value.filter(t => !t.category || t.category === "other").length,
         total: allTxns.value.length,
@@ -8584,18 +8754,19 @@
 
       function openTxn(t) { activeTxn.value = t; selectedCat.value = t.category || "other"; drawerOpen.value = true; }
 
-      function saveTxn() {
+      async function saveTxn() {
         if (!activeTxn.value) return;
         const t = allTxns.value.find(x => x.id === activeTxn.value.id);
         if (t) { t.category = selectedCat.value; t.notes = activeTxn.value.notes || ""; }
-        localStorage.setItem("books_bank_txns", JSON.stringify(allTxns.value));
+        try { await apiSave({ doctype:"Bank Transaction", name: activeTxn.value.id, custom_category: selectedCat.value }); } catch {}
         drawerOpen.value = false;
         toast("Transaction categorised as " + (CAT_MAP_BANK[selectedCat.value]?.label || selectedCat.value));
       }
 
-      function markReconciled(t) {
+      async function markReconciled(t) {
         const tx = allTxns.value.find(x => x.id === t.id);
-        if (tx) { tx.reconciled = true; localStorage.setItem("books_bank_txns", JSON.stringify(allTxns.value)); }
+        if (tx) { tx.reconciled = true; }
+        try { await apiSave({ doctype:"Bank Transaction", name: t.id, status:"Reconciled" }); } catch {}
         drawerOpen.value = false;
         toast("Marked as reconciled");
       }
@@ -8615,14 +8786,21 @@
   </div>
   <!-- Filters -->
   <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button v-for="f in ['all','Credit','Debit','Uncategorised','Reconciled']" :key="f"
-        class="bk-pill" :class="{active:filterType===f}" @click="filterType=f">
-        {{f==='all'?'All':f}}
-        <span v-if="f==='Credit'" class="bk-pc" style="background:#EBFBEE;color:#2F9E44">{{allTxns.filter(t=>t.type==='Credit').length}}</span>
-        <span v-if="f==='Debit'" class="bk-pc" style="background:#FFE3E3;color:#C92A2A">{{allTxns.filter(t=>t.type==='Debit').length}}</span>
-        <span v-if="f==='Uncategorised'" class="bk-pc" style="background:#FFF3BF;color:#E67700">{{allTxns.filter(t=>!t.category||t.category==='other').length}}</span>
-        <span v-if="f==='Reconciled'" class="bk-pc" style="background:#E0F7FA;color:#0C8599">{{allTxns.filter(t=>t.reconciled).length}}</span>
+    <div class="bk-pc">
+      <button class="bk-pill" :class="{active:filterType==='all'}" @click="filterType='all'">
+        All <span class="bk-pill-cnt">{{stats.total}}</span>
+      </button>
+      <button class="bk-pill bk-pill-cr" :class="{active:filterType==='Credit'}" @click="filterType='Credit'">
+        Credit <span class="bk-pill-cnt">{{stats.cr_count}}</span>
+      </button>
+      <button class="bk-pill bk-pill-dr" :class="{active:filterType==='Debit'}" @click="filterType='Debit'">
+        Debit <span class="bk-pill-cnt">{{stats.dr_count}}</span>
+      </button>
+      <button class="bk-pill bk-pill-uc" :class="{active:filterType==='Uncategorised'}" @click="filterType='Uncategorised'">
+        Uncategorised <span class="bk-pill-cnt">{{stats.uncat}}</span>
+      </button>
+      <button class="bk-pill bk-pill-re" :class="{active:filterType==='Reconciled'}" @click="filterType='Reconciled'">
+        Reconciled <span class="bk-pill-cnt">{{stats.rec}}</span>
       </button>
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-left:auto;flex-wrap:wrap">
@@ -8750,25 +8928,22 @@
           // Load unreconciled bank transactions from Frappe
           const r = await apiGET("frappe.client.get_list", {
             doctype: "Bank Transaction",
-            fields: JSON.stringify(["name","date","description","withdrawal","deposit","closing_balance","status"]),
+            fields: JSON.stringify(["name","date","description","debit","credit","balance","status"]),
             filters: JSON.stringify([["bank_account","=",selAccount.value],["status","!=","Reconciled"]]),
             order_by: "date desc", limit_page_length: 200
           });
-          bankTxns.value = (r || []).map(t => ({ id:t.name, date:t.date, desc:t.description||"", type:flt(t.deposit)>0?"Credit":"Debit", amount:flt(t.deposit)||flt(t.withdrawal) }));
+          bankTxns.value = (r || []).map(t => ({ id:t.name, date:t.date, desc:t.description||"", type:flt(t.credit)>0?"Credit":"Debit", amount:flt(t.credit)||flt(t.debit) }));
         } catch {
-          // Use localStorage bank txns for selected account
-          const saved = JSON.parse(localStorage.getItem("books_bank_txns") || "[]");
-          bankTxns.value = saved.filter(t => t.account === selAccount.value && !t.reconciled).map(t => ({ id:t.id, date:t.date, desc:t.description, type:t.type, amount:flt(t.amount) }));
-          if (!bankTxns.value.length) bankTxns.value = DEFAULT_BANK_TXNS.filter(t => t.account === selAccount.value && !t.reconciled).map(t => ({ id:t.id, date:t.date, desc:t.description, type:t.type, amount:flt(t.amount) }));
+          bankTxns.value = DEFAULT_BANK_TXNS.filter(t => t.account === selAccount.value && !t.reconciled).map(t => ({ id:t.id, date:t.date, desc:t.description, type:t.type, amount:flt(t.amount) }));
         }
         try {
           const gl = await apiGET("frappe.client.get_list", {
             doctype: "General Ledger Entry",
-            fields: JSON.stringify(["name","posting_date","voucher_no","debit","credit","remarks"]),
+            fields: JSON.stringify(["name","posting_date","voucher_type","voucher_no","debit","credit","remarks"]),
             filters: JSON.stringify([["account","=",selAccount.value],["docstatus","=",1]]),
             order_by: "posting_date desc", limit_page_length: 200
           });
-          bookTxns.value = (gl || []).map(g => ({ id:g.name, date:g.posting_date, desc:g.remarks||g.voucher_no||"", type:flt(g.credit)>0?"Credit":"Debit", amount:flt(g.debit)||flt(g.credit) }));
+          bookTxns.value = (gl || []).map(g => ({ id:g.name, date:g.posting_date, desc:g.remarks||g.voucher_no||"", voucher_no:g.voucher_no, voucher_type:g.voucher_type, type:flt(g.credit)>0?"Credit":"Debit", amount:flt(g.debit)||flt(g.credit) }));
         } catch {
           bookTxns.value = [];
         }
@@ -8776,8 +8951,8 @@
       }
 
       const bookBal = computed(() => {
-        const acct = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]").find(a => a.name === selAccount.value);
-        return flt(acct?.balance || 0);
+        // Compute running book balance from loaded GL entries (credits - debits)
+        return bookTxns.value.reduce((s, t) => s + (t.type === "Credit" ? flt(t.amount) : -flt(t.amount)), 0);
       });
       const selectedBankTotal = computed(() => bankTxns.value.filter(t => selectedBank.value.includes(t.id)).reduce((s, t) => s + (t.type === "Credit" ? flt(t.amount) : -flt(t.amount)), 0));
       const selectedBookTotal = computed(() => bookTxns.value.filter(t => selectedBook.value.includes(t.id)).reduce((s, t) => s + (t.type === "Credit" ? flt(t.amount) : -flt(t.amount)), 0));
@@ -8805,13 +8980,17 @@
       }
 
       async function loadAccounts() {
-        const saved = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
-        bankAccounts.value = saved.length ? saved.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        try {
+          const ba = await apiGET("frappe.client.get_list", { doctype: "Bank Account", fields: JSON.stringify(["name"]), order_by: "creation desc", limit_page_length: 50 });
+          bankAccounts.value = (ba && ba.length) ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        } catch {
+          bankAccounts.value = DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        }
         if (bankAccounts.value.length) { selAccount.value = bankAccounts.value[0]; await load(); }
       }
 
       onMounted(loadAccounts);
-      return { bankAccounts, selAccount, stmtDate, stmtBalance, loading, bookTxns, bankTxns, selectedBook, selectedBank, bookBal, diff, isBalanced, selectedBankTotal, selectedBookTotal, load, toggleBank, toggleBook, matchSelected, finaliseReconciliation, fmtINR, fmtDate, icon, flt };
+      return { bankAccounts, selAccount, stmtDate, stmtBalance, loading, bookTxns, bankTxns, selectedBook, selectedBank, bookBal, diff, isBalanced, selectedBankTotal, selectedBookTotal, load, toggleBank, toggleBook, matchSelected, finaliseReconciliation, fmtINR, fmtDate, icon, flt, voucherPath };
     },
     template: `
 <div class="b-page">
@@ -8910,8 +9089,11 @@
             <span v-if="selectedBook.includes(t.id)" style="color:#fff;font-size:10px;display:flex;align-items:center;justify-content:center;height:100%">✓</span>
           </div>
           <div style="flex:1;min-width:0">
-            <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{t.desc}}</div>
-            <div style="font-size:11.5px;color:#868E96">{{fmtDate(t.date)}}</div>
+            <div style="font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              <a v-if="t.voucher_no" :href="voucherPath(t.voucher_type, t.voucher_no)" @click.stop style="color:#3B5BDB;text-decoration:none" title="Open voucher">{{t.voucher_no}}</a>
+              <span v-else>{{t.desc}}</span>
+            </div>
+            <div style="font-size:11.5px;color:#868E96">{{fmtDate(t.date)}}<span v-if="t.desc && t.voucher_no" style="margin-left:6px">· {{t.desc}}</span></div>
           </div>
           <div style="text-align:right;flex-shrink:0">
             <div class="mono fw-600" :class="t.type==='Credit'?'c-green':'c-red'" style="font-size:13px">{{t.type==='Credit'?'+':'-'}}{{fmtINR(t.amount)}}</div>
@@ -8961,29 +9143,31 @@
         try {
           const r = await apiGET("frappe.client.get_list", {
             doctype: "Payment Entry",
-            fields: JSON.stringify(["name","posting_date","payment_type","party","bank_account","paid_amount","received_amount","reference_no","reference_date","remarks","docstatus"]),
+            fields: JSON.stringify(["name","payment_date","payment_type","party","paid_amount","reference_no","reference_date","remarks","docstatus"]),
             filters: JSON.stringify([["mode_of_payment","=","Cheque"],["docstatus","!=",2]]),
-            order_by: "posting_date desc",
+            order_by: "payment_date desc",
             limit_page_length: 200,
           });
           if (r && r.length) {
             cheques.value = r.map(c => ({
-              name: c.name, no: c.reference_no || "", date: c.posting_date || "",
-              payee: c.party || "", bank_account: c.bank_account || "",
-              amount: flt(c.paid_amount || c.received_amount),
+              name: c.name, no: c.reference_no || "", date: c.payment_date || "",
+              payee: c.party || "", bank_account: "",
+              amount: flt(c.paid_amount),
               due_date: c.reference_date || "", status: c.docstatus === 1 ? "Cleared" : "Issued",
               type: c.payment_type === "Pay" ? "issued" : "received", remarks: c.remarks || "",
             }));
-            const ba = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
-            bankAccounts.value = ba.length ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
-            return;
+          } else {
+            cheques.value = DEFAULTS;
           }
-        } catch {}
-        const saved = JSON.parse(localStorage.getItem("books_cheques") || "[]");
-        cheques.value = saved.length ? saved : DEFAULTS;
-        if (!saved.length) localStorage.setItem("books_cheques", JSON.stringify(cheques.value));
-        const ba = JSON.parse(localStorage.getItem("books_bank_accounts") || "[]");
-        bankAccounts.value = ba.length ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        } catch {
+          cheques.value = DEFAULTS;
+        }
+        try {
+          const ba = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name"]), order_by:"creation desc", limit_page_length:50 });
+          bankAccounts.value = (ba && ba.length) ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        } catch {
+          bankAccounts.value = DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+        }
       }
 
       const filtered = computed(() => {
@@ -8991,7 +9175,7 @@
         if (activeTab.value !== "void") r = r.filter(c => c.status !== "Void");
         if (filterStatus.value !== "all") r = r.filter(c => c.status === filterStatus.value);
         if (searchQ.value) { const q = searchQ.value.toLowerCase(); r = r.filter(c => (c.payee + c.no + c.bank_account).toLowerCase().includes(q)); }
-        return r.sort((a, b) => b.date.localeCompare(a.date));
+        return [...r].sort((a, b) => b.date.localeCompare(a.date));
       });
 
       const stats = computed(() => ({
@@ -9012,18 +9196,36 @@
         Object.assign(form, { no:c.no, date:c.date, payee:c.payee, bank_account:c.bank_account, amount:c.amount, due_date:c.due_date, status:c.status, remarks:c.remarks });
         drawerOpen.value = true;
       }
-      function save() {
+      async function save() {
         if (!form.no || !form.payee) { toast("Cheque number and payee are required", "error"); return; }
-        const doc = { ...form, type: activeTab.value === "received" ? "received" : "issued", name: editingName.value || ("CHQ-" + String(Date.now()).slice(-4)) };
-        const idx = cheques.value.findIndex(c => c.name === editingName.value);
-        if (idx >= 0) cheques.value[idx] = doc; else cheques.value.unshift(doc);
-        localStorage.setItem("books_cheques", JSON.stringify(cheques.value));
-        drawerOpen.value = false;
-        toast(drawerMode.value === "edit" ? "Cheque updated" : "Cheque added");
+        try {
+          const doc = {
+            doctype: "Payment Entry",
+            payment_type: activeTab.value === "received" ? "Receive" : "Pay",
+            mode_of_payment: "Cheque",
+            party_type: activeTab.value === "received" ? "Customer" : "Supplier",
+            party: form.payee,
+            bank_account: form.bank_account,
+            payment_date: form.date,
+            paid_amount: flt(form.amount),
+            reference_no: form.no,
+            reference_date: form.due_date || form.date,
+            remarks: form.remarks,
+          };
+          if (editingName.value) doc.name = editingName.value;
+          const saved = await apiSave(doc);
+          const localDoc = { ...form, type: activeTab.value === "received" ? "received" : "issued", name: saved?.name || editingName.value || ("CHQ-" + String(Date.now()).slice(-4)) };
+          const idx = cheques.value.findIndex(c => c.name === editingName.value);
+          if (idx >= 0) cheques.value[idx] = localDoc; else cheques.value.unshift(localDoc);
+          drawerOpen.value = false;
+          toast(drawerMode.value === "edit" ? "Cheque updated" : "Cheque added");
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
       }
-      function changeStatus(c, status) {
+      async function changeStatus(c, status) {
         const idx = cheques.value.findIndex(x => x.name === c.name);
-        if (idx >= 0) { cheques.value[idx].status = status; localStorage.setItem("books_cheques", JSON.stringify(cheques.value)); toast("Status updated to " + status); }
+        if (idx >= 0) { cheques.value[idx].status = status; }
+        try { await apiSave({ doctype:"Payment Entry", name: c.name, status }); } catch {}
+        toast("Status updated to " + status);
       }
 
       onMounted(load);
@@ -9159,24 +9361,24 @@
         try {
           const r = await apiGET("frappe.client.get_list", {
             doctype: "Payment Entry",
-            fields: JSON.stringify(["name","posting_date","payment_type","remarks","paid_amount","received_amount","mode_of_payment"]),
+            fields: JSON.stringify(["name","payment_date","payment_type","remarks","paid_amount","mode_of_payment"]),
             filters: JSON.stringify([["mode_of_payment","=","Cash"],["docstatus","=",1]]),
-            order_by: "posting_date desc",
+            order_by: "payment_date desc",
             limit_page_length: 200,
           });
           if (r && r.length) {
             cashTxns.value = r.map(t => ({
-              id: t.name, date: t.posting_date,
+              id: t.name, date: t.payment_date,
               type: t.payment_type === "Pay" ? "Payment" : "Receipt",
-              desc: t.remarks || t.name, amount: flt(t.paid_amount || t.received_amount),
+              desc: t.remarks || t.name, amount: flt(t.paid_amount),
               category: "other", person: "", narration: t.remarks || "",
             }));
-            return;
+          } else {
+            cashTxns.value = CASH_DEFAULTS;
           }
-        } catch {}
-        const saved = JSON.parse(localStorage.getItem("books_cash_txns") || "[]");
-        cashTxns.value = saved.length ? saved : CASH_DEFAULTS;
-        if (!saved.length) localStorage.setItem("books_cash_txns", JSON.stringify(cashTxns.value));
+        } catch {
+          cashTxns.value = CASH_DEFAULTS;
+        }
       }
 
       const filtered = computed(() => {
@@ -9184,7 +9386,7 @@
         if (filterType.value === "Receipt") r = r.filter(t => t.type === "Receipt");
         else if (filterType.value === "Payment") r = r.filter(t => t.type === "Payment");
         if (searchQ.value) { const q = searchQ.value.toLowerCase(); r = r.filter(t => (t.desc + t.person + t.narration).toLowerCase().includes(q)); }
-        return r.sort((a, b) => b.date.localeCompare(a.date));
+        return [...r].sort((a, b) => b.date.localeCompare(a.date));
       });
 
       const hero = computed(() => {
@@ -9203,13 +9405,25 @@
         drawerOpen.value = true;
       }
 
-      function saveEntry() {
+      async function saveEntry() {
         if (!entryForm.amount || !entryForm.desc) { toast("Description and amount are required", "error"); return; }
-        const doc = { ...entryForm, id: "CASH-" + Date.now().toString(36).toUpperCase() };
-        cashTxns.value.unshift(doc);
-        localStorage.setItem("books_cash_txns", JSON.stringify(cashTxns.value));
-        drawerOpen.value = false;
-        toast("Cash entry saved");
+        try {
+          const doc = {
+            doctype: "Payment Entry",
+            payment_type: entryForm.type === "Receipt" ? "Receive" : "Pay",
+            mode_of_payment: "Cash",
+            party_type: entryForm.type === "Receipt" ? "Customer" : "Supplier",
+            party: entryForm.person || "Cash",
+            payment_date: entryForm.date,
+            paid_amount: flt(entryForm.amount),
+            remarks: entryForm.desc,
+          };
+          const saved = await apiSave(doc);
+          const localDoc = { ...entryForm, id: saved?.name || "CASH-" + Date.now().toString(36).toUpperCase() };
+          cashTxns.value.unshift(localDoc);
+          drawerOpen.value = false;
+          toast("Cash entry saved");
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
       }
 
       onMounted(load);
@@ -9246,8 +9460,15 @@
   <!-- Transactions tab -->
   <template v-if="activeTab==='txns'">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-      <button v-for="f in ['all','Receipt','Payment']" :key="f"
-        class="bk-pill" :class="{active:filterType===f}" @click="filterType=f">{{f==='all'?'All':f+'s'}}</button>
+      <button class="bk-pill" :class="{active:filterType==='all'}" @click="filterType='all'">
+        All <span class="bk-pill-cnt">{{cashTxns.length}}</span>
+      </button>
+      <button class="bk-pill bk-pill-cr" :class="{active:filterType==='Receipt'}" @click="filterType='Receipt'">
+        Receipts <span class="bk-pill-cnt">{{cashTxns.filter(t=>t.type==='Receipt').length}}</span>
+      </button>
+      <button class="bk-pill bk-pill-dr" :class="{active:filterType==='Payment'}" @click="filterType='Payment'">
+        Payments <span class="bk-pill-cnt">{{cashTxns.filter(t=>t.type==='Payment').length}}</span>
+      </button>
       <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
         <div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:5px 12px">
           <span v-html="icon('search',12)" style="color:#868E96"></span>
@@ -10023,7 +10244,7 @@
           let frappeEntries = [];
           try {
             frappeEntries = await apiList("Journal Entry", {
-              fields: ["name","posting_date","voucher_type","user_remark","total_debit","total_credit","docstatus"],
+              fields: ["name","posting_date","voucher_type","remark","total_debit","total_credit","docstatus"],
               order: "posting_date desc", limit: 300
             });
           } catch {}
@@ -10031,24 +10252,21 @@
           if (frappeEntries && frappeEntries.length) {
             allEntries.value = frappeEntries.map(e => ({
               name: e.name, date: e.posting_date, type: e.voucher_type || "Journal Entry",
-              narration: e.user_remark || "", total_debit: e.total_debit || 0,
+              narration: e.remark || "", total_debit: e.total_debit || 0,
               total_credit: e.total_credit || 0,
               status: e.docstatus === 1 ? "Submitted" : e.docstatus === 2 ? "Cancelled" : "Draft",
               lines: [], source: "frappe"
             }));
           } else {
-            try { allEntries.value = JSON.parse(localStorage.getItem("books_journal_entries") || "[]"); } catch { allEntries.value = []; }
+            allEntries.value = [];
           }
 
-          // Load accounts for dropdowns - from COA localStorage or Frappe
+          // Load accounts for dropdowns - from Frappe
           try {
-            const accts = await apiList("Account", { fields: ["name","account_name","root_type"], filters: [["is_group","=",0],["disabled","=",0]], limit: 500 });
+            const accts = await apiList("Account", { fields: ["name","account_name","account_type"], filters: [["is_group","=",0],["disabled","=",0]], limit: 500 });
             accounts.value = accts.map(a => a.name || a.account_name);
           } catch {
-            try {
-              const coa = JSON.parse(localStorage.getItem("books_coa") || "[]");
-              accounts.value = coa.filter(a => !a.is_group).map(a => a.account_name || a.name);
-            } catch {}
+            accounts.value = [];
           }
           if (!accounts.value.length) {
             accounts.value = STANDARD_COA_DATA.filter(a => !a.is_group).map(a => a.name);
@@ -10122,15 +10340,13 @@
           const payload = {
             posting_date: form.date,
             voucher_type: form.type,
-            cheque_no: form.ref,
-            cheque_date: form.cheque_date || null,
-            user_remark: form.narration,
+            remark: form.narration,
             accounts: lines.value.filter(l => l.account).map(l => ({
               account: l.account,
               party: l.party || null,
               cost_center: l.cost_center || form.cost_center || null,
-              debit_in_account_currency: flt(l.dr),
-              credit_in_account_currency: flt(l.cr),
+              debit: flt(l.dr),
+              credit: flt(l.cr),
             })),
             docstatus: status === "Submitted" ? 1 : 0,
           };
@@ -10138,18 +10354,11 @@
           const totDr = lineItems.reduce((s,l) => s + flt(l.dr), 0);
           const totCr = lineItems.reduce((s,l) => s + flt(l.cr), 0);
 
-          if (editingName.value) {
-            try { await apiPOST("frappe.client.set_value", { doctype:"Journal Entry", name: editingName.value, fieldname: JSON.stringify(payload) }); } catch {}
-            const idx = allEntries.value.findIndex(x => x.name === editingName.value);
-            if (idx >= 0) allEntries.value[idx] = { ...allEntries.value[idx], date: form.date, type: form.type, narration: form.narration, total_debit: totDr, total_credit: totCr, status, lines: lineItems, ref: form.ref, cheque_date: form.cheque_date, cost_center: form.cost_center };
-            toast("Journal entry updated", "success");
-          } else {
-            const name = nextNum();
-            try { await apiPOST("frappe.client.insert", { doc: JSON.stringify({ doctype:"Journal Entry", name, ...payload }) }); } catch {}
-            allEntries.value.unshift({ name, date: form.date, type: form.type, narration: form.narration, total_debit: totDr, total_credit: totCr, status, lines: lineItems, ref: form.ref, cheque_date: form.cheque_date, cost_center: form.cost_center, source: "local" });
-            toast("Journal entry created", "success");
-          }
-          try { localStorage.setItem("books_journal_entries", JSON.stringify(allEntries.value)); } catch {}
+          const frappeDoc = { doctype: "Journal Entry", naming_series: "JV-.YYYY.-.#####", company: co(), ...payload };
+          if (editingName.value) frappeDoc.name = editingName.value;
+          const savedDoc = await apiSave(frappeDoc);
+          await load();
+          toast(editingName.value ? "Journal entry updated" : "Journal entry created", "success");
           drawerOpen.value = false;
         } catch(e) {
           toast(e.message || "Save failed", "error");
@@ -10164,17 +10373,20 @@
         showConf.value = true;
       }
 
-      function doAction() {
+      async function doAction() {
         const name = confTarget.value;
-        if (confType.value === "delete") {
-          allEntries.value = allEntries.value.filter(e => e.name !== name);
-          toast("Entry deleted", "success");
-        } else if (confType.value === "cancel") {
-          const idx = allEntries.value.findIndex(e => e.name === name);
-          if (idx >= 0) allEntries.value[idx] = { ...allEntries.value[idx], status: "Cancelled" };
-          toast("Entry cancelled", "success");
-        }
-        try { localStorage.setItem("books_journal_entries", JSON.stringify(allEntries.value)); } catch {}
+        try {
+          if (confType.value === "delete") {
+            await apiDelete("Journal Entry", name);
+            allEntries.value = allEntries.value.filter(e => e.name !== name);
+            toast("Entry deleted", "success");
+          } else if (confType.value === "cancel") {
+            await apiSave({ doctype:"Journal Entry", name, docstatus: 2 });
+            const idx = allEntries.value.findIndex(e => e.name === name);
+            if (idx >= 0) allEntries.value[idx] = { ...allEntries.value[idx], status: "Cancelled" };
+            toast("Entry cancelled", "success");
+          }
+        } catch(e) { toast("Action failed: " + e.message, "error"); }
         showConf.value = false;
         confTarget.value = null;
       }
@@ -10604,9 +10816,9 @@
         showSubmitModal.value=false;
         const date=goLiveDate.value||new Date().toISOString().slice(0,10);
         const lines=[];
-        accounts.value.forEach(a=>{const v=r2(Number(balances[a.name]||0));if(!v)return;const dc=drCrMap[a.name]||"Debit";lines.push({account:a.name,debit_in_account_currency:dc==="Debit"?v:0,credit_in_account_currency:dc==="Credit"?v:0});});
+        accounts.value.forEach(a=>{const v=r2(Number(balances[a.name]||0));if(!v)return;const dc=drCrMap[a.name]||"Debit";lines.push({account:a.name,debit:dc==="Debit"?v:0,credit:dc==="Credit"?v:0});});
         try{
-          const doc={doctype:"Journal Entry",voucher_type:"Opening Entry",posting_date:date,user_remark:"Opening Balances as at "+date,is_opening:"Yes",accounts:lines};
+          const doc={doctype:"Journal Entry",voucher_type:"Opening Entry",posting_date:date,remark:"Opening Balances as at "+date,accounts:lines};
           const saved=await apiPOST("frappe.client.save",{doc:JSON.stringify(doc)});
           const fresh=await apiGET("frappe.client.get",{doctype:"Journal Entry",name:saved.name});
           await apiPOST("frappe.client.submit",{doc:JSON.stringify({doctype:"Journal Entry",name:saved.name,modified:fresh.modified})});
@@ -10821,7 +11033,7 @@
       async function load(){
         loading.value=true;
         try{
-          const ccs=await apiGET("frappe.client.get_list",{doctype:"Cost Center",fields:JSON.stringify(["name","cost_center_name","cost_center_number","parent_cost_center","is_group","disabled"]),order_by:"lft asc",limit_page_length:200})||[];
+          const ccs=await apiGET("frappe.client.get_list",{doctype:"Cost Center",fields:JSON.stringify(["name","cost_center_name","cost_center_number","parent_cost_center","is_group","disabled"]),order_by:"name asc",limit_page_length:200})||[];
           if(ccs.length){
             allCC.value=ccs.map(c=>({name:c.name,code:c.cost_center_number||"",parent:c.parent_cost_center||"",type:"Department",color:"#3B5BDB",budget:0,budget_period:"Annual",alert_pct:80,budget_action:"Warn",is_group:c.is_group?1:0,status:c.disabled?"Inactive":"Active",desc:"",source:"frappe"}));
             fromFrappe.value=true;toast("Loaded "+allCC.value.length+" cost centers","info");
@@ -11237,9 +11449,9 @@
       async function load(){
         loading.value=true;
         try{
-          const yrs=await apiGET("frappe.client.get_list",{doctype:"Fiscal Year",fields:JSON.stringify(["name","year_start_date","year_end_date","disabled","is_short_year"]),order_by:"year_start_date desc",limit_page_length:20})||[];
+          const yrs=await apiGET("frappe.client.get_list",{doctype:"Fiscal Year",fields:JSON.stringify(["name","year_start_date","year_end_date","is_closed"]),order_by:"year_start_date desc",limit_page_length:20})||[];
           if(yrs.length){
-            allYears.value=yrs.map(y=>({name:y.name,start:y.year_start_date,end:y.year_end_date,period_type:"Monthly",closing_acct:"Retained Earnings",auto_close:0,is_default:0,is_closed:y.disabled?1:0,periods:generatePeriods(y.year_start_date,y.year_end_date,"Monthly"),source:"frappe"}));
+            allYears.value=yrs.map(y=>({name:y.name,start:y.year_start_date,end:y.year_end_date,period_type:"Monthly",closing_acct:"Retained Earnings",auto_close:0,is_default:0,is_closed:y.is_closed?1:0,periods:generatePeriods(y.year_start_date,y.year_end_date,"Monthly"),source:"frappe"}));
             fromFrappe.value=true;toast("Loaded from Frappe","info");
           } else throw new Error("none");
         }catch{
@@ -11319,7 +11531,7 @@
         const name=closeModalYear.value;if(!name)return;
         const y=allYears.value.find(x=>x.name===name);if(!y)return;
         if(fromFrappe.value){
-          try{await apiPOST("frappe.client.set_value",{doctype:"Fiscal Year",name,fieldname:"disabled",value:1});await load();toast("Fiscal year closed");}
+          try{await apiPOST("frappe.client.set_value",{doctype:"Fiscal Year",name,fieldname:"is_closed",value:1});await load();toast("Fiscal year closed");}
           catch(e){toast("Frappe error: "+e.message,"error");}
         } else {
           y.is_closed=1;y.periods.forEach(p=>{p.locked=true;});saveLocal();toast("Fiscal year closed");
@@ -11584,6 +11796,13 @@
       // If navigated to /reports/trial-balance or /reports/ar-aging, pick correct tab
       const initTab = props.defaultTab || (route.name === "trial-balance" ? "tb" : route.name === "ar-aging" ? "aging" : "pl");
       const tab = ref(initTab), running = ref(false);
+
+      watch(() => route.name, (newRoute) => {
+        if (newRoute === "trial-balance" && tab.value !== "tb") tab.value = "tb";
+        else if (newRoute === "ar-aging" && tab.value !== "aging") tab.value = "aging";
+        else if (newRoute === "reports" && props.defaultTab && tab.value !== props.defaultTab) tab.value = props.defaultTab;
+        else if (newRoute === "reports" && !props.defaultTab) tab.value = "pl";
+      });
       const fyMode = ref("fy"); // "fy" | "custom"
       const selectedFY = ref("");
       const fiscalYears = ref([]);
@@ -11599,9 +11818,18 @@
         { k: "gst", lbl: "GST Summary" },
       ];
 
-      function loadFY() {
-        const raw = localStorage.getItem("books_fy_data");
-        if (raw) { try { fiscalYears.value = JSON.parse(raw); } catch {} }
+      async function loadFY() {
+        try {
+          const rows = await apiGET("frappe.client.get_list", {
+            doctype: "Fiscal Year",
+            fields: JSON.stringify(["name", "year_start_date", "year_end_date"]),
+            order_by: "year_start_date desc",
+            limit_page_length: 10
+          });
+          if (rows && rows.length) {
+            fiscalYears.value = rows.map(r => ({ name: r.name, year_start_date: r.year_start_date, year_end_date: r.year_end_date }));
+          }
+        } catch {}
         if (!fiscalYears.value.length) {
           const yr = new Date().getFullYear();
           const isBeforeApril = new Date().getMonth() < 3;
@@ -11642,7 +11870,8 @@
           else if (tab.value === "cf") cf.value = await apiGET("zoho_books_clone.db.queries.get_cash_flow", args);
           else if (tab.value === "tb") tb.value = await apiGET("zoho_books_clone.db.queries.get_trial_balance", args);
           else if (tab.value === "aging") aging.value = await apiGET("zoho_books_clone.db.queries.get_ar_aging", { company: c, as_of_date: to.value });
-          else gst.value = await apiGET("zoho_books_clone.db.queries.get_gst_summary", args);
+          else if (tab.value === "gst") gst.value = await apiGET("zoho_books_clone.api.books_data.get_gstr_summary", args);
+          else if (tab.value === "itc") gst.value = await apiGET("zoho_books_clone.api.books_data.get_gstr_summary", args);
         } catch (e) { toast(e.message, "error"); }
         finally { running.value = false; }
       }
@@ -11680,7 +11909,7 @@
   <!-- Tab strip -->
   <div class="b-report-tabs">
     <button v-for="t in tabs" :key="t.k" class="b-rtab" :class="{active:tab===t.k}"
-      @click="tab=t.k;pl=null;bs=null;cf=null;gst=null;tb=null;aging=null;plBreakdown=[]">{{t.lbl}}</button>
+      @click="tab=t.k">{{t.lbl}}</button>
   </div>
 
   <!-- Filter bar -->
@@ -11912,20 +12141,1614 @@
     </div>
   </div>
 
-  <!-- ── GST Summary ── -->
-  <div v-if="tab==='gst'" class="b-card" style="padding:0;overflow:hidden">
-    <div class="b-card-head">
-      <span class="b-card-title">GST Summary</span>
-      <span v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96">FY {{fyBadge.name}}</span>
-    </div>
-    <div v-if="running" style="padding:20px"><div class="b-shimmer" style="height:60px"></div></div>
-    <table v-else-if="gst&&gst.length" class="b-table">
-      <thead><tr><th>Tax Type</th><th class="ta-r">Invoice Count</th><th class="ta-r">Total Tax</th></tr></thead>
-      <tbody><tr v-for="g in gst" :key="g.tax_type"><td><span class="b-badge b-badge-blue">{{g.tax_type}}</span></td><td class="ta-r mono fw-600">{{g.invoice_count}}</td><td class="ta-r mono fw-700 c-green">{{fmt(g.total_tax)}}</td></tr></tbody>
-    </table>
-    <div v-else-if="!running" class="b-empty">Select a period and click Run Report.</div>
+  <!-- ── GSTR Summary (Output Tax + ITC + Net Liability) ── -->
+  <div v-if="tab==='gst'">
+    <div v-if="running" class="b-card b-card-body"><div class="b-shimmer" style="height:80px"></div></div>
+    <template v-else-if="gst&&gst.totals">
+      <!-- KPI strip -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px">
+        <div class="b-card b-card-body" style="text-align:center">
+          <div style="font-size:11px;font-weight:700;color:#868E96;letter-spacing:.5px;margin-bottom:4px">OUTPUT TAX COLLECTED</div>
+          <div class="mono fw-700 c-red" style="font-size:18px">{{fmt(gst.totals.total_output)}}</div>
+        </div>
+        <div class="b-card b-card-body" style="text-align:center">
+          <div style="font-size:11px;font-weight:700;color:#868E96;letter-spacing:.5px;margin-bottom:4px">INPUT TAX CREDIT (ITC)</div>
+          <div class="mono fw-700 c-green" style="font-size:18px">{{fmt(gst.totals.total_itc)}}</div>
+        </div>
+        <div class="b-card b-card-body" style="text-align:center">
+          <div style="font-size:11px;font-weight:700;color:#868E96;letter-spacing:.5px;margin-bottom:4px">NET TAX LIABILITY</div>
+          <div class="mono fw-700" :class="gst.totals.net_tax_liability>=0?'c-red':'c-green'" style="font-size:18px">{{fmt(Math.abs(gst.totals.net_tax_liability))}}</div>
+          <div style="font-size:11px;color:#868E96;margin-top:2px">{{gst.totals.net_tax_liability>=0?'Payable to Govt':'Excess ITC'}}</div>
+        </div>
+      </div>
+      <!-- Net by tax type -->
+      <div class="b-card" style="padding:0;overflow:hidden">
+        <div class="b-card-head"><span class="b-card-title">Tax Type Breakdown</span><span style="font-size:12px;color:#868E96">{{from}} → {{to}}</span></div>
+        <table class="b-table">
+          <thead><tr><th>Tax Type</th><th class="ta-r">Output (Sales)</th><th class="ta-r">ITC (Purchases)</th><th class="ta-r">Net Payable</th></tr></thead>
+          <tbody>
+            <tr v-for="r in gst.net_by_type" :key="r.tax_type">
+              <td><span class="b-badge b-badge-blue">{{r.tax_type||'—'}}</span></td>
+              <td class="ta-r mono fw-600 c-red">{{fmt(r.output)}}</td>
+              <td class="ta-r mono fw-600 c-green">{{fmt(r.itc)}}</td>
+              <td class="ta-r mono fw-700" :class="r.net>=0?'c-red':'c-green'">{{fmt(Math.abs(r.net))}} <span style="font-size:10px">{{r.net>=0?'Dr':'Cr'}}</span></td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr style="background:#F8F9FC;font-weight:700">
+              <td>Total</td>
+              <td class="ta-r mono c-red">{{fmt(gst.totals.total_output)}}</td>
+              <td class="ta-r mono c-green">{{fmt(gst.totals.total_itc)}}</td>
+              <td class="ta-r mono" :class="gst.totals.net_tax_liability>=0?'c-red':'c-green'">{{fmt(Math.abs(gst.totals.net_tax_liability))}}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </template>
+    <div v-else class="b-card b-card-body b-empty">Select a period and click Run Report.</div>
   </div>
 </div>`});
+
+  /* ═══════════════════════════════════════════════════════════════
+     EXPENSES
+     Direct company expenses (travel, utilities, office supplies…)
+     Workflow: Draft → Submitted (GL posted) → Paid / Cancelled
+  ═══════════════════════════════════════════════════════════════ */
+  const EXPENSE_TYPES = [
+    "Travel", "Office Supplies", "Utilities", "Meals & Entertainment",
+    "Software & Subscriptions", "Equipment & Fixtures",
+    "Professional Fees", "Communication", "Other",
+  ];
+
+  const Expenses = defineComponent({
+    name: "Expenses",
+    setup() {
+      const list        = ref([]);
+      const loading     = ref(true);
+      const search      = ref("");
+      const activeFilter = ref("all");
+      const showDrawer  = ref(false);
+      const drawerMode  = ref("add");   // "add" | "edit" | "view"
+      const saving      = ref(false);
+      const showDelete  = ref(false);
+      const deleteTarget = ref(null);
+      const expAccounts   = ref([]);
+      const paidAccounts  = ref([]);
+      const suppliers     = ref([]);
+      const costCenters   = ref([]);
+
+      const form = reactive({
+        name: "", posting_date: "", expense_type: "Travel", description: "",
+        amount: 0, gst_rate: 0, tax_amount: 0, total_amount: 0,
+        expense_account: "", paid_through: "", vendor: "", reference_no: "",
+        cost_center: "", notes: "", status: "Draft", company: "",
+      });
+
+      /* ── Computed totals ── */
+      watch([() => form.amount, () => form.gst_rate], () => {
+        form.tax_amount   = Math.round(flt(form.amount) * flt(form.gst_rate) / 100 * 100) / 100;
+        form.total_amount = Math.round((flt(form.amount) + form.tax_amount) * 100) / 100;
+      });
+
+      /* ── Status config ── */
+      const STATUS_CFG = {
+        Draft:     { cls: "b-badge-muted",   lbl: "Draft"     },
+        Submitted: { cls: "b-badge-blue",    lbl: "Submitted" },
+        Paid:      { cls: "b-badge-green",   lbl: "Paid"      },
+        Cancelled: { cls: "b-badge-red",     lbl: "Cancelled" },
+      };
+
+      const counts = computed(() => {
+        const r = {};
+        ["Draft","Submitted","Paid","Cancelled"].forEach(s => {
+          r[s] = list.value.filter(e => e.status === s).length;
+        });
+        return r;
+      });
+
+      const summary = computed(() => {
+        const thisMonth = new Date().toISOString().slice(0,7);
+        return {
+          total:    list.value.length,
+          draft:    list.value.filter(e => e.status === "Draft").length,
+          submitted: list.value.filter(e => e.status === "Submitted").length,
+          monthVal: list.value
+            .filter(e => (e.posting_date||"").startsWith(thisMonth))
+            .reduce((s,e) => s + flt(e.total_amount), 0),
+        };
+      });
+
+      const filtered = computed(() => {
+        let r = activeFilter.value === "all"
+          ? list.value
+          : list.value.filter(e => e.status === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(e =>
+          (e.name + e.expense_type + e.description + (e.vendor||"")).toLowerCase().includes(q)
+        );
+        return r;
+      });
+
+      /* ── Load ── */
+      async function load() {
+        loading.value = true;
+        try {
+          const rows = await apiList("Expense", {
+            fields: ["name","posting_date","expense_type","description","amount",
+                     "gst_rate","tax_amount","total_amount","expense_account",
+                     "paid_through","vendor","reference_no","cost_center",
+                     "notes","status","company"],
+            order: "posting_date desc", limit: 500,
+          });
+          list.value = rows || [];
+        } catch(e) {
+          toast("Could not load expenses: " + e.message, "error");
+          list.value = [];
+        }
+        loading.value = false;
+        _loadAccounts();
+      }
+
+      async function _loadAccounts() {
+        try {
+          expAccounts.value = await apiList("Account", {
+            fields: ["name"],
+            filters: [["account_type","in",["Expense Account","Expense","Cost of Goods Sold"]],["is_group","=",0]],
+            limit: 200,
+          }) || [];
+        } catch { }
+        try {
+          paidAccounts.value = await apiList("Account", {
+            fields: ["name"],
+            filters: [["account_type","in",["Bank","Cash"]],["is_group","=",0]],
+            limit: 100,
+          }) || [];
+        } catch { }
+        try {
+          suppliers.value = await apiList("Supplier", {
+            fields: ["name","supplier_name"], limit: 200, order: "supplier_name asc",
+          }) || [];
+        } catch { }
+        try {
+          costCenters.value = await apiList("Cost Center", {
+            fields: ["name"], filters: [["is_group","=",0]], limit: 100, order: "name asc",
+          }) || [];
+        } catch { }
+      }
+
+      /* ── Reset form ── */
+      function resetForm(from) {
+        const s = from || {};
+        Object.assign(form, {
+          name: s.name || "",
+          posting_date: s.posting_date || todayStr(),
+          expense_type: s.expense_type || "Travel",
+          description: s.description || "",
+          amount: flt(s.amount),
+          gst_rate: flt(s.gst_rate),
+          tax_amount: flt(s.tax_amount),
+          total_amount: flt(s.total_amount),
+          expense_account: s.expense_account || (expAccounts.value[0]?.name || ""),
+          paid_through: s.paid_through || (paidAccounts.value[0]?.name || ""),
+          vendor: s.vendor || "",
+          reference_no: s.reference_no || "",
+          cost_center: s.cost_center || "",
+          notes: s.notes || "",
+          status: s.status || "Draft",
+          company: s.company || co(),
+        });
+      }
+
+      function openAdd()  { drawerMode.value = "add";  resetForm(); showDrawer.value = true; }
+      function openEdit(name) {
+        const e = list.value.find(x => x.name === name); if (!e) return;
+        drawerMode.value = "edit"; resetForm(e); showDrawer.value = true;
+      }
+      function openView(name) {
+        const e = list.value.find(x => x.name === name); if (!e) return;
+        drawerMode.value = "view"; resetForm(e); showDrawer.value = true;
+      }
+
+      /* ── Save ── */
+      async function saveExpense(andSubmit) {
+        if (!form.description.trim()) { toast("Please enter a description", "error"); return; }
+        if (flt(form.amount) <= 0)    { toast("Amount must be greater than 0", "error"); return; }
+        if (!form.expense_account)    { toast("Please select an Expense Account", "error"); return; }
+        if (!form.paid_through)       { toast("Please select a Paid Through account", "error"); return; }
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Expense", naming_series: "EXP-.YYYY.-.#####",
+            posting_date: form.posting_date || todayStr(),
+            expense_type: form.expense_type,
+            description: form.description,
+            amount: flt(form.amount),
+            gst_rate: flt(form.gst_rate),
+            expense_account: form.expense_account,
+            paid_through: form.paid_through,
+            vendor: form.vendor,
+            reference_no: form.reference_no,
+            cost_center: form.cost_center,
+            notes: form.notes,
+            company: form.company || co(),
+            status: "Draft",
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          const saved = await apiSave(doc);
+          if (andSubmit) {
+            await apiSubmit("Expense", saved.name);
+            toast("Expense " + saved.name + " submitted");
+          } else {
+            toast(drawerMode.value === "edit" ? "Expense updated" : "Expense saved as Draft");
+          }
+          showDrawer.value = false;
+          await load();
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
+      }
+
+      /* ── Mark Paid ── */
+      async function markPaid(name) {
+        try {
+          await apiSave({ doctype: "Expense", name, status: "Paid" });
+          await load();
+          toast("Expense marked as Paid");
+          showDrawer.value = false;
+        } catch(e) { toast("Update failed: " + e.message, "error"); }
+      }
+
+      /* ── Delete ── */
+      function confirmDelete(name) { deleteTarget.value = name; showDelete.value = true; }
+      async function doDelete() {
+        try {
+          await apiDelete("Expense", deleteTarget.value);
+          list.value = list.value.filter(e => e.name !== deleteTarget.value);
+          toast("Expense deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; showDrawer.value = false; }
+      }
+
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+      onMounted(load);
+
+      return {
+        list, loading, search, activeFilter, filtered, summary, counts,
+        STATUS_CFG, EXPENSE_TYPES, expAccounts, paidAccounts, suppliers, costCenters,
+        showDrawer, drawerMode, saving, showDelete, deleteTarget, form,
+        load, openAdd, openEdit, openView, saveExpense, markPaid,
+        confirmDelete, doDelete, fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `
+<div class="cust-page">
+  <!-- Summary strip -->
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Total Expenses</div>
+      <div class="dn-sum-val">{{summary.total}}</div>
+    </div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Draft</div>
+      <div class="dn-sum-val" style="color:#868E96">{{summary.draft}}</div>
+    </div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Submitted (Unpaid)</div>
+      <div class="dn-sum-val" style="color:#3B5BDB">{{summary.submitted}}</div>
+    </div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">This Month</div>
+      <div class="dn-sum-val" style="color:#E67700">{{fmt(summary.monthVal)}}</div>
+    </div>
+  </div>
+
+  <!-- Action bar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <button class="zb-list-pill" :class="{active:activeFilter==='all'}" @click="activeFilter='all'">All</button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Draft'}" @click="activeFilter='Draft'">
+        Draft <span class="zb-pill-cnt zb-pc-muted">{{counts.Draft}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Submitted'}" @click="activeFilter='Submitted'">
+        Submitted <span class="zb-pill-cnt zb-pc-muted">{{counts.Submitted}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Paid'}" @click="activeFilter='Paid'">
+        Paid <span class="zb-pill-cnt zb-pc-green">{{counts.Paid}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Cancelled'}" @click="activeFilter='Cancelled'">
+        Cancelled <span class="zb-pill-cnt zb-pc-muted">{{counts.Cancelled}}</span>
+      </button>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
+        <input class="cust-search-input" v-model="search" placeholder="Search expenses…"/>
+      </div>
+      <button class="nim-btn nim-btn-ghost" @click="load">
+        <span v-html="icon('refresh')"></span> Refresh
+      </button>
+      <button class="nim-btn nim-btn-primary" @click="openAdd">
+        <span v-html="icon('plus')"></span> New Expense
+      </button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr>
+          <th>Expense #</th><th>Date</th><th>Type</th><th>Description</th>
+          <th style="text-align:right">Amount</th><th style="text-align:right">Total (incl. GST)</th>
+          <th>Paid Through</th><th>Status</th>
+          <th style="text-align:center;width:100px">Actions</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="loading">
+            <td colspan="9" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td>
+          </tr>
+          <tr v-else-if="!filtered.length">
+            <td colspan="9" class="cust-empty">
+              <div class="cust-empty-icon">🧾</div>
+              <div class="cust-empty-title">{{search ? 'No expenses match' : 'No expenses yet'}}</div>
+              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Record business expenses to track spending'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin:12px auto 0" @click="openAdd">
+                <span v-html="icon('plus')"></span> New Expense
+              </button>
+            </td>
+          </tr>
+          <tr v-else v-for="e in filtered" :key="e.name" class="cust-row" @click="openView(e.name)">
+            <td>
+              <span style="color:#E67700;font-family:var(--mono);font-size:12px;font-weight:700">{{e.name}}</span>
+            </td>
+            <td style="font-size:12.5px;color:var(--muted)">{{fmtDate(e.posting_date)}}</td>
+            <td>
+              <span style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:20px;background:#F3F4F6;color:#495057">{{e.expense_type}}</span>
+            </td>
+            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.description}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(e.amount)}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{fmt(e.total_amount || e.amount)}}</td>
+            <td style="font-size:12.5px;color:var(--muted)">{{e.paid_through || '—'}}</td>
+            <td>
+              <span class="b-badge" :class="STATUS_CFG[e.status]?.cls || 'b-badge-muted'">
+                {{STATUS_CFG[e.status]?.lbl || e.status}}
+              </span>
+            </td>
+            <td style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="cust-act-btn" @click.stop="openView(e.name)" title="View">
+                  <span v-html="icon('eye')"></span>
+                </button>
+                <button v-if="e.status==='Draft'" class="cust-act-btn" @click.stop="openEdit(e.name)" title="Edit">
+                  <span v-html="icon('edit')"></span>
+                </button>
+                <button v-if="e.status==='Draft'" class="cust-act-btn cust-act-del" @click.stop="confirmDelete(e.name)" title="Delete">
+                  <span v-html="icon('trash')"></span>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cust-row-count" v-if="filtered.length">
+      Showing {{filtered.length}} of {{list.length}} expenses
+    </div>
+  </div>
+
+  <!-- ── Drawer ── -->
+  <teleport to="body">
+    <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+      <div class="nim-dialog" style="width:680px">
+        <!-- Header -->
+        <div class="nim-header">
+          <div>
+            <div class="nim-header-title">
+              {{drawerMode==='add' ? 'New Expense' : drawerMode==='edit' ? 'Edit Expense' : form.name}}
+            </div>
+            <div v-if="drawerMode==='view'" style="font-size:12px;color:rgba(255,255,255,.6);margin-top:2px">
+              {{form.expense_type}} · {{fmtDate(form.posting_date)}}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span v-if="drawerMode==='view'" class="b-badge" :class="STATUS_CFG[form.status]?.cls||'b-badge-muted'">
+              {{STATUS_CFG[form.status]?.lbl || form.status}}
+            </span>
+            <button class="nim-close" @click="showDrawer=false">
+              <span v-html="icon('x')"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Body -->
+        <div class="nim-body">
+          <!-- View mode -->
+          <template v-if="drawerMode==='view'">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Date</div><div style="font-size:13.5px;color:#111827">{{fmtDate(form.posting_date)}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Type</div><div style="font-size:13.5px;color:#111827">{{form.expense_type}}</div></div>
+              <div style="grid-column:1/3"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Description</div><div style="font-size:13.5px;color:#111827">{{form.description}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Amount</div><div style="font-family:var(--mono);font-weight:700;color:#E67700;font-size:15px">{{fmt(form.amount)}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">GST ({{form.gst_rate}}%)</div><div style="font-family:var(--mono);font-size:13.5px">{{fmt(form.tax_amount)}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Total (incl. GST)</div><div style="font-family:var(--mono);font-weight:700;font-size:16px;color:#E67700">{{fmt(form.total_amount || form.amount)}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Expense Account</div><div style="font-size:13.5px;color:#111827">{{form.expense_account || '—'}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Paid Through</div><div style="font-size:13.5px;color:#111827">{{form.paid_through || '—'}}</div></div>
+              <div v-if="form.vendor"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Vendor</div><div style="font-size:13.5px;color:#111827">{{form.vendor}}</div></div>
+              <div v-if="form.reference_no"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Reference No.</div><div style="font-size:13.5px;color:#111827">{{form.reference_no}}</div></div>
+              <div v-if="form.cost_center"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Cost Center</div><div style="font-size:13.5px;color:#111827">{{form.cost_center}}</div></div>
+              <div v-if="form.notes" style="grid-column:1/3"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Notes</div><div style="font-size:13.5px;white-space:pre-line;color:var(--muted)">{{form.notes}}</div></div>
+            </div>
+          </template>
+
+          <!-- Add / Edit form -->
+          <template v-else>
+            <div class="nim-section-label">Expense Details</div>
+            <div class="nim-grid-3 nim-mb">
+              <div>
+                <label class="nim-label">Date <span class="nim-req">*</span></label>
+                <input class="nim-input" type="date" v-model="form.posting_date"/>
+              </div>
+              <div>
+                <label class="nim-label">Type <span class="nim-req">*</span></label>
+                <select class="nim-input" v-model="form.expense_type">
+                  <option v-for="t in EXPENSE_TYPES" :key="t" :value="t">{{t}}</option>
+                </select>
+              </div>
+              <div>
+                <label class="nim-label">Reference No.</label>
+                <input class="nim-input" v-model="form.reference_no" placeholder="Receipt / bill no."/>
+              </div>
+            </div>
+            <div class="nim-mb">
+              <label class="nim-label">Description <span class="nim-req">*</span></label>
+              <textarea class="nim-input" v-model="form.description" rows="2" style="resize:vertical" placeholder="What was this expense for?"></textarea>
+            </div>
+
+            <div class="nim-section-label">Amount &amp; Tax</div>
+            <div class="nim-grid-3 nim-mb">
+              <div>
+                <label class="nim-label">Amount (₹) <span class="nim-req">*</span></label>
+                <input class="nim-input" type="number" min="0" step="0.01" v-model.number="form.amount" placeholder="0.00"/>
+              </div>
+              <div>
+                <label class="nim-label">GST Rate (%)</label>
+                <input class="nim-input" type="number" min="0" max="100" step="0.01" v-model.number="form.gst_rate" placeholder="0"/>
+              </div>
+              <div>
+                <label class="nim-label">Total (incl. GST)</label>
+                <input class="nim-input" :value="fmt(form.total_amount || form.amount)" readonly style="background:#F8F9FC;font-weight:700;color:#E67700"/>
+              </div>
+            </div>
+
+            <div class="nim-section-label">Accounts</div>
+            <div class="nim-grid-2 nim-mb">
+              <div>
+                <label class="nim-label">Expense Account <span class="nim-req">*</span></label>
+                <searchable-select v-model="form.expense_account" :options="expAccounts" placeholder="— Select Account —"/>
+              </div>
+              <div>
+                <label class="nim-label">Paid Through <span class="nim-req">*</span></label>
+                <searchable-select v-model="form.paid_through" :options="paidAccounts" placeholder="— Select Account —"/>
+              </div>
+            </div>
+
+            <div class="nim-section-label">Additional Info</div>
+            <div class="nim-grid-2 nim-mb">
+              <div>
+                <label class="nim-label">Vendor</label>
+                <searchable-select v-model="form.vendor" :options="suppliers" value-key="name" label-key="supplier_name" placeholder="— Select Vendor —"/>
+              </div>
+              <div>
+                <label class="nim-label">Cost Center</label>
+                <searchable-select v-model="form.cost_center" :options="costCenters" placeholder="— Select —"/>
+              </div>
+            </div>
+            <div class="nim-mb">
+              <label class="nim-label">Notes</label>
+              <textarea class="nim-input" v-model="form.notes" rows="2" style="resize:vertical" placeholder="Additional notes…"></textarea>
+            </div>
+          </template>
+        </div>
+
+        <!-- Footer -->
+        <div class="nim-footer">
+          <div style="font-size:12px;color:var(--muted)">
+            <span v-if="drawerMode==='view'">Expense · {{form.company}}</span>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">
+              {{drawerMode==='view' ? 'Close' : 'Cancel'}}
+            </button>
+            <template v-if="drawerMode==='view'">
+              <button v-if="form.status==='Draft'" class="nim-btn nim-btn-ghost" @click="openEdit(form.name)" style="border-color:#E67700;color:#E67700">
+                Edit
+              </button>
+              <button v-if="form.status==='Draft'" class="nim-btn nim-btn-primary" :disabled="saving" @click="saveExpense(true)">
+                <span v-html="icon('check')"></span> Submit &amp; Post GL
+              </button>
+              <button v-if="form.status==='Submitted'" class="nim-btn" style="background:#2F9E44;color:#fff;border-color:#2F9E44" :disabled="saving" @click="markPaid(form.name)">
+                <span v-html="icon('check')"></span> Mark Paid
+              </button>
+            </template>
+            <template v-else>
+              <button class="nim-btn nim-btn-ghost" :disabled="saving" @click="saveExpense(false)" style="border-color:#E67700;color:#E67700">
+                {{saving ? 'Saving…' : 'Save as Draft'}}
+              </button>
+              <button class="nim-btn nim-btn-primary" :disabled="saving" @click="saveExpense(true)">
+                <span v-html="icon('check')"></span> {{saving ? 'Submitting…' : (drawerMode==='edit' ? 'Save Changes' : 'Save &amp; Submit')}}
+              </button>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete confirm -->
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:400px;width:100%;margin:auto">
+        <div class="nim-header-title" style="color:#1A1D23;margin-bottom:8px">Delete Expense?</div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:24px">
+          Delete <b>{{deleteTarget}}</b>? This cannot be undone.
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button class="nim-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" @click="doDelete">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`});
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     EXPENSE CLAIMS
+     Employee expense reimbursement submissions
+     Workflow: Draft → Submitted → Approved (GL posted) → Paid / Rejected
+  ═══════════════════════════════════════════════════════════════ */
+  const ExpenseClaims = defineComponent({
+    name: "ExpenseClaims",
+    setup() {
+      const list         = ref([]);
+      const loading      = ref(true);
+      const search       = ref("");
+      const activeFilter = ref("all");
+      const showDrawer   = ref(false);
+      const drawerMode   = ref("add");
+      const saving       = ref(false);
+      const showDelete   = ref(false);
+      const deleteTarget = ref(null);
+      const payAccounts  = ref([]);
+      const costCenters  = ref([]);
+
+      const form = reactive({
+        name: "", employee_name: "", employee_email: "", claim_date: "",
+        company: "", payable_account: "", cost_center: "",
+        expenses: [{ expense_date: "", expense_type: "Travel", description: "", amount: 0, receipt_no: "" }],
+        total_claimed_amount: 0, notes: "", status: "Draft", approved_by: "",
+      });
+
+      const STATUS_CFG = {
+        Draft:     { cls: "b-badge-muted",   lbl: "Draft"     },
+        Submitted: { cls: "b-badge-blue",    lbl: "Submitted" },
+        Approved:  { cls: "b-badge-green",   lbl: "Approved"  },
+        Rejected:  { cls: "b-badge-red",     lbl: "Rejected"  },
+        Paid:      { cls: "b-badge-purple",  lbl: "Paid"      },
+        Cancelled: { cls: "b-badge-red",     lbl: "Cancelled" },
+      };
+
+      const counts = computed(() => {
+        const r = {};
+        ["Draft","Submitted","Approved","Rejected","Paid"].forEach(s => {
+          r[s] = list.value.filter(c => c.status === s).length;
+        });
+        return r;
+      });
+
+      const summary = computed(() => ({
+        total:     list.value.length,
+        pending:   list.value.filter(c => ["Draft","Submitted"].includes(c.status)).length,
+        approved:  list.value.filter(c => c.status === "Approved").length,
+        totalVal:  list.value.reduce((s,c) => s + flt(c.total_claimed_amount), 0),
+      }));
+
+      const filtered = computed(() => {
+        let r = activeFilter.value === "all"
+          ? list.value
+          : list.value.filter(c => c.status === activeFilter.value);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(c =>
+          (c.name + c.employee_name + (c.employee_email||"")).toLowerCase().includes(q)
+        );
+        return r;
+      });
+
+      const lineTotal = computed(() =>
+        Math.round(form.expenses.reduce((s, r) => s + flt(r.amount), 0) * 100) / 100
+      );
+
+      watch(lineTotal, v => { form.total_claimed_amount = v; });
+
+      /* ── Load ── */
+      async function load() {
+        loading.value = true;
+        try {
+          const rows = await apiList("Expense Claim", {
+            fields: ["name","employee_name","employee_email","claim_date","company",
+                     "payable_account","total_claimed_amount","status","approved_by","notes"],
+            order: "claim_date desc", limit: 500,
+          });
+          list.value = rows || [];
+        } catch(e) {
+          toast("Could not load expense claims: " + e.message, "error");
+          list.value = [];
+        }
+        loading.value = false;
+        try {
+          payAccounts.value = await apiList("Account", {
+            fields: ["name"],
+            filters: [["account_type","in",["Payable","Creditor"]],["is_group","=",0]],
+            limit: 100,
+          }) || [];
+        } catch { }
+        try {
+          costCenters.value = await apiList("Cost Center", {
+            fields: ["name"], filters: [["is_group","=",0]], limit: 100, order: "name asc",
+          }) || [];
+        } catch { }
+      }
+
+      /* ── Reset form ── */
+      function resetForm(from) {
+        const s = from || {};
+        Object.assign(form, {
+          name: s.name || "",
+          employee_name: s.employee_name || "",
+          employee_email: s.employee_email || "",
+          claim_date: s.claim_date || todayStr(),
+          company: s.company || co(),
+          payable_account: s.payable_account || (payAccounts.value[0]?.name || ""),
+          cost_center: s.cost_center || "",
+          total_claimed_amount: flt(s.total_claimed_amount),
+          notes: s.notes || "",
+          status: s.status || "Draft",
+          approved_by: s.approved_by || "",
+        });
+        form.expenses = (s.expenses?.length)
+          ? s.expenses.map(r => ({ ...r }))
+          : [{ expense_date: todayStr(), expense_type: "Travel", description: "", amount: 0, receipt_no: "" }];
+      }
+
+      function openAdd()  { drawerMode.value = "add";  resetForm(); showDrawer.value = true; }
+      function openEdit(name) {
+        const c = list.value.find(x => x.name === name); if (!c) return;
+        _loadClaimLines(name).then(lines => {
+          const full = { ...c, expenses: lines };
+          drawerMode.value = "edit"; resetForm(full); showDrawer.value = true;
+        });
+      }
+      function openView(name) {
+        const c = list.value.find(x => x.name === name); if (!c) return;
+        _loadClaimLines(name).then(lines => {
+          const full = { ...c, expenses: lines };
+          drawerMode.value = "view"; resetForm(full); showDrawer.value = true;
+        });
+      }
+
+      async function _loadClaimLines(name) {
+        try {
+          const doc = await apiGET("frappe.client.get", { doctype: "Expense Claim", name });
+          return doc?.expenses || [];
+        } catch { return []; }
+      }
+
+      /* ── Expense rows ── */
+      function addRow()   { form.expenses.push({ expense_date: todayStr(), expense_type: "Travel", description: "", amount: 0, receipt_no: "" }); }
+      function removeRow(i) { if (form.expenses.length > 1) form.expenses.splice(i, 1); }
+
+      /* ── Save / Submit ── */
+      async function saveClaim(andSubmit) {
+        if (!form.employee_name.trim()) { toast("Please enter Employee Name", "error"); return; }
+        if (!form.expenses.some(r => flt(r.amount) > 0)) { toast("Please add at least one expense with an amount", "error"); return; }
+        saving.value = true;
+        try {
+          const doc = {
+            doctype: "Expense Claim", naming_series: "EXPCLAIM-.YYYY.-.#####",
+            employee_name: form.employee_name,
+            employee_email: form.employee_email,
+            claim_date: form.claim_date || todayStr(),
+            company: form.company || co(),
+            payable_account: form.payable_account,
+            cost_center: form.cost_center,
+            notes: form.notes,
+            status: "Draft",
+            expenses: form.expenses.filter(r => flt(r.amount) > 0).map(r => ({
+              doctype: "Expense Claim Detail",
+              expense_date: r.expense_date || todayStr(),
+              expense_type: r.expense_type,
+              description: r.description,
+              amount: flt(r.amount),
+              receipt_no: r.receipt_no || "",
+            })),
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          const saved = await apiSave(doc);
+          if (andSubmit) {
+            await apiSubmit("Expense Claim", saved.name);
+            toast("Claim " + saved.name + " submitted for approval");
+          } else {
+            toast(drawerMode.value === "edit" ? "Claim updated" : "Claim saved as Draft");
+          }
+          showDrawer.value = false;
+          await load();
+        } catch(e) { toast("Save failed: " + e.message, "error"); }
+        finally { saving.value = false; }
+      }
+
+      /* ── Approve / Reject / Mark Paid ── */
+      async function approveClaim(name) {
+        try {
+          await apiPOST("frappe.client.run_doc_method", { dt: "Expense Claim", dn: name, method: "approve" });
+          await load(); toast("Claim approved & GL entries posted"); showDrawer.value = false;
+        } catch(e) { toast("Approve failed: " + e.message, "error"); }
+      }
+      async function rejectClaim(name) {
+        try {
+          await apiPOST("frappe.client.run_doc_method", { dt: "Expense Claim", dn: name, method: "reject" });
+          await load(); toast("Claim rejected"); showDrawer.value = false;
+        } catch(e) { toast("Reject failed: " + e.message, "error"); }
+      }
+      async function markPaid(name) {
+        try {
+          await apiPOST("frappe.client.run_doc_method", { dt: "Expense Claim", dn: name, method: "mark_paid" });
+          await load(); toast("Claim marked as Paid"); showDrawer.value = false;
+        } catch(e) { toast("Update failed: " + e.message, "error"); }
+      }
+
+      /* ── Delete ── */
+      function confirmDelete(name) { deleteTarget.value = name; showDelete.value = true; }
+      async function doDelete() {
+        try {
+          await apiDelete("Expense Claim", deleteTarget.value);
+          list.value = list.value.filter(c => c.name !== deleteTarget.value);
+          toast("Claim deleted");
+        } catch(e) { toast("Delete failed: " + e.message, "error"); }
+        finally { showDelete.value = false; showDrawer.value = false; }
+      }
+
+      function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+      onMounted(load);
+
+      return {
+        list, loading, search, activeFilter, filtered, summary, counts,
+        STATUS_CFG, EXPENSE_TYPES, payAccounts, costCenters,
+        showDrawer, drawerMode, saving, showDelete, deleteTarget, form, lineTotal,
+        load, openAdd, openEdit, openView, saveClaim,
+        approveClaim, rejectClaim, markPaid, confirmDelete, doDelete,
+        addRow, removeRow, fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `
+<div class="cust-page">
+  <!-- Summary strip -->
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Total Claims</div>
+      <div class="dn-sum-val">{{summary.total}}</div>
+    </div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Pending</div>
+      <div class="dn-sum-val" style="color:#3B5BDB">{{summary.pending}}</div>
+    </div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Approved</div>
+      <div class="dn-sum-val" style="color:#2F9E44">{{summary.approved}}</div>
+    </div>
+    <div class="dn-sum-card">
+      <div class="dn-sum-lbl">Total Value</div>
+      <div class="dn-sum-val" style="color:#E67700">{{fmt(summary.totalVal)}}</div>
+    </div>
+  </div>
+
+  <!-- Action bar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <button class="zb-list-pill" :class="{active:activeFilter==='all'}" @click="activeFilter='all'">All</button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Draft'}" @click="activeFilter='Draft'">
+        Draft <span class="zb-pill-cnt zb-pc-muted">{{counts.Draft}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Submitted'}" @click="activeFilter='Submitted'">
+        Submitted <span class="zb-pill-cnt zb-pc-muted">{{counts.Submitted}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Approved'}" @click="activeFilter='Approved'">
+        Approved <span class="zb-pill-cnt zb-pc-green">{{counts.Approved}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Rejected'}" @click="activeFilter='Rejected'">
+        Rejected <span class="zb-pill-cnt zb-pc-muted">{{counts.Rejected}}</span>
+      </button>
+      <button class="zb-list-pill" :class="{active:activeFilter==='Paid'}" @click="activeFilter='Paid'">
+        Paid <span class="zb-pill-cnt zb-pc-muted">{{counts.Paid}}</span>
+      </button>
+    </div>
+    <div class="cust-toolbar-right">
+      <div class="cust-search">
+        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
+        <input class="cust-search-input" v-model="search" placeholder="Search claims…"/>
+      </div>
+      <button class="nim-btn nim-btn-ghost" @click="load">
+        <span v-html="icon('refresh')"></span> Refresh
+      </button>
+      <button class="nim-btn nim-btn-primary" @click="openAdd">
+        <span v-html="icon('plus')"></span> New Claim
+      </button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr>
+          <th>Claim #</th><th>Employee</th><th>Date</th>
+          <th style="text-align:right">Total Amount</th><th>Approved By</th>
+          <th>Status</th><th style="text-align:center;width:120px">Actions</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="loading">
+            <td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td>
+          </tr>
+          <tr v-else-if="!filtered.length">
+            <td colspan="7" class="cust-empty">
+              <div class="cust-empty-icon">📋</div>
+              <div class="cust-empty-title">{{search ? 'No claims match' : 'No expense claims yet'}}</div>
+              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Employees can submit expense claims for reimbursement'}}</div>
+              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin:12px auto 0" @click="openAdd">
+                <span v-html="icon('plus')"></span> New Claim
+              </button>
+            </td>
+          </tr>
+          <tr v-else v-for="c in filtered" :key="c.name" class="cust-row" @click="openView(c.name)">
+            <td>
+              <span style="color:#E67700;font-family:var(--mono);font-size:12px;font-weight:700">{{c.name}}</span>
+            </td>
+            <td style="font-weight:500">{{c.employee_name}}</td>
+            <td style="font-size:12.5px;color:var(--muted)">{{fmtDate(c.claim_date)}}</td>
+            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{fmt(c.total_claimed_amount)}}</td>
+            <td style="font-size:12.5px;color:var(--muted)">{{c.approved_by || '—'}}</td>
+            <td>
+              <span class="b-badge" :class="STATUS_CFG[c.status]?.cls || 'b-badge-muted'">
+                {{STATUS_CFG[c.status]?.lbl || c.status}}
+              </span>
+            </td>
+            <td style="text-align:center">
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="cust-act-btn" @click.stop="openView(c.name)" title="View">
+                  <span v-html="icon('eye')"></span>
+                </button>
+                <button v-if="c.status==='Submitted'" class="cust-act-btn" style="color:#2F9E44;border-color:rgba(47,158,68,.3)" @click.stop="approveClaim(c.name)" title="Approve">
+                  <span v-html="icon('check')"></span>
+                </button>
+                <button v-if="c.status==='Submitted'" class="cust-act-btn cust-act-del" @click.stop="rejectClaim(c.name)" title="Reject">
+                  <span v-html="icon('x')"></span>
+                </button>
+                <button v-if="c.status==='Draft'" class="cust-act-btn cust-act-del" @click.stop="confirmDelete(c.name)" title="Delete">
+                  <span v-html="icon('trash')"></span>
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cust-row-count" v-if="filtered.length">
+      Showing {{filtered.length}} of {{list.length}} claims
+    </div>
+  </div>
+
+  <!-- ── Drawer ── -->
+  <teleport to="body">
+    <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+      <div class="nim-dialog" style="width:760px">
+        <!-- Header -->
+        <div class="nim-header">
+          <div>
+            <div class="nim-header-title">
+              {{drawerMode==='add' ? 'New Expense Claim' : drawerMode==='edit' ? 'Edit Claim' : form.name}}
+            </div>
+            <div v-if="form.employee_name" style="font-size:12px;color:rgba(255,255,255,.6);margin-top:2px">
+              {{form.employee_name}} · {{fmtDate(form.claim_date)}}
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <span v-if="drawerMode==='view'" class="b-badge" :class="STATUS_CFG[form.status]?.cls||'b-badge-muted'">
+              {{STATUS_CFG[form.status]?.lbl || form.status}}
+            </span>
+            <button class="nim-close" @click="showDrawer=false">
+              <span v-html="icon('x')"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Body -->
+        <div class="nim-body">
+          <!-- View mode -->
+          <template v-if="drawerMode==='view'">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Employee</div><div style="font-size:13.5px;color:#111827">{{form.employee_name}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Email</div><div style="font-size:13.5px;color:#111827">{{form.employee_email || '—'}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Claim Date</div><div style="font-size:13.5px;color:#111827">{{fmtDate(form.claim_date)}}</div></div>
+              <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Payable Account</div><div style="font-size:13.5px;color:#111827">{{form.payable_account || '—'}}</div></div>
+              <div v-if="form.approved_by"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Approved By</div><div style="font-size:13.5px;color:#111827">{{form.approved_by}}</div></div>
+              <div v-if="form.notes" style="grid-column:1/3"><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Notes</div><div style="font-size:13.5px;white-space:pre-line;color:var(--muted)">{{form.notes}}</div></div>
+            </div>
+            <!-- Expense lines -->
+            <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
+              <table class="cust-table">
+                <thead><tr>
+                  <th>Date</th><th>Type</th><th>Description</th>
+                  <th style="text-align:right">Amount</th><th>Receipt</th>
+                </tr></thead>
+                <tbody>
+                  <tr v-if="!form.expenses.length">
+                    <td colspan="5" style="text-align:center;padding:14px;color:var(--muted)">No expense lines</td>
+                  </tr>
+                  <tr v-for="(r,i) in form.expenses" :key="i">
+                    <td style="font-size:12.5px">{{fmtDate(r.expense_date)}}</td>
+                    <td><span style="font-size:11.5px;padding:2px 7px;background:#F3F4F6;border-radius:20px;color:#495057">{{r.expense_type}}</span></td>
+                    <td>{{r.description}}</td>
+                    <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(r.amount)}}</td>
+                    <td style="font-size:12px;color:var(--muted)">{{r.receipt_no || '—'}}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div style="display:flex;justify-content:flex-end">
+              <div style="background:var(--surf2);border:1px solid var(--border);border-radius:8px;overflow:hidden;min-width:260px">
+                <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:15px;font-weight:700;background:#FFF3E0;color:#E67700">
+                  <span>Total Claimed</span>
+                  <span style="font-family:var(--mono)">{{fmt(form.total_claimed_amount)}}</span>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- Add / Edit form -->
+          <template v-else>
+            <div class="nim-section-label">Claim Details</div>
+            <div class="nim-grid-3 nim-mb">
+              <div>
+                <label class="nim-label">Employee Name <span class="nim-req">*</span></label>
+                <input class="nim-input" v-model="form.employee_name" placeholder="Full name"/>
+              </div>
+              <div>
+                <label class="nim-label">Employee Email</label>
+                <input class="nim-input" type="email" v-model="form.employee_email" placeholder="email@company.com"/>
+              </div>
+              <div>
+                <label class="nim-label">Claim Date <span class="nim-req">*</span></label>
+                <input class="nim-input" type="date" v-model="form.claim_date"/>
+              </div>
+            </div>
+            <div class="nim-grid-2 nim-mb">
+              <div>
+                <label class="nim-label">Payable Account</label>
+                <searchable-select v-model="form.payable_account" :options="payAccounts" placeholder="— Select Account —"/>
+              </div>
+              <div>
+                <label class="nim-label">Cost Center</label>
+                <searchable-select v-model="form.cost_center" :options="costCenters" placeholder="— Select —"/>
+              </div>
+            </div>
+
+            <div class="nim-section-label">Expense Lines</div>
+            <div style="border:1px solid #E8ECF0;border-radius:8px;overflow:hidden;margin-bottom:16px">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr style="background:#FAFBFC">
+                    <th style="padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;border-bottom:1px solid #E8ECF0">Date</th>
+                    <th style="padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;border-bottom:1px solid #E8ECF0">Type</th>
+                    <th style="padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;border-bottom:1px solid #E8ECF0">Description</th>
+                    <th style="padding:8px 10px;text-align:right;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;border-bottom:1px solid #E8ECF0">Amount (₹)</th>
+                    <th style="padding:8px 10px;text-align:left;font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:#868E96;border-bottom:1px solid #E8ECF0">Receipt No.</th>
+                    <th style="padding:8px 10px;border-bottom:1px solid #E8ECF0;width:32px"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(r,i) in form.expenses" :key="i" style="border-bottom:1px solid #F1F3F5">
+                    <td style="padding:6px 8px">
+                      <input type="date" v-model="r.expense_date" style="border:none;outline:none;font-family:var(--font);font-size:13px;color:var(--text);width:100%;padding:4px 6px;border-radius:4px;background:transparent" @focus="$event.target.style.background='#FFF3E0'"/>
+                    </td>
+                    <td style="padding:6px 8px">
+                      <select v-model="r.expense_type" style="border:none;outline:none;font-family:var(--font);font-size:13px;color:var(--text);width:100%;padding:4px 6px;border-radius:4px;background:transparent" @focus="$event.target.style.background='#FFF3E0'">
+                        <option v-for="t in EXPENSE_TYPES" :key="t" :value="t">{{t}}</option>
+                      </select>
+                    </td>
+                    <td style="padding:6px 8px">
+                      <input v-model="r.description" placeholder="Description" style="border:none;outline:none;font-family:var(--font);font-size:13px;color:var(--text);width:100%;padding:4px 6px;border-radius:4px;background:transparent" @focus="$event.target.style.background='#FFF3E0'"/>
+                    </td>
+                    <td style="padding:6px 8px">
+                      <input type="number" min="0" step="0.01" v-model.number="r.amount" style="border:none;outline:none;font-family:var(--mono);font-size:13px;color:var(--text);width:90px;padding:4px 6px;border-radius:4px;background:transparent;text-align:right" @focus="$event.target.style.background='#FFF3E0'"/>
+                    </td>
+                    <td style="padding:6px 8px">
+                      <input v-model="r.receipt_no" placeholder="Ref no." style="border:none;outline:none;font-family:var(--font);font-size:13px;color:var(--muted);width:100%;padding:4px 6px;border-radius:4px;background:transparent" @focus="$event.target.style.background='#FFF3E0'"/>
+                    </td>
+                    <td style="padding:6px 8px;text-align:center">
+                      <button v-if="form.expenses.length>1" @click="removeRow(i)" style="background:none;border:none;cursor:pointer;color:#C92A2A;display:flex;align-items:center;justify-content:center">
+                        <span v-html="icon('trash')"></span>
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="padding:8px 12px;background:#FAFBFC;border-top:1px solid #E8ECF0">
+                <button @click="addRow" style="background:none;border:none;cursor:pointer;color:#E67700;font-size:12.5px;font-weight:600;display:flex;align-items:center;gap:5px;font-family:var(--font)">
+                  <span v-html="icon('plus')"></span> Add Row
+                </button>
+              </div>
+            </div>
+
+            <!-- Totals -->
+            <div style="display:flex;justify-content:flex-end;margin-bottom:16px">
+              <div style="background:var(--surf2);border:1px solid var(--border);border-radius:8px;overflow:hidden;min-width:260px">
+                <div style="display:flex;justify-content:space-between;padding:10px 16px;font-size:15px;font-weight:700;background:#FFF3E0;color:#E67700">
+                  <span>Total Claimed</span>
+                  <span style="font-family:var(--mono)">{{fmt(lineTotal)}}</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="nim-mb">
+              <label class="nim-label">Notes / Justification</label>
+              <textarea class="nim-input" v-model="form.notes" rows="2" style="resize:vertical" placeholder="Add any notes for the approver…"></textarea>
+            </div>
+          </template>
+        </div>
+
+        <!-- Footer -->
+        <div class="nim-footer">
+          <div style="font-size:12px;color:var(--muted)">
+            <span v-if="form.name">{{form.name}} · {{form.company}}</span>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">
+              {{drawerMode==='view' ? 'Close' : 'Cancel'}}
+            </button>
+            <template v-if="drawerMode==='view'">
+              <button v-if="form.status==='Draft'" class="nim-btn nim-btn-ghost" @click="openEdit(form.name)" style="border-color:#E67700;color:#E67700">Edit</button>
+              <button v-if="form.status==='Draft'" class="nim-btn nim-btn-primary" :disabled="saving" @click="saveClaim(true)">
+                <span v-html="icon('check')"></span> Submit for Approval
+              </button>
+              <button v-if="form.status==='Submitted'" class="nim-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" @click="rejectClaim(form.name)">
+                Reject
+              </button>
+              <button v-if="form.status==='Submitted'" class="nim-btn" style="background:#2F9E44;color:#fff;border-color:#2F9E44" @click="approveClaim(form.name)">
+                <span v-html="icon('check')"></span> Approve &amp; Post GL
+              </button>
+              <button v-if="form.status==='Approved'" class="nim-btn" style="background:#7048E8;color:#fff;border-color:#7048E8" @click="markPaid(form.name)">
+                <span v-html="icon('check')"></span> Mark Paid
+              </button>
+            </template>
+            <template v-else>
+              <button class="nim-btn nim-btn-ghost" :disabled="saving" @click="saveClaim(false)" style="border-color:#E67700;color:#E67700">
+                {{saving ? 'Saving…' : 'Save as Draft'}}
+              </button>
+              <button class="nim-btn nim-btn-primary" :disabled="saving" @click="saveClaim(true)">
+                <span v-html="icon('check')"></span> {{saving ? 'Submitting…' : (drawerMode==='edit' ? 'Save Changes' : 'Submit for Approval')}}
+              </button>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Delete confirm -->
+    <div v-if="showDelete" class="nim-overlay" @click.self="showDelete=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:400px;width:100%;margin:auto">
+        <div class="nim-header-title" style="color:#1A1D23;margin-bottom:8px">Delete Claim?</div>
+        <div style="font-size:14px;color:var(--muted);margin-bottom:24px">
+          Delete <b>{{deleteTarget}}</b>? This cannot be undone.
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Keep It</button>
+          <button class="nim-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" @click="doDelete">Yes, Delete</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`});
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — ITEMS
+  ═══════════════════════════════════════════════════════════════ */
+  const ITEM_MOCK = [
+    { name:"ITEM-001", item_code:"ITEM-001", item_name:"Laptop 15\"", item_group:"Products", item_type:"Product", stock_uom:"Nos", standard_rate:55000, gst_rate:18, disabled:0, is_stock_item:1 },
+    { name:"ITEM-002", item_code:"ITEM-002", item_name:"Wireless Mouse", item_group:"Products", item_type:"Product", stock_uom:"Nos", standard_rate:1200, gst_rate:18, disabled:0, is_stock_item:1 },
+    { name:"ITEM-003", item_code:"ITEM-003", item_name:"Office Chair", item_group:"Furniture", item_type:"Product", stock_uom:"Nos", standard_rate:8500, gst_rate:12, disabled:0, is_stock_item:1 },
+    { name:"ITEM-004", item_code:"ITEM-004", item_name:"Annual Maintenance", item_group:"Services", item_type:"Service", stock_uom:"Nos", standard_rate:15000, gst_rate:18, disabled:0, is_stock_item:0 },
+    { name:"ITEM-005", item_code:"ITEM-005", item_name:"USB-C Hub", item_group:"Products", item_type:"Product", stock_uom:"Nos", standard_rate:2500, gst_rate:18, disabled:0, is_stock_item:1 },
+    { name:"ITEM-006", item_code:"ITEM-006", item_name:"Consulting (per hour)", item_group:"Services", item_type:"Service", stock_uom:"Hrs", standard_rate:3000, gst_rate:18, disabled:1, is_stock_item:0 },
+  ];
+
+  const InventoryItems = defineComponent({
+    name: "InventoryItems",
+    setup() {
+      const list       = ref([]);
+      const loading    = ref(true);
+      const search     = ref("");
+      const filterTab  = ref("all");
+      const viewMode   = ref("table"); // "table" | "grid"
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");   // "add" | "edit"
+      const saving     = ref(false);
+      const deleting   = ref(false);
+      const showDel    = ref(false);
+      const delTarget  = ref(null);
+      const drawerTab  = ref("basic");
+      const itemGroups = ref([]);
+
+      const form = reactive({
+        name:"", item_code:"", item_name:"", item_group:"", item_type:"Product",
+        stock_uom:"Nos", hsn_code:"", description:"", disabled:0,
+        standard_rate:0, standard_buying_rate:0, gst_rate:18, tax_code:"",
+        income_account:"", expense_account:"",
+        is_stock_item:1, valuation_method:"FIFO", default_warehouse:"",
+        reorder_level:0, reorder_qty:0, opening_stock:0,
+      });
+
+      const ITEM_TYPES = ["Product","Service","Raw Material","Finished Good","Sub Assembly","Consumable"];
+      const VAL_METHODS = ["FIFO","Moving Average","LIFO"];
+
+      async function load() {
+        loading.value = true;
+        try {
+          const rows = await apiList("Item", {
+            fields: ["name","item_code","item_name","item_group","item_type","stock_uom","standard_rate","gst_rate","disabled","is_stock_item"],
+            order: "item_name asc", limit: 500
+          });
+          list.value = rows && rows.length ? rows : ITEM_MOCK;
+        } catch { list.value = ITEM_MOCK; }
+        try {
+          const g = await apiList("Item Group", { fields:["name"], order:"name asc", limit:200 });
+          itemGroups.value = (g||[]).map(r=>r.name);
+        } catch { itemGroups.value = ["All Item Groups","Products","Services","Raw Materials","Finished Goods","Furniture"]; }
+        loading.value = false;
+      }
+
+      const filtered = computed(() => {
+        let r = list.value;
+        if (filterTab.value === "active")   r = r.filter(i => !i.disabled);
+        if (filterTab.value === "inactive") r = r.filter(i => i.disabled);
+        if (filterTab.value === "services") r = r.filter(i => !i.is_stock_item);
+        if (filterTab.value === "stock")    r = r.filter(i => i.is_stock_item);
+        const q = search.value.toLowerCase().trim();
+        if (q) r = r.filter(i => (i.item_name+i.item_code+i.item_group).toLowerCase().includes(q));
+        return r;
+      });
+
+      function openAdd() {
+        drawerMode.value = "add"; drawerTab.value = "basic";
+        Object.assign(form, { name:"", item_code:"", item_name:"", item_group:"", item_type:"Product",
+          stock_uom:"Nos", hsn_code:"", description:"", disabled:0,
+          standard_rate:0, standard_buying_rate:0, gst_rate:18, tax_code:"",
+          income_account:"", expense_account:"",
+          is_stock_item:1, valuation_method:"FIFO", default_warehouse:"",
+          reorder_level:0, reorder_qty:0, opening_stock:0 });
+        showDrawer.value = true;
+      }
+      function openEdit(row) {
+        drawerMode.value = "edit"; drawerTab.value = "basic";
+        Object.assign(form, { ...row,
+          hsn_code: row.hsn_code||"", description: row.description||"",
+          standard_buying_rate: row.standard_buying_rate||0, tax_code: row.tax_code||"",
+          income_account: row.income_account||"", expense_account: row.expense_account||"",
+          valuation_method: row.valuation_method||"FIFO", default_warehouse: row.default_warehouse||"",
+          reorder_level: row.reorder_level||0, reorder_qty: row.reorder_qty||0, opening_stock: row.opening_stock||0,
+        });
+        showDrawer.value = true;
+      }
+
+      async function saveItem() {
+        if (!form.item_name.trim()) { toast("Item name is required","error"); return; }
+        saving.value = true;
+        try {
+          const doc = { doctype:"Item", item_name:form.item_name, item_code:form.item_code||form.item_name,
+            item_group:form.item_group||"Products", item_type:form.item_type, stock_uom:form.stock_uom,
+            hsn_code:form.hsn_code, description:form.description, disabled:form.disabled?1:0,
+            standard_rate:flt(form.standard_rate), gst_rate:flt(form.gst_rate),
+            is_stock_item:form.is_stock_item?1:0, valuation_method:form.valuation_method,
+            default_warehouse:form.default_warehouse, reorder_level:flt(form.reorder_level),
+            reorder_qty:flt(form.reorder_qty),
+          };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          toast(drawerMode.value === "edit" ? "Item updated" : "Item created");
+          showDrawer.value = false;
+        } catch(e) { toast("Save failed: "+e.message,"error"); }
+        finally { saving.value = false; }
+      }
+
+      function confirmDel(row) { delTarget.value = row; showDel.value = true; }
+      async function doDelete() {
+        deleting.value = true;
+        try {
+          await apiDelete("Item", delTarget.value.name);
+          list.value = list.value.filter(i => i.name !== delTarget.value.name);
+          toast("Item deleted"); showDel.value = false;
+        } catch(e) { toast("Delete failed: "+e.message,"error"); }
+        finally { deleting.value = false; }
+      }
+
+      onMounted(load);
+      return { list, loading, search, filterTab, viewMode, filtered, showDrawer, drawerMode, saving, deleting, showDel, delTarget, drawerTab, form, itemGroups, ITEM_TYPES, VAL_METHODS, openAdd, openEdit, saveItem, confirmDel, doDelete, fmt, flt, fmtDate, icon };
+    },
+    template: `
+<div class="b-page">
+  <!-- Toolbar -->
+  <div class="b-action-bar" style="flex-wrap:wrap;gap:8px">
+    <div style="display:flex;align-items:center;gap:6px;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:5px 14px;flex:1;max-width:280px">
+      <span v-html="icon('search',13)" style="color:#868E96;flex-shrink:0"></span>
+      <input v-model="search" placeholder="Search items..." style="border:none;outline:none;font-size:13px;width:100%;background:transparent;font-family:inherit"/>
+    </div>
+    <div class="b-filter-row" style="gap:4px">
+      <button v-for="t in [{k:'all',l:'All'},{k:'active',l:'Active'},{k:'inactive',l:'Inactive'},{k:'services',l:'Services'},{k:'stock',l:'Stock Items'}]" :key="t.k"
+        class="b-pill" :class="{active:filterTab===t.k}" @click="filterTab=t.k">{{t.l}}
+      </button>
+    </div>
+    <div style="display:flex;gap:6px;margin-left:auto">
+      <button class="b-btn b-btn-ghost" @click="viewMode=viewMode==='table'?'grid':'table'" style="padding:7px 10px">
+        <span v-html="icon(viewMode==='table'?'grid':'file',14)"></span>
+      </button>
+      <button class="b-btn b-btn-ghost" @click="load"><span v-html="icon('refresh',13)"></span></button>
+      <button class="b-btn b-btn-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Item</button>
+    </div>
+  </div>
+
+  <!-- Table view -->
+  <template v-if="viewMode==='table'">
+    <div class="b-card" style="padding:0;overflow:hidden">
+      <table class="b-table">
+        <thead><tr><th>Item Code</th><th>Name</th><th>Group</th><th>Type</th><th>UOM</th><th class="ta-r">Rate (₹)</th><th class="ta-r">GST %</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          <template v-if="loading"><tr v-for="n in 6" :key="n"><td colspan="9" style="padding:14px"><div class="b-shimmer" style="height:12px"></div></td></tr></template>
+          <tr v-else-if="!filtered.length"><td colspan="9" class="b-empty">No items found</td></tr>
+          <tr v-else v-for="row in filtered" :key="row.name" class="clickable" @click="openEdit(row)">
+            <td><span class="mono" style="font-size:12px;color:#3B5BDB">{{row.item_code||row.name}}</span></td>
+            <td class="fw-600">{{row.item_name}}</td>
+            <td class="c-muted">{{row.item_group||'—'}}</td>
+            <td><span class="b-badge b-badge-muted" style="font-size:11px">{{row.item_type||'—'}}</span></td>
+            <td class="c-muted" style="font-size:12.5px">{{row.stock_uom||'Nos'}}</td>
+            <td class="ta-r mono fw-600">{{fmt(row.standard_rate)}}</td>
+            <td class="ta-r c-muted" style="font-size:12.5px">{{row.gst_rate||0}}%</td>
+            <td><span class="b-badge" :class="row.disabled?'b-badge-red':'b-badge-green'">{{row.disabled?'Inactive':'Active'}}</span></td>
+            <td style="text-align:center">
+              <button @click.stop="confirmDel(row)" style="background:none;border:none;cursor:pointer;color:#C92A2A;padding:4px" v-html="icon('trash',13)"></button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </template>
+
+  <!-- Grid view -->
+  <template v-else>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px">
+      <div v-if="loading" v-for="n in 6" :key="n" class="b-shimmer" style="height:120px;border-radius:10px"></div>
+      <div v-else-if="!filtered.length" style="grid-column:1/-1;text-align:center;padding:40px;color:#868E96">No items found</div>
+      <div v-else v-for="row in filtered" :key="row.name" class="b-card b-card-body" style="cursor:pointer;transition:box-shadow .15s" @click="openEdit(row)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <span class="b-badge" :class="row.disabled?'b-badge-red':'b-badge-green'" style="font-size:10.5px">{{row.disabled?'Inactive':'Active'}}</span>
+          <span class="b-badge b-badge-muted" style="font-size:10.5px">{{row.item_type||'—'}}</span>
+        </div>
+        <div class="fw-700" style="font-size:14px;margin-bottom:3px;line-height:1.3">{{row.item_name}}</div>
+        <div class="mono c-muted" style="font-size:11px;margin-bottom:8px">{{row.item_code}}</div>
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <span class="c-muted" style="font-size:12px">{{row.item_group||'—'}}</span>
+          <span class="mono fw-700" style="font-size:13px;color:#2F9E44">{{fmt(row.standard_rate)}}</span>
+        </div>
+      </div>
+    </div>
+  </template>
+
+  <!-- Delete confirm -->
+  <teleport to="body">
+    <div v-if="showDel" style="position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center" @click.self="showDel=false">
+      <div class="b-card b-card-body" style="max-width:400px;width:90%">
+        <div style="font-size:15px;font-weight:700;margin-bottom:8px;color:#C92A2A">Delete Item?</div>
+        <div style="font-size:13px;color:#374151;margin-bottom:20px">Delete <strong>{{delTarget?.item_name}}</strong>? This cannot be undone.</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showDel=false">Cancel</button>
+          <button class="b-btn" style="background:#C92A2A;color:#fff;border-color:#C92A2A" :disabled="deleting" @click="doDelete">{{deleting?'Deleting…':'Yes, Delete'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Detail Drawer -->
+  <teleport to="body">
+    <div v-if="showDrawer" style="position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:900;display:flex;justify-content:flex-end" @click.self="showDrawer=false">
+      <div style="width:100%;max-width:540px;height:100%;background:#fff;display:flex;flex-direction:column;box-shadow:-4px 0 24px rgba(0,0,0,.15);animation:slideInR .2s ease">
+        <!-- Header -->
+        <div style="padding:18px 22px;border-bottom:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;background:linear-gradient(135deg,#1a1d23,#2d3748)">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#fff">{{drawerMode==='add'?'New Item':'Edit Item'}}</div>
+            <div style="font-size:12px;color:rgba(255,255,255,.6);margin-top:2px">{{drawerMode==='edit'?form.item_code:'Fill in item details'}}</div>
+          </div>
+          <button @click="showDrawer=false" style="background:rgba(255,255,255,.12);border:none;cursor:pointer;color:#fff;width:30px;height:30px;border-radius:6px;display:flex;align-items:center;justify-content:center" v-html="icon('x',16)"></button>
+        </div>
+        <!-- Tab pills -->
+        <div style="display:flex;padding:10px 16px;gap:6px;background:#F8FAFC;border-bottom:1px solid #E2E8F0;overflow-x:auto">
+          <button v-for="t in [{k:'basic',l:'Basic Info'},{k:'pricing',l:'Pricing & Tax'},{k:'inventory',l:'Inventory'},{k:'variants',l:'Variants'}]" :key="t.k"
+            @click="drawerTab=t.k"
+            style="padding:5px 12px;border-radius:16px;border:1.5px solid;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all .12s"
+            :style="drawerTab===t.k?{background:'#1a1d23',color:'#fff',borderColor:'#1a1d23'}:{background:'#fff',color:'#495057',borderColor:'#E2E8F0'}">
+            {{t.l}}
+          </button>
+        </div>
+        <!-- Body -->
+        <div style="flex:1;overflow-y:auto;padding:20px 22px">
+          <!-- Basic Info -->
+          <template v-if="drawerTab==='basic'">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+              <div><label class="nim-label">Item Name <span style="color:#C92A2A">*</span></label><input class="nim-input" v-model="form.item_name" placeholder="e.g. Laptop 15-inch"/></div>
+              <div><label class="nim-label">Item Code</label><input class="nim-input" v-model="form.item_code" placeholder="Auto-generated if blank"/></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+              <div><label class="nim-label">Item Group</label>
+                <select class="nim-input" v-model="form.item_group">
+                  <option value="">— Select Group —</option>
+                  <option v-for="g in itemGroups" :key="g" :value="g">{{g}}</option>
+                </select>
+              </div>
+              <div><label class="nim-label">Item Type</label>
+                <select class="nim-input" v-model="form.item_type">
+                  <option v-for="t in ITEM_TYPES" :key="t" :value="t">{{t}}</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+              <div><label class="nim-label">Default UOM</label><input class="nim-input" v-model="form.stock_uom" placeholder="Nos"/></div>
+              <div><label class="nim-label">HSN / SAC Code</label><input class="nim-input" v-model="form.hsn_code" placeholder="e.g. 847130"/></div>
+            </div>
+            <div style="margin-bottom:12px"><label class="nim-label">Description</label><textarea class="nim-input" v-model="form.description" rows="3" placeholder="Item description..." style="resize:vertical"></textarea></div>
+            <div style="display:flex;align-items:center;gap:10px;padding:12px;background:#F8FAFC;border-radius:8px;border:1px solid #E2E8F0">
+              <input type="checkbox" :checked="!!form.disabled" @change="form.disabled=($event.target.checked?1:0)" style="width:16px;height:16px;accent-color:#C92A2A"/>
+              <div><div style="font-size:13px;font-weight:600;color:#374151">Mark as Inactive</div><div style="font-size:11.5px;color:#868E96">Inactive items won't appear in transaction dropdowns</div></div>
+            </div>
+          </template>
+          <!-- Pricing & Tax -->
+          <template v-else-if="drawerTab==='pricing'">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+              <div><label class="nim-label">Selling Rate (₹)</label><input type="number" class="nim-input" v-model="form.standard_rate" min="0" style="font-family:var(--mono)"/></div>
+              <div><label class="nim-label">Buying Rate (₹)</label><input type="number" class="nim-input" v-model="form.standard_buying_rate" min="0" style="font-family:var(--mono)"/></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+              <div><label class="nim-label">GST Rate (%)</label>
+                <select class="nim-input" v-model.number="form.gst_rate">
+                  <option v-for="r in [0,5,12,18,28]" :key="r" :value="r">{{r}}%</option>
+                </select>
+              </div>
+              <div><label class="nim-label">Tax Code</label><input class="nim-input" v-model="form.tax_code" placeholder="e.g. GST 18%"/></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+              <div><label class="nim-label">Income Account</label><input class="nim-input" v-model="form.income_account" placeholder="Sales — Company"/></div>
+              <div><label class="nim-label">Expense Account</label><input class="nim-input" v-model="form.expense_account" placeholder="Cost of Goods Sold"/></div>
+            </div>
+          </template>
+          <!-- Inventory -->
+          <template v-else-if="drawerTab==='inventory'">
+            <div style="display:flex;align-items:center;gap:10px;padding:12px;background:#F8FAFC;border-radius:8px;border:1px solid #E2E8F0;margin-bottom:16px">
+              <input type="checkbox" :checked="!!form.is_stock_item" @change="form.is_stock_item=($event.target.checked?1:0)" style="width:16px;height:16px;accent-color:#2F9E44"/>
+              <div><div style="font-size:13px;font-weight:600;color:#374151">Track Inventory</div><div style="font-size:11.5px;color:#868E96">Maintain stock levels and ledger for this item</div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+              <div><label class="nim-label">Valuation Method</label>
+                <select class="nim-input" v-model="form.valuation_method">
+                  <option v-for="m in VAL_METHODS" :key="m" :value="m">{{m}}</option>
+                </select>
+              </div>
+              <div><label class="nim-label">Default Warehouse</label><input class="nim-input" v-model="form.default_warehouse" placeholder="Warehouse name"/></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+              <div><label class="nim-label">Reorder Level</label><input type="number" class="nim-input" v-model="form.reorder_level" min="0" style="font-family:var(--mono)"/></div>
+              <div><label class="nim-label">Reorder Qty</label><input type="number" class="nim-input" v-model="form.reorder_qty" min="0" style="font-family:var(--mono)"/></div>
+              <div><label class="nim-label">Opening Stock</label><input type="number" class="nim-input" v-model="form.opening_stock" min="0" style="font-family:var(--mono)"/></div>
+            </div>
+          </template>
+          <!-- Variants (placeholder) -->
+          <template v-else>
+            <div style="text-align:center;padding:40px 20px;color:#868E96">
+              <div style="font-size:32px;margin-bottom:12px">🧩</div>
+              <div style="font-size:14px;font-weight:600;margin-bottom:4px">Item Variants</div>
+              <div style="font-size:13px">Configure attributes like Size, Colour etc. to create item variants.</div>
+              <div style="font-size:12px;margin-top:8px;color:#ADB5BD">Coming soon</div>
+            </div>
+          </template>
+        </div>
+        <!-- Footer -->
+        <div style="padding:14px 22px;border-top:1px solid #E2E8F0;display:flex;justify-content:flex-end;gap:8px;background:#FAFAFA">
+          <button class="b-btn b-btn-ghost" @click="showDrawer=false">Cancel</button>
+          <button class="b-btn b-btn-primary" :disabled="saving" @click="saveItem">{{saving?'Saving…':(drawerMode==='edit'?'Update Item':'Create Item')}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — ITEM GROUPS
+  ═══════════════════════════════════════════════════════════════ */
+  const InventoryItemGroups = defineComponent({
+    name: "InventoryItemGroups",
+    setup() {
+      const allGroups  = ref([]);
+      const loading    = ref(true);
+      const saving     = ref(false);
+      const selected   = ref(null);   // currently selected group name
+      const expanded   = ref(new Set(["All Item Groups"]));
+
+      const form = reactive({ name:"", parent_item_group:"All Item Groups", is_group:0, description:"" });
+      const drawerMode = ref("add"); // "add" | "edit"
+      const formActive = ref(false); // true once user clicks New or selects a group
+
+      const GROUP_DEFAULTS = [
+        { name:"All Item Groups", parent_item_group:"", is_group:1, description:"Root" },
+        { name:"Products",     parent_item_group:"All Item Groups", is_group:0, description:"" },
+        { name:"Services",     parent_item_group:"All Item Groups", is_group:0, description:"" },
+        { name:"Raw Materials",parent_item_group:"All Item Groups", is_group:0, description:"" },
+        { name:"Finished Goods",parent_item_group:"All Item Groups",is_group:0, description:"" },
+      ];
+
+      async function load() {
+        loading.value = true;
+        try {
+          const rows = await apiList("Item Group", { fields:["name","parent_item_group","is_group","description"], order:"name asc", limit:200 });
+          allGroups.value = rows && rows.length ? rows : GROUP_DEFAULTS;
+        } catch { allGroups.value = GROUP_DEFAULTS; }
+        loading.value = false;
+      }
+
+      // Build nested tree from flat list
+      const tree = computed(() => {
+        const map = {};
+        allGroups.value.forEach(g => { map[g.name] = { ...g, children:[] }; });
+        const roots = [];
+        allGroups.value.forEach(g => {
+          if (!g.parent_item_group || !map[g.parent_item_group]) roots.push(map[g.name]);
+          else map[g.parent_item_group].children.push(map[g.name]);
+        });
+        return roots;
+      });
+
+      function toggleExpand(name) {
+        const s = new Set(expanded.value);
+        s.has(name) ? s.delete(name) : s.add(name);
+        expanded.value = s;
+      }
+
+      function selectGroup(g) {
+        selected.value = g.name;
+        drawerMode.value = "edit";
+        formActive.value = true;
+        Object.assign(form, { name:g.name, parent_item_group:g.parent_item_group||"", is_group:g.is_group?1:0, description:g.description||"" });
+      }
+
+      function newGroup(parentName) {
+        selected.value = null;
+        drawerMode.value = "add";
+        formActive.value = true;
+        Object.assign(form, { name:"", parent_item_group:parentName||"All Item Groups", is_group:0, description:"" });
+      }
+
+      async function saveGroup() {
+        if (!form.name.trim()) { toast("Group name is required","error"); return; }
+        saving.value = true;
+        try {
+          const doc = { doctype:"Item Group", name:form.name, parent_item_group:form.parent_item_group, is_group:form.is_group?1:0, description:form.description };
+          if (drawerMode.value === "edit") doc.name = form.name;
+          await apiSave(doc);
+          await load();
+          selected.value = form.name;
+          toast(drawerMode.value === "edit" ? "Group updated" : "Group created");
+        } catch(e) { toast("Save failed: "+e.message,"error"); }
+        finally { saving.value = false; }
+      }
+
+      async function deleteGroup() {
+        if (!form.name) return;
+        if (!confirm("Delete group \""+form.name+"\"? This cannot be undone.")) return;
+        try {
+          await apiDelete("Item Group", form.name);
+          await load();
+          selected.value = null;
+          toast("Group deleted");
+        } catch(e) { toast("Delete failed: "+e.message,"error"); }
+      }
+
+      onMounted(load);
+      return { allGroups, loading, saving, selected, expanded, form, drawerMode, formActive, tree, toggleExpand, selectGroup, newGroup, saveGroup, deleteGroup, icon };
+    },
+    template: `
+<div class="b-page" style="display:grid;grid-template-columns:280px 1fr;gap:16px;align-items:start">
+  <!-- Left: Tree panel -->
+  <div class="b-card" style="padding:0;overflow:hidden;position:sticky;top:0">
+    <div style="padding:12px 16px;border-bottom:1px solid #E2E8F0;display:flex;align-items:center;justify-content:space-between;background:#F8FAFC">
+      <span style="font-size:13px;font-weight:700;color:#1a1d23">Item Groups</span>
+      <button class="b-btn b-btn-primary" style="padding:5px 10px;font-size:12px" @click="newGroup('All Item Groups')">
+        <span v-html="icon('plus',12)"></span> New
+      </button>
+    </div>
+    <div v-if="loading" style="padding:20px"><div class="b-shimmer" style="height:12px;margin-bottom:8px"></div><div class="b-shimmer" style="height:12px;width:70%"></div></div>
+    <div v-else style="padding:6px 0;max-height:calc(100vh - 200px);overflow-y:auto">
+      <template v-for="node in tree" :key="node.name">
+        <div @click="selectGroup(node)" style="display:flex;align-items:center;gap:6px;padding:7px 14px;cursor:pointer;transition:background .1s;border-left:3px solid transparent"
+          :style="selected===node.name?{background:'#EEF2FF',borderLeftColor:'#3B5BDB',color:'#3B5BDB'}:{color:'#374151'}"
+          @mouseenter="$event.currentTarget.style.background=selected===node.name?'#EEF2FF':'#F8FAFC'"
+          @mouseleave="$event.currentTarget.style.background=selected===node.name?'#EEF2FF':'transparent'">
+          <span v-if="node.children&&node.children.length" @click.stop="toggleExpand(node.name)"
+            style="font-size:10px;color:#868E96;width:14px;text-align:center">{{expanded.has(node.name)?'▼':'▶'}}</span>
+          <span v-else style="width:14px"></span>
+          <span v-html="icon(node.is_group?'folder':'file',13)" style="flex-shrink:0;opacity:.7"></span>
+          <span style="font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{node.name}}</span>
+          <span v-if="node.children&&node.children.length" style="font-size:10px;color:#ADB5BD;background:#F1F3F5;padding:1px 6px;border-radius:8px">{{node.children.length}}</span>
+        </div>
+        <template v-if="expanded.has(node.name)" v-for="child in (node.children||[])" :key="child.name">
+          <div @click="selectGroup(child)" style="display:flex;align-items:center;gap:6px;padding:6px 14px 6px 36px;cursor:pointer;transition:background .1s;border-left:3px solid transparent"
+            :style="selected===child.name?{background:'#EEF2FF',borderLeftColor:'#3B5BDB',color:'#3B5BDB'}:{color:'#495057'}"
+            @mouseenter="$event.currentTarget.style.background=selected===child.name?'#EEF2FF':'#F8FAFC'"
+            @mouseleave="$event.currentTarget.style.background=selected===child.name?'#EEF2FF':'transparent'">
+            <span v-html="icon('file',12)" style="flex-shrink:0;opacity:.6"></span>
+            <span style="font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{child.name}}</span>
+            <button @click.stop="newGroup(child.name)" style="background:none;border:none;cursor:pointer;color:#3B5BDB;font-size:10px;padding:2px 4px" title="Add child group">+</button>
+          </div>
+        </template>
+      </template>
+    </div>
+  </div>
+
+  <!-- Right: Detail panel -->
+  <div class="b-card b-card-body">
+    <div v-if="!formActive" style="text-align:center;padding:60px 20px;color:#868E96">
+      <div style="font-size:40px;margin-bottom:12px">📁</div>
+      <div style="font-size:14px;font-weight:600;margin-bottom:4px">Select a group to edit</div>
+      <div style="font-size:13px">or click <strong>+ New</strong> to create one</div>
+    </div>
+    <template v-else>
+      <div style="font-size:15px;font-weight:700;margin-bottom:18px;color:#1a1d23">
+        {{drawerMode==='edit'?'Edit Group':'New Item Group'}}
+      </div>
+      <div style="display:grid;gap:14px;max-width:480px">
+        <div>
+          <label class="nim-label">Group Name <span style="color:#C92A2A">*</span></label>
+          <input class="nim-input" v-model="form.name" :disabled="drawerMode==='edit'" placeholder="e.g. Electronics"/>
+        </div>
+        <div>
+          <label class="nim-label">Parent Group</label>
+          <select class="nim-input" v-model="form.parent_item_group">
+            <option value="">— None (Root) —</option>
+            <option v-for="g in allGroups" :key="g.name" :value="g.name">{{g.name}}</option>
+          </select>
+        </div>
+        <div>
+          <label class="nim-label">Description</label>
+          <textarea class="nim-input" v-model="form.description" rows="3" placeholder="Optional description..." style="resize:vertical"></textarea>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding:12px;background:#F8FAFC;border-radius:8px;border:1px solid #E2E8F0">
+          <input type="checkbox" :checked="!!form.is_group" @change="form.is_group=($event.target.checked?1:0)" style="width:16px;height:16px;accent-color:#3B5BDB"/>
+          <div><div style="font-size:13px;font-weight:600;color:#374151">Is a Group</div><div style="font-size:11.5px;color:#868E96">Group nodes can have child item groups</div></div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:22px">
+        <button class="b-btn b-btn-primary" :disabled="saving" @click="saveGroup">{{saving?'Saving…':(drawerMode==='edit'?'Update Group':'Create Group')}}</button>
+        <button v-if="drawerMode==='edit'" class="b-btn b-btn-ghost" style="border-color:rgba(201,42,42,.4);color:#C92A2A" @click="deleteGroup">Delete</button>
+        <button class="b-btn b-btn-ghost" @click="newGroup(form.parent_item_group||'All Item Groups')">+ New Child Group</button>
+      </div>
+    </template>
+  </div>
+</div>`
+  });
 
   /* ═══════════════════════════════════════════════════════════════
      APP SHELL
@@ -11946,11 +13769,13 @@
     },
     {
       section: "PURCHASES", items: [
-        { to: "/vendors", lbl: "Vendors", icon: "vendors" },
-        { to: "/purchase-orders", lbl: "Purchase Orders", icon: "order" },
-        { to: "/purchases", lbl: "Purchase Bills", icon: "purchase" },
-        { to: "/debit-notes", lbl: "Debit Notes", icon: "creditnote" },
-        { to: "/payments", lbl: "Payments", icon: "pay" },
+        { to: "/vendors",          lbl: "Vendors",          icon: "vendors"    },
+        { to: "/purchase-orders",  lbl: "Purchase Orders",  icon: "order"      },
+        { to: "/purchases",        lbl: "Purchase Bills",   icon: "purchase"   },
+        { to: "/debit-notes",      lbl: "Debit Notes",      icon: "creditnote" },
+        { to: "/payments",         lbl: "Payments",         icon: "pay"        },
+        { to: "/expenses",         lbl: "Expenses",         icon: "expense"    },
+        { to: "/expense-claims",   lbl: "Expense Claims",   icon: "claim"      },
       ]
     },
     {
@@ -11979,8 +13804,17 @@
         { to: "/banking/cash",           lbl: "Cash Management",   icon: "cash"       },
       ]
     },
+    {
+      section: "INVENTORY", items: [
+        { to: "/inventory/items",       lbl: "Items / Products", icon: "box"    },
+        { to: "/inventory/item-groups", lbl: "Item Groups",      icon: "folder" },
+      ]
+    },
   ];
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years" };
+  // Pre-built Set of every exact nav path — used to prevent parent routes from
+  // stealing the "active" highlight when a child route has its own nav entry.
+  const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "expenses": "Expenses", "expense-claims": "Expense Claims" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -12176,7 +14010,7 @@
 
       return {
         cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
-        aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt, route
+        aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt, route, router, ALL_NAV_PATHS
       };
     },
     template: `
@@ -12195,12 +14029,12 @@
     <nav class="b-nav">
       <template v-for="group in NAV" :key="group.section">
         <div v-if="group.section" class="b-nav-section">{{group.section}}</div>
-        <router-link v-for="n in group.items" :key="n.to" :to="n.to" custom v-slot="{navigate,isActive}">
-          <div class="b-nav-item" :class="{active: isActive || route.path.startsWith(n.to + '/')}" @click="()=>{navigate();closeMobile();}">
+        <template v-for="n in group.items" :key="n.to">
+          <div class="b-nav-item" :class="{active: route.path === n.to || (route.path.startsWith(n.to + '/') && !ALL_NAV_PATHS.has(route.path))}" @click="()=>{router.push(n.to);closeMobile();}">
             <span class="b-nav-icon" v-html="icon(n.icon,16)"></span>
             <span class="b-nav-label">{{n.lbl}}</span>
           </div>
-        </router-link>
+        </template>
       </template>
     </nav>
     <div class="b-sidebar-footer">
@@ -13530,10 +15364,17 @@ select.jen-ci{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.
 .bk-sum-lbl{font-size:11px;font-weight:600;color:#868e96;text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
 .bk-sum-val{font-size:18px;font-weight:800;color:#1a1d23}
 /* Pills / filters */
-.bk-pill{padding:5px 13px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #dde1e9;background:#fff;cursor:pointer;color:#555;transition:all .15s}
-.bk-pill.active{background:#4f46e5;color:#fff;border-color:#4f46e5}
+.bk-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 14px;border-radius:8px;font-size:12.5px;font-weight:600;border:1.5px solid #e2e8f0;background:#fff;cursor:pointer;color:#64748b;transition:all .15s;white-space:nowrap;line-height:1.4}
+.bk-pill.active{background:#4f46e5;color:#fff;border-color:#4f46e5;box-shadow:0 2px 6px rgba(79,70,229,.25)}
 .bk-pill:hover:not(.active){background:#f0f0ff;border-color:#a5b4fc;color:#4f46e5}
-.bk-pc{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0}
+.bk-pill-cnt{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:700;line-height:1}
+.bk-pill.active .bk-pill-cnt{background:rgba(255,255,255,.25);color:#fff}
+.bk-pill:not(.active) .bk-pill-cnt{background:#f1f3f5;color:#495057}
+.bk-pill:not(.active).bk-pill-cr .bk-pill-cnt{background:#EBFBEE;color:#2F9E44}
+.bk-pill:not(.active).bk-pill-dr .bk-pill-cnt{background:#FFE3E3;color:#C92A2A}
+.bk-pill:not(.active).bk-pill-uc .bk-pill-cnt{background:#FFF3BF;color:#E67700}
+.bk-pill:not(.active).bk-pill-re .bk-pill-cnt{background:#E0F7FA;color:#0C8599}
+.bk-pc{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 /* Transaction row chip */
 .bk-txn-row td{padding:10px 12px;border-bottom:1px solid #f5f7fa;vertical-align:middle;font-size:13px}
 .bk-txn-row:hover td{background:#f9faff}
@@ -14041,6 +15882,11 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/accounting/opening-balances", component: OpeningBalances, name: "opening-balances" },
       { path: "/accounting/cost-centers", component: CostCenters, name: "cost-centers" },
       { path: "/accounting/fiscal-years", component: FiscalYears, name: "fiscal-years" },
+      { path: "/expenses",       component: Expenses,       name: "expenses"       },
+      { path: "/expense-claims", component: ExpenseClaims,  name: "expense-claims"  },
+      { path: "/inventory",             redirect: "/inventory/items" },
+      { path: "/inventory/items",       component: InventoryItems,      name: "inventory-items"       },
+      { path: "/inventory/item-groups", component: InventoryItemGroups, name: "inventory-item-groups" },
     ]
   });
 

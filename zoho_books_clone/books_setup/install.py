@@ -12,12 +12,17 @@ def after_install():
     seed_payment_terms()
     create_default_accounts()
     seed_print_formats()
+    seed_warehouses()
+    seed_price_lists()
+    seed_item_groups()
     frappe.db.commit()
     print("✅  Zoho Books Clone installed successfully!")
 
 
 def after_migrate():
     seed_naming_series()
+    seed_warehouses()
+    seed_price_lists()
     seed_currencies()
     seed_uoms()
     if frappe.db.exists("DocType", "Books Payment Mode"):
@@ -25,6 +30,7 @@ def after_migrate():
     if frappe.db.exists("DocType", "Payment Terms"):
         seed_payment_terms()
     seed_print_formats()
+    seed_item_groups()
     frappe.db.commit()
 
 
@@ -273,3 +279,90 @@ def seed_print_formats():
         frappe.log_error(frappe.get_traceback(), "seed_print_formats failed")
         print(f"⚠️  Could not seed print format: {e}")
 
+
+
+# ─── Inventory Defaults ───────────────────────────────────────────────────────
+
+def seed_warehouses():
+    """Create default warehouse hierarchy if none exist."""
+    company = frappe.db.get_single_value("Books Settings", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Global Defaults", "default_company")
+        except Exception:
+            company = None
+
+    warehouses = [
+        # (warehouse_name, warehouse_type, parent, is_group)
+        ("All Warehouses",  "Stores",       None,              1),
+        ("Stores",          "Stores",       "All Warehouses",  0),
+        ("Transit",         "Transit",      "All Warehouses",  0),
+        ("Manufacturing",   "Manufacturing","All Warehouses",  0),
+        ("Scrap",           "Virtual",      "All Warehouses",  0),
+    ]
+
+    for name, wtype, parent, is_group in warehouses:
+        if frappe.db.exists("DocType", "Warehouse") and not frappe.db.exists("Warehouse", name):
+            try:
+                frappe.get_doc({
+                    "doctype": "Warehouse",
+                    "warehouse_name": name,
+                    "warehouse_type": wtype,
+                    "parent_warehouse": parent or "",
+                    "company": company or "",
+                    "is_group": is_group,
+                    "disabled": 0,
+                }).insert(ignore_permissions=True)
+            except Exception as e:
+                frappe.log_error(str(e), f"Warehouse seed: {name}")
+
+
+def seed_price_lists():
+    """Create default Selling and Buying price lists."""
+    price_lists = [
+        ("Standard Selling", "INR", 1, 0),
+        ("Standard Buying",  "INR", 0, 1),
+        ("Export Selling",   "USD", 1, 0),
+    ]
+
+    for name, currency, selling, buying in price_lists:
+        if frappe.db.exists("DocType", "Price List") and not frappe.db.exists("Price List", name):
+            try:
+                frappe.get_doc({
+                    "doctype": "Price List",
+                    "price_list_name": name,
+                    "currency": currency,
+                    "selling": selling,
+                    "buying": buying,
+                    "enabled": 1,
+                }).insert(ignore_permissions=True)
+            except Exception as e:
+                frappe.log_error(str(e), f"Price List seed: {name}")
+
+
+# ─── Item Groups ──────────────────────────────────────────────────────────────
+def seed_item_groups():
+    """Create default Item Group hierarchy if none exist."""
+    if not frappe.db.exists("DocType", "Item Group"):
+        return
+
+    groups = [
+        # (name, parent, is_group)
+        ("All Item Groups", "",               1),
+        ("Products",        "All Item Groups", 0),
+        ("Services",        "All Item Groups", 0),
+        ("Raw Materials",   "All Item Groups", 0),
+        ("Finished Goods",  "All Item Groups", 0),
+    ]
+
+    for name, parent, is_group in groups:
+        if not frappe.db.exists("Item Group", name):
+            try:
+                frappe.get_doc({
+                    "doctype":           "Item Group",
+                    "name":              name,
+                    "parent_item_group": parent,
+                    "is_group":          is_group,
+                }).insert(ignore_permissions=True)
+            except Exception as e:
+                frappe.log_error(str(e), f"Item Group seed: {name}")

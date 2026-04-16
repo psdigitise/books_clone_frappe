@@ -1,5 +1,6 @@
 Accounts
 Invoicing
+Inventory
 Payments
 Banking
 Taxes

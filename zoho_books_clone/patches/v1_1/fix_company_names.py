@@ -60,6 +60,10 @@ def execute():
         except Exception:
             continue
 
+        # Skip if the company column hasn't been created yet (schema update pending)
+        if not frappe.db.has_column(doctype, "company"):
+            continue
+
         # Collect all distinct company values present in this table
         rows = frappe.db.sql(
             f"SELECT DISTINCT company FROM `{table}` WHERE company != %s",

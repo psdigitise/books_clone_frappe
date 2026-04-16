@@ -568,4 +568,53 @@ def save_account(op, name=None, account_name=None, account_number=None,
         frappe.db.commit()
         return {"status": "deleted"}
 
+
+# ── GSTR / ITC Report endpoints (P3/Issue 9) ──────────────────────────────────
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_gstr_summary(company=None, from_date=None, to_date=None):
+    """
+    Return a GSTR-3B style summary:
+      output  — taxes collected on Sales Invoices
+      itc     — input tax credit from Purchase Invoices
+      net     — output - ITC per tax type
+      totals  — aggregate figures
+    """
+    from zoho_books_clone.db.queries import get_gstr_summary as _gstr
+    from frappe.utils import nowdate
+
+    if not company:
+        company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+    if not from_date:
+        from_date = nowdate()[:8] + "01"      # first of current month
+    if not to_date:
+        to_date = nowdate()
+
+    if not company:
+        frappe.throw("Company is required")
+
+    return _gstr(company=company, from_date=from_date, to_date=to_date)
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_itc_ledger(company=None, from_date=None, to_date=None):
+    """
+    Line-by-line ITC ledger from Purchase Invoices — for GSTR-2A reconciliation.
+    """
+    from zoho_books_clone.db.queries import get_itc_ledger as _itc
+    from frappe.utils import nowdate
+
+    if not company:
+        company = frappe.db.get_single_value("Books Settings", "default_company") or ""
+    if not from_date:
+        from_date = nowdate()[:8] + "01"
+    if not to_date:
+        to_date = nowdate()
+
+    if not company:
+        frappe.throw("Company is required")
+
+    rows = _itc(company=company, from_date=from_date, to_date=to_date)
+    return [dict(r) for r in rows]
+
     frappe.throw(f"Unknown action: {action}")
