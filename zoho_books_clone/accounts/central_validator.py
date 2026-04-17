@@ -10,7 +10,7 @@ from frappe.utils import flt, getdate
 
 # ─── Hook entry point ─────────────────────────────────────────────────────────
 
-def on_validate(doc, method=None):
+def on_validate(doc, _method=None):
     """
     Called for every financial doctype listed in hooks.py doc_events.
     Runs checks that apply across all document types.
@@ -22,9 +22,10 @@ def on_validate(doc, method=None):
     _check_lock_date(doc)          # Audit: strict period lock
 
 
-def on_submit(doc, method=None):
+def on_submit(doc, _method=None):
     """Extra guards run at submit time (after validate)."""
     _check_required_accounts(doc)
+    _check_credit_limit(doc)
 
 
 # ─── Individual checks ────────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ def _check_company(doc):
     """Every financial document must belong to a company."""
     if not getattr(doc, "company", None):
         frappe.throw(_("Company is required on {0}").format(doc.doctype))
+
     # Only validate against the Company master if that DocType exists in this
     # installation. In standalone Frappe (without ERPNext), Company is stored as
     # a plain Data field, so there is no tabCompany to query.
@@ -125,6 +127,45 @@ def _check_lock_date(doc):
             "The period up to {0} is locked. You cannot create or edit {1} documents "
             "dated on or before the lock date. Contact your System Manager to unlock the period."
         ).format(frappe.bold(lock_date), doc.doctype))
+
+
+def _check_credit_limit(doc):
+    """
+    Block Sales Invoice submission if the customer's outstanding balance
+    plus this invoice would exceed their configured credit limit.
+    Only applies to Sales Invoices where the customer has a non-zero credit_limit.
+    """
+    if doc.doctype != "Sales Invoice":
+        return
+
+    customer = getattr(doc, "customer", None)
+    if not customer:
+        return
+
+    credit_limit = flt(frappe.db.get_value("Customer", customer, "credit_limit"))
+    if not credit_limit:
+        return  # no limit configured — allow
+
+    # Sum all outstanding invoices for this customer
+    outstanding = flt(frappe.db.sql("""
+        SELECT COALESCE(SUM(outstanding_amount), 0)
+        FROM `tabSales Invoice`
+        WHERE customer = %s AND docstatus = 1 AND outstanding_amount > 0
+    """, (customer,))[0][0])
+
+    new_total = outstanding + flt(doc.grand_total)
+    if new_total > credit_limit:
+        frappe.throw(_(
+            "Credit limit exceeded for customer <b>{0}</b>. "
+            "Limit: {1}, Current outstanding: {2}, This invoice: {3}, "
+            "Total would be: {4}. Please collect pending payments or increase the credit limit."
+        ).format(
+            customer,
+            frappe.bold(frappe.format_value(credit_limit, {"fieldtype": "Currency"})),
+            frappe.bold(frappe.format_value(outstanding, {"fieldtype": "Currency"})),
+            frappe.bold(frappe.format_value(flt(doc.grand_total), {"fieldtype": "Currency"})),
+            frappe.bold(frappe.format_value(new_total, {"fieldtype": "Currency"})),
+        ))
 
 
 def _check_required_accounts(doc):

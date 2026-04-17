@@ -202,69 +202,114 @@ def get_bank_balance(bank_account: str) -> float:
 
 @frappe.whitelist()
 def get_profit_and_loss(company: str, from_date: str, to_date: str) -> dict:
-    """Return income, expense, and net profit totals."""
+    """
+    Return income, expense (including COGS), and net profit totals.
+
+    Account types included:
+      Income          → revenue
+      Expense         → operating expenses
+      Cost of Goods Sold → COGS posted by Stock Entry on Material Issue
+    """
     rows = frappe.db.sql("""
         SELECT a.account_type,
                COALESCE(SUM(g.credit) - SUM(g.debit), 0) AS amount
         FROM `tabGeneral Ledger Entry` g
         JOIN `tabAccount` a ON a.name = g.account
         WHERE g.company      = %(company)s
-          AND g.docstatus     = 1
+          AND g.is_cancelled  = 0
           AND g.posting_date BETWEEN %(from_date)s AND %(to_date)s
-          AND a.account_type IN ("Income", "Expense")
+          AND a.account_type IN (
+                "Income",
+                "Expense",
+                "Cost of Goods Sold"   -- COGS from inventory GL posting
+              )
         GROUP BY a.account_type
     """, {"company": company, "from_date": from_date, "to_date": to_date}, as_dict=True)
 
     totals = {r.account_type: flt(r.amount) for r in rows}
-    income  = totals.get("Income",  0.0)
-    expense = totals.get("Expense", 0.0)
+    income  = totals.get("Income", 0.0)
+    # COGS is a debit-normal account; credit-debit gives a negative number → negate it
+    cogs    = -totals.get("Cost of Goods Sold", 0.0)
+    expense = -totals.get("Expense", 0.0)   # expenses are also debit-normal
+
+    gross_profit = income - cogs
+    net_profit   = gross_profit - expense
+
     return {
-        "total_income":  income,
-        "total_expense": expense,
-        "net_profit":    income - expense,
+        "total_income":   income,
+        "cogs":           cogs,
+        "gross_profit":   gross_profit,
+        "total_expense":  expense,
+        "net_profit":     net_profit,
     }
 
 
 @frappe.whitelist()
 def get_balance_sheet_totals(company: str, as_of_date: str) -> dict:
-    """Asset, liability, equity totals as of a date."""
+    """
+    Asset, liability, equity totals as of a date.
+
+    Account types included:
+      Asset           → receivables, bank, cash, fixed assets
+      Stock           → inventory asset value (from Stock Entry GL posting)
+      Liability       → payables, loans
+      Equity          → capital, retained earnings
+    """
     rows = frappe.db.sql("""
         SELECT a.account_type,
                COALESCE(SUM(g.debit) - SUM(g.credit), 0) AS balance
         FROM `tabGeneral Ledger Entry` g
         JOIN `tabAccount` a ON a.name = g.account
-        WHERE g.company     = %(company)s
-          AND g.docstatus    = 1
+        WHERE g.company      = %(company)s
+          AND g.is_cancelled  = 0
           AND g.posting_date <= %(as_of_date)s
-          AND a.account_type IN ("Asset", "Liability", "Equity")
+          AND a.account_type IN (
+                "Asset",
+                "Stock",               -- inventory asset accounts
+                "Liability",
+                "Equity"
+              )
         GROUP BY a.account_type
     """, {"company": company, "as_of_date": as_of_date}, as_dict=True)
 
     totals = {r.account_type: flt(r.balance) for r in rows}
+    # "Stock" accounts are debit-normal assets — add to total_assets
+    inventory_value = totals.get("Stock", 0.0)
     return {
-        "total_assets":      totals.get("Asset",     0.0),
+        "total_assets":      totals.get("Asset", 0.0) + inventory_value,
+        "inventory_value":   inventory_value,
         "total_liabilities": totals.get("Liability", 0.0),
-        "total_equity":      totals.get("Equity",    0.0),
+        "total_equity":      totals.get("Equity", 0.0),
     }
 
 
 @frappe.whitelist()
 def get_cash_flow(company: str, from_date: str, to_date: str) -> dict:
-    """Simplified cash-flow: operating (P&L accounts) + financing (equity) + investing (assets)."""
+    """
+    Simplified cash-flow statement.
+    Operating = Net Income (Revenue − Expenses − COGS)
+    Investing  = net movement in Asset/Stock accounts
+    Financing  = net movement in Equity − Liability accounts
+    """
     rows = frappe.db.sql("""
         SELECT a.account_type,
                COALESCE(SUM(g.debit) - SUM(g.credit), 0) AS net
         FROM `tabGeneral Ledger Entry` g
         JOIN `tabAccount` a ON a.name = g.account
-        WHERE g.company     = %(company)s
-          AND g.docstatus    = 1
+        WHERE g.company      = %(company)s
+          AND g.is_cancelled  = 0
           AND g.posting_date BETWEEN %(from_date)s AND %(to_date)s
         GROUP BY a.account_type
     """, {"company": company, "from_date": from_date, "to_date": to_date}, as_dict=True)
 
     by_type = {r.account_type: flt(r.net) for r in rows}
-    operating  = by_type.get("Income", 0) - by_type.get("Expense", 0)
-    investing  = by_type.get("Asset", 0)
+    # Operating: revenue less all cost/expense types
+    operating = (
+        -by_type.get("Income", 0)            # income is credit-normal
+        + by_type.get("Expense", 0)
+        + by_type.get("Cost of Goods Sold", 0)
+    )
+    investing  = by_type.get("Asset", 0) + by_type.get("Stock", 0)
     financing  = by_type.get("Equity", 0) - by_type.get("Liability", 0)
     return {
         "operating":  operating,
@@ -439,8 +484,8 @@ def get_trial_balance(company: str, from_date: str, to_date: str) -> list[dict]:
             SUM(CASE WHEN gle.posting_date BETWEEN %(from_date)s AND %(to_date)s THEN gle.credit ELSE 0 END) AS credit
         FROM `tabGeneral Ledger Entry` gle
         JOIN `tabAccount` a ON a.name = gle.account
-        WHERE gle.company = %(company)s
-          AND gle.docstatus = 1
+        WHERE gle.company      = %(company)s
+          AND gle.is_cancelled  = 0
           AND gle.posting_date <= %(to_date)s
         GROUP BY gle.account, a.account_type
         ORDER BY gle.account
@@ -507,20 +552,24 @@ def get_pl_monthly_breakdown(company: str, from_date: str, to_date: str) -> list
     rows = frappe.db.sql("""
         SELECT
             DATE_FORMAT(gle.posting_date, '%%Y-%%m') AS month,
-            SUM(CASE WHEN a.account_type = 'Income' THEN gle.credit - gle.debit ELSE 0 END) AS income,
-            SUM(CASE WHEN a.account_type = 'Expense' THEN gle.debit - gle.credit ELSE 0 END) AS expense
+            SUM(CASE WHEN a.account_type = 'Income'
+                     THEN gle.credit - gle.debit ELSE 0 END) AS income,
+            SUM(CASE WHEN a.account_type IN ('Expense', 'Cost of Goods Sold')
+                     THEN gle.debit - gle.credit ELSE 0 END) AS expense
         FROM `tabGeneral Ledger Entry` gle
         JOIN `tabAccount` a ON a.name = gle.account
         WHERE gle.company    = %(company)s
-          AND gle.docstatus  = 1
+          AND gle.is_cancelled = 0
           AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s
-          AND a.account_type IN ('Income', 'Expense')
+          AND a.account_type IN ('Income', 'Expense', 'Cost of Goods Sold')
         GROUP BY DATE_FORMAT(gle.posting_date, '%%Y-%%m')
         ORDER BY month
     """, {"company": company, "from_date": from_date, "to_date": to_date}, as_dict=True)
 
     for r in rows:
         r["profit"] = flt(r.get("income")) - flt(r.get("expense"))
+
+    return rows
 
 
 # ── GST / ITC Report (P3/Issue 9) ─────────────────────────────────────────────

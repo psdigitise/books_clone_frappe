@@ -22,7 +22,7 @@ State machine for Sales:
 
 import frappe
 from frappe import _
-from frappe.utils import flt, today, getdate
+from frappe.utils import flt, today
 
 
 # ─── Sales Workflow ───────────────────────────────────────────────────────────
@@ -30,50 +30,91 @@ from frappe.utils import flt, today, getdate
 @frappe.whitelist(allow_guest=False)
 def confirm_sales_order(sales_order: str) -> dict:
     """
-    Transition a Sales Order from Draft → Confirmed (submit it).
+    Transition a Sales Order from Draft → Confirmed.
     Validates stock availability before confirming.
     Returns the updated document.
     """
     doc = _get_doc("Sales Order", sales_order, required_status="Draft")
     _check_stock_for_order(doc)
-    doc.submit()
+    frappe.db.set_value("Sales Order", sales_order, "status", "Confirmed", update_modified=True)
+    doc.status = "Confirmed"
     return _order_summary(doc)
 
 
 @frappe.whitelist(allow_guest=False)
-def create_delivery_from_order(sales_order: str, warehouse: str = None) -> dict:
+def create_delivery_from_order(
+    sales_order: str,
+    warehouse: str = None,
+    items_to_deliver: list | str = None,
+) -> dict:
     """
-    Create a Stock Entry (Material Issue) from a confirmed Sales Order,
-    effectively recording delivery of goods to the customer.
+    Create a Stock Entry (Material Issue) from a confirmed Sales Order.
+    Supports partial delivery — pass items_to_deliver as a list of
+    {item_code, qty} dicts to deliver specific quantities.
+    If omitted, delivers the remaining undelivered qty for each item.
 
-    Returns {stock_entry, sales_order, items_delivered}.
+    Returns {stock_entry, sales_order, items_delivered, fully_delivered}.
     """
-    doc = _get_doc("Sales Order", sales_order, required_docstatus=1)
+    doc = _get_doc("Sales Order", sales_order)
 
-    if doc.status not in ("Submitted", "To Deliver"):
+    if doc.status in ("Cancelled",):
         frappe.throw(_(
             "Sales Order {0} cannot be delivered — current status is '{1}'."
         ).format(sales_order, doc.status))
+    if doc.status == "Draft":
+        frappe.throw(_(
+            "Sales Order {0} must be Confirmed before delivery."
+        ).format(sales_order))
 
     wh = warehouse or _default_warehouse(doc.company)
     if not wh:
         frappe.throw(_("No warehouse specified and no default warehouse configured in Books Settings."))
 
+    # Parse items_to_deliver if passed as JSON string
+    if isinstance(items_to_deliver, str):
+        import json
+        items_to_deliver = json.loads(items_to_deliver)
+
+    # Build a map of already-delivered qty per item from prior stock entries
+    delivered_map = _get_delivered_qty_map("Sales Order", sales_order)
+
+    # Build delivery qty map from explicit input or remaining balance
+    deliver_map = {}
+    if items_to_deliver:
+        for row in items_to_deliver:
+            deliver_map[row["item_code"]] = flt(row.get("qty", 0))
+    else:
+        for row in (doc.items or []):
+            if not _is_stock_item(row.item_code):
+                continue
+            remaining = flt(row.qty) - flt(delivered_map.get(row.item_code, 0))
+            if remaining > 0:
+                deliver_map[row.item_code] = remaining
+
     items = []
     for row in (doc.items or []):
-        if not _is_stock_item(row.item_code):
+        if row.item_code not in deliver_map:
             continue
+        qty = flt(deliver_map[row.item_code])
+        if qty <= 0:
+            continue
+        # Validate not over-delivering
+        already = flt(delivered_map.get(row.item_code, 0))
+        if already + qty > flt(row.qty):
+            frappe.throw(_(
+                "Cannot deliver {0} units of {1} — only {2} remaining (ordered {3}, already delivered {4})."
+            ).format(qty, row.item_code, flt(row.qty) - already, flt(row.qty), already))
         items.append({
             "item_code":   row.item_code,
             "item_name":   row.item_name or row.item_code,
-            "qty":         flt(row.qty),
+            "qty":         qty,
             "basic_rate":  flt(row.rate),
             "s_warehouse": wh,
         })
 
     if not items:
-        frappe.msgprint(_("No stock items found on this order — no delivery entry created."), alert=True)
-        return {"stock_entry": None, "sales_order": sales_order, "items_delivered": 0}
+        frappe.msgprint(_("No items to deliver — all stock items have been fully delivered or none exist."), alert=True)
+        return {"stock_entry": None, "sales_order": sales_order, "items_delivered": 0, "fully_delivered": True}
 
     se = frappe.get_doc({
         "doctype":           "Stock Entry",
@@ -89,13 +130,16 @@ def create_delivery_from_order(sales_order: str, warehouse: str = None) -> dict:
     se.insert()
     se.submit()
 
-    # Mark order as delivered
-    frappe.db.set_value("Sales Order", sales_order, "status", "Delivered", update_modified=True)
+    # Check if fully delivered now
+    fully_delivered = _is_fully_delivered("Sales Order", sales_order, doc)
+    new_status = "Delivered" if fully_delivered else "Partly Delivered"
+    frappe.db.set_value("Sales Order", sales_order, "status", new_status, update_modified=True)
 
     return {
-        "stock_entry":     se.name,
-        "sales_order":     sales_order,
-        "items_delivered": len(items),
+        "stock_entry":      se.name,
+        "sales_order":      sales_order,
+        "items_delivered":  len(items),
+        "fully_delivered":  fully_delivered,
     }
 
 
@@ -105,7 +149,9 @@ def create_invoice_from_order(sales_order: str) -> dict:
     Create a Sales Invoice from a confirmed/delivered Sales Order.
     Copies customer, items, and totals.  Returns the new invoice name.
     """
-    so = _get_doc("Sales Order", sales_order, required_docstatus=1)
+    so = _get_doc("Sales Order", sales_order)
+    if so.status in ("Cancelled", "Draft"):
+        frappe.throw(_("Sales Order {0} must be Confirmed before invoicing.").format(sales_order))
 
     inv = frappe.get_doc({
         "doctype":        "Sales Invoice",
@@ -136,39 +182,76 @@ def create_invoice_from_order(sales_order: str) -> dict:
 
 @frappe.whitelist(allow_guest=False)
 def confirm_purchase_order(purchase_order: str) -> dict:
-    """Submit a Purchase Order (Draft → Confirmed)."""
+    """Confirm a Purchase Order (Draft → Confirmed)."""
     doc = _get_doc("Purchase Order", purchase_order, required_status="Draft")
-    doc.submit()
+    frappe.db.set_value("Purchase Order", purchase_order, "status", "Confirmed", update_modified=True)
     return {"purchase_order": doc.name, "status": "Confirmed"}
 
 
 @frappe.whitelist(allow_guest=False)
-def receive_goods_from_order(purchase_order: str, warehouse: str = None) -> dict:
+def receive_goods_from_order(
+    purchase_order: str,
+    warehouse: str = None,
+    items_to_receive: list | str = None,
+) -> dict:
     """
     Create a Material Receipt Stock Entry from a submitted Purchase Order.
-    Records goods arriving at the warehouse.
+    Supports partial receipt — pass items_to_receive as a list of
+    {item_code, qty} dicts. If omitted, receives remaining qty for each item.
+
+    Returns {stock_entry, purchase_order, items_received, fully_received}.
     """
-    doc = _get_doc("Purchase Order", purchase_order, required_docstatus=1)
+    doc = _get_doc("Purchase Order", purchase_order)
+    if doc.status == "Draft":
+        frappe.throw(_("Purchase Order {0} must be Confirmed before receiving goods.").format(purchase_order))
+    if doc.status == "Cancelled":
+        frappe.throw(_("Purchase Order {0} is cancelled.").format(purchase_order))
 
     wh = warehouse or _default_warehouse(doc.company)
     if not wh:
         frappe.throw(_("No warehouse specified and no default warehouse in Books Settings."))
 
+    if isinstance(items_to_receive, str):
+        import json
+        items_to_receive = json.loads(items_to_receive)
+
+    received_map = _get_received_qty_map("Purchase Order", purchase_order)
+
+    receive_map = {}
+    if items_to_receive:
+        for row in items_to_receive:
+            receive_map[row["item_code"]] = flt(row.get("qty", 0))
+    else:
+        for row in (doc.items or []):
+            if not _is_stock_item(row.item_code):
+                continue
+            remaining = flt(row.qty) - flt(received_map.get(row.item_code, 0))
+            if remaining > 0:
+                receive_map[row.item_code] = remaining
+
     items = []
     for row in (doc.items or []):
-        if not _is_stock_item(row.item_code):
+        if row.item_code not in receive_map:
             continue
+        qty = flt(receive_map[row.item_code])
+        if qty <= 0:
+            continue
+        already = flt(received_map.get(row.item_code, 0))
+        if already + qty > flt(row.qty):
+            frappe.throw(_(
+                "Cannot receive {0} units of {1} — only {2} remaining (ordered {3}, already received {4})."
+            ).format(qty, row.item_code, flt(row.qty) - already, flt(row.qty), already))
         items.append({
             "item_code":   row.item_code,
             "item_name":   row.item_name or row.item_code,
-            "qty":         flt(row.qty),
+            "qty":         qty,
             "basic_rate":  flt(row.rate),
             "t_warehouse": wh,
         })
 
     if not items:
-        frappe.msgprint(_("No stock items on this PO — no receipt entry created."), alert=True)
-        return {"stock_entry": None, "purchase_order": purchase_order, "items_received": 0}
+        frappe.msgprint(_("No items to receive — all stock items fully received or none exist."), alert=True)
+        return {"stock_entry": None, "purchase_order": purchase_order, "items_received": 0, "fully_received": True}
 
     se = frappe.get_doc({
         "doctype":           "Stock Entry",
@@ -184,21 +267,27 @@ def receive_goods_from_order(purchase_order: str, warehouse: str = None) -> dict
     se.insert()
     se.submit()
 
-    frappe.db.set_value("Purchase Order", purchase_order, "status", "Received", update_modified=True)
+    fully_received = _is_fully_received("Purchase Order", purchase_order, doc)
+    new_status = "Received" if fully_received else "Partly Received"
+    frappe.db.set_value("Purchase Order", purchase_order, "status", new_status, update_modified=True)
+
     return {
-        "stock_entry":    se.name,
-        "purchase_order": purchase_order,
-        "items_received": len(items),
+        "stock_entry":     se.name,
+        "purchase_order":  purchase_order,
+        "items_received":  len(items),
+        "fully_received":  fully_received,
     }
 
 
 @frappe.whitelist(allow_guest=False)
 def create_bill_from_order(purchase_order: str) -> dict:
     """
-    Create a Purchase Invoice from a submitted Purchase Order.
+    Create a Purchase Invoice from a Confirmed/Received Purchase Order.
     Returns the new invoice name.
     """
-    po = _get_doc("Purchase Order", purchase_order, required_docstatus=1)
+    po = _get_doc("Purchase Order", purchase_order)
+    if po.status in ("Cancelled", "Draft"):
+        frappe.throw(_("Purchase Order {0} must be Confirmed before billing.").format(purchase_order))
 
     bill = frappe.get_doc({
         "doctype":         "Purchase Invoice",
@@ -332,7 +421,7 @@ def get_order_workflow_status(doctype: str, name: str) -> dict:
         "status":        doc.status,
         "docstatus":     doc.docstatus,
         "workflow": {
-            "order_confirmed": doc.docstatus == 1,
+            "order_confirmed": doc.status not in ("Draft", "Cancelled"),
             "goods_moved":     len(stock_entries) > 0,
             "invoiced":        len(invoices) > 0,
             "paid":            len(payments) > 0,
@@ -389,7 +478,7 @@ def _is_stock_item(item_code: str) -> bool:
     return bool(frappe.db.get_value("Item", item_code, "is_stock_item"))
 
 
-def _default_warehouse(company: str) -> str | None:
+def _default_warehouse(company: str = None) -> str | None:  # noqa: ARG001
     try:
         return frappe.db.get_single_value("Books Settings", "default_warehouse") or None
     except Exception:
@@ -403,3 +492,79 @@ def _order_summary(doc) -> dict:
         "docstatus": doc.docstatus,
         "grand_total": flt(getattr(doc, "grand_total", 0)),
     }
+
+
+def _get_delivered_qty_map(ref_doctype: str, ref_name: str) -> dict:
+    """
+    Return {item_code: total_delivered_qty} from all submitted Material Issue
+    Stock Entries linked to a Sales Order.
+    """
+    entries = frappe.get_all(
+        "Stock Entry",
+        filters={
+            "reference_doctype": ref_doctype,
+            "reference_name": ref_name,
+            "stock_entry_type": "Material Issue",
+            "docstatus": 1,
+        },
+        fields=["name"],
+    )
+    qty_map = {}
+    for se in entries:
+        items = frappe.get_all(
+            "Stock Entry Detail",
+            filters={"parent": se.name},
+            fields=["item_code", "qty"],
+        )
+        for row in items:
+            qty_map[row.item_code] = flt(qty_map.get(row.item_code, 0)) + flt(row.qty)
+    return qty_map
+
+
+def _get_received_qty_map(ref_doctype: str, ref_name: str) -> dict:
+    """
+    Return {item_code: total_received_qty} from all submitted Material Receipt
+    Stock Entries linked to a Purchase Order.
+    """
+    entries = frappe.get_all(
+        "Stock Entry",
+        filters={
+            "reference_doctype": ref_doctype,
+            "reference_name": ref_name,
+            "stock_entry_type": "Material Receipt",
+            "docstatus": 1,
+        },
+        fields=["name"],
+    )
+    qty_map = {}
+    for se in entries:
+        items = frappe.get_all(
+            "Stock Entry Detail",
+            filters={"parent": se.name},
+            fields=["item_code", "qty"],
+        )
+        for row in items:
+            qty_map[row.item_code] = flt(qty_map.get(row.item_code, 0)) + flt(row.qty)
+    return qty_map
+
+
+def _is_fully_delivered(ref_doctype: str, ref_name: str, doc) -> bool:
+    """Check if all stock items on a Sales Order have been fully delivered."""
+    delivered = _get_delivered_qty_map(ref_doctype, ref_name)
+    for row in (doc.items or []):
+        if not _is_stock_item(row.item_code):
+            continue
+        if flt(delivered.get(row.item_code, 0)) < flt(row.qty):
+            return False
+    return True
+
+
+def _is_fully_received(ref_doctype: str, ref_name: str, doc) -> bool:
+    """Check if all stock items on a Purchase Order have been fully received."""
+    received = _get_received_qty_map(ref_doctype, ref_name)
+    for row in (doc.items or []):
+        if not _is_stock_item(row.item_code):
+            continue
+        if flt(received.get(row.item_code, 0)) < flt(row.qty):
+            return False
+    return True

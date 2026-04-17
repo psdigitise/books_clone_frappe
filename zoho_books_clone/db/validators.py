@@ -42,9 +42,9 @@ def validate_fiscal_year(posting_date: str, company: str) -> str:
 
 
 def validate_account_company(account: str, company: str) -> None:
-    """Ensure an account belongs to the given company."""
+    """Ensure an account belongs to the given company (case-insensitive)."""
     acc_company = frappe.db.get_value("Account", account, "company")
-    if acc_company and acc_company != company:
+    if acc_company and acc_company.lower() != (company or "").lower():
         frappe.throw(
             _("Account {0} belongs to company {1}, not {2}").format(account, acc_company, company)
         )

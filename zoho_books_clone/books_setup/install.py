@@ -11,6 +11,7 @@ def after_install():
     seed_modes_of_payment()
     seed_payment_terms()
     create_default_accounts()
+    seed_tax_templates()
     seed_print_formats()
     seed_warehouses()
     seed_price_lists()
@@ -29,9 +30,52 @@ def after_migrate():
         seed_modes_of_payment()
     if frappe.db.exists("DocType", "Payment Terms"):
         seed_payment_terms()
+    seed_tax_templates()
     seed_print_formats()
     seed_item_groups()
+    _normalize_company_names()
     frappe.db.commit()
+
+
+# ─── Company Name Normalisation ──────────────────────────────────────────────
+def _normalize_company_names():
+    """
+    Normalise all company name references across key tables to use the most
+    common casing found in tabAccount.  Silently skips tables that don't exist.
+    """
+    rows = frappe.db.sql(
+        """SELECT company, COUNT(*) AS cnt
+           FROM `tabAccount`
+           WHERE company IS NOT NULL AND company != ''
+           GROUP BY company ORDER BY cnt DESC LIMIT 1""",
+        as_dict=True,
+    )
+    if not rows:
+        return
+
+    canonical = rows[0]["company"]
+
+    targets = [
+        ("tabAccount",              "company"),
+        ("tabSales Invoice",        "company"),
+        ("tabPurchase Invoice",     "company"),
+        ("tabPayment Entry",        "company"),
+        ("tabJournal Entry",        "company"),
+        ("tabStock Entry",          "company"),
+        ("tabGeneral Ledger Entry", "company"),
+        ("tabStock Ledger Entry",   "company"),
+        ("tabWarehouse",            "company"),
+        ("tabCost Center",          "company"),
+    ]
+    for table, field in targets:
+        try:
+            frappe.db.sql(
+                f"UPDATE `{table}` SET `{field}` = %s "
+                f"WHERE LOWER(`{field}`) = LOWER(%s) AND `{field}` != %s",
+                (canonical, canonical, canonical),
+            )
+        except Exception:
+            pass
 
 
 # ─── Roles ───────────────────────────────────────────────────────────────────
@@ -181,13 +225,22 @@ def create_default_accounts():
         ("Current Liabilities",   "Liability", "Liabilities",        1),
         ("Accounts Payable",      "Payable",   "Current Liabilities",0),
         ("GST Payable",           "Tax",       "Current Liabilities",0),
+        ("CGST Payable",          "Tax",       "Current Liabilities",0),
+        ("SGST Payable",          "Tax",       "Current Liabilities",0),
+        ("IGST Payable",          "Tax",       "Current Liabilities",0),
+        ("Input Tax Credits",     "Tax",       "Current Assets",     1),
+        ("CGST Input",            "Tax",       "Input Tax Credits",  0),
+        ("SGST Input",            "Tax",       "Input Tax Credits",  0),
+        ("IGST Input",            "Tax",       "Input Tax Credits",  0),
         ("Equity",                "Equity",    None,                 1),
         ("Retained Earnings",     "Equity",    "Equity",             0),
         ("Income",                "Income",    None,                 1),
         ("Sales Revenue",         "Income",    "Income",             0),
         ("Other Income",          "Income",    "Income",             0),
         ("Expenses",              "Expense",   None,                 1),
-        ("Cost of Goods Sold",    "Expense",   "Expenses",           0),
+        ("Cost of Goods Sold",    "Cost of Goods Sold", "Expenses",    0),
+        ("Stock In Hand",         "Stock",     "Current Assets",     0),
+        ("Stock Adjustment",      "Stock Adjustment", "Expenses",    0),
         ("Operating Expenses",    "Expense",   "Expenses",           1),
         ("Salaries & Wages",      "Expense",   "Operating Expenses", 0),
         ("Rent",                  "Expense",   "Operating Expenses", 0),
@@ -208,6 +261,96 @@ def create_default_accounts():
                 }).insert(ignore_permissions=True)
             except Exception as e:
                 frappe.log_error(str(e), f"Account seed: {name}")
+
+
+# ─── Tax Templates (GST) ─────────────────────────────────────────────────────
+def seed_tax_templates():
+    """
+    Create standard Indian GST tax templates so users have ready-to-use
+    tax configurations out of the box — mirrors Zoho Books' auto-tax setup.
+    """
+    if not frappe.db.exists("DocType", "Tax Template"):
+        return
+
+    company = frappe.db.get_single_value("Books Settings", "default_company")
+    if not company:
+        try:
+            company = frappe.db.get_single_value("Global Defaults", "default_company")
+        except Exception:
+            company = None
+
+    # Helper to resolve account name → full account name for this company
+    def _acct(name):
+        return frappe.db.get_value(
+            "Account",
+            {"account_name": name, "company": company, "is_group": 0},
+            "name",
+        ) or name
+
+    templates = [
+        # (template_name, is_selling, is_buying, taxes: [(tax_type, description, rate, account)])
+        ("GST 18% (Intra-State)", 1, 1, [
+            ("CGST", "CGST @ 9%", 9, "CGST Payable"),
+            ("SGST", "SGST @ 9%", 9, "SGST Payable"),
+        ]),
+        ("GST 12% (Intra-State)", 1, 1, [
+            ("CGST", "CGST @ 6%", 6, "CGST Payable"),
+            ("SGST", "SGST @ 6%", 6, "SGST Payable"),
+        ]),
+        ("GST 5% (Intra-State)", 1, 1, [
+            ("CGST", "CGST @ 2.5%", 2.5, "CGST Payable"),
+            ("SGST", "SGST @ 2.5%", 2.5, "SGST Payable"),
+        ]),
+        ("IGST 18% (Inter-State)", 1, 1, [
+            ("IGST", "IGST @ 18%", 18, "IGST Payable"),
+        ]),
+        ("IGST 12% (Inter-State)", 1, 1, [
+            ("IGST", "IGST @ 12%", 12, "IGST Payable"),
+        ]),
+        ("IGST 5% (Inter-State)", 1, 1, [
+            ("IGST", "IGST @ 5%", 5, "IGST Payable"),
+        ]),
+        ("GST 28% (Intra-State)", 1, 1, [
+            ("CGST", "CGST @ 14%", 14, "CGST Payable"),
+            ("SGST", "SGST @ 14%", 14, "SGST Payable"),
+        ]),
+        ("IGST 28% (Inter-State)", 1, 1, [
+            ("IGST", "IGST @ 28%", 28, "IGST Payable"),
+        ]),
+        ("GST Exempt", 1, 1, []),
+        # Purchase-side ITC templates
+        ("Input GST 18% (Intra-State)", 0, 1, [
+            ("CGST", "CGST ITC @ 9%", 9, "CGST Input"),
+            ("SGST", "SGST ITC @ 9%", 9, "SGST Input"),
+        ]),
+        ("Input IGST 18% (Inter-State)", 0, 1, [
+            ("IGST", "IGST ITC @ 18%", 18, "IGST Input"),
+        ]),
+    ]
+
+    for tpl_name, selling, buying, taxes in templates:
+        if frappe.db.exists("Tax Template", tpl_name):
+            continue
+        try:
+            doc = frappe.get_doc({
+                "doctype": "Tax Template",
+                "template_name": tpl_name,
+                "company": company or "",
+                "is_selling": selling,
+                "is_buying": buying,
+                "taxes": [
+                    {
+                        "tax_type": t[0],
+                        "description": t[1],
+                        "rate": t[2],
+                        "account_head": _acct(t[3]) if company else t[3],
+                    }
+                    for t in taxes
+                ],
+            })
+            doc.insert(ignore_permissions=True)
+        except Exception as e:
+            frappe.log_error(str(e), f"Tax Template seed: {tpl_name}")
 
 
 # ─── Cost Centers ────────────────────────────────────────────────────────────

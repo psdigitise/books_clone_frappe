@@ -134,11 +134,13 @@ def get_payment_defaults(invoice_name):
     if not outstanding:
         outstanding = flt(inv.grand_total) - flt(inv.advance_paid)
     company = inv.company or frappe.defaults.get_default("company")
-    bank_accounts = frappe.get_all(
-        "Account",
-        filters={"account_type": ["in", ["Bank", "Cash"]], "is_group": 0, "company": company},
-        fields=["name", "account_type"],
-        order_by="account_type desc",
+    # Use LOWER() so we find accounts regardless of company name casing in the DB
+    bank_accounts = frappe.db.sql(
+        """SELECT name, account_type FROM `tabAccount`
+           WHERE account_type IN ('Bank','Cash') AND is_group = 0
+             AND LOWER(company) = LOWER(%s)
+           ORDER BY account_type DESC""",
+        (company,), as_dict=True
     )
     # Prefer our own Books Payment Mode; fall back to Frappe's Mode of Payment
     try:
@@ -197,20 +199,47 @@ def record_payment(
     company  = inv.company or frappe.defaults.get_default("company")
     currency = inv.currency or "INR"
 
+    # Resolve deposit_to first so we can derive the canonical company name from it.
+    # Frappe validates that every account on a Payment Entry shares the same company
+    # with a case-sensitive comparison, so the company on the Payment Entry MUST
+    # exactly match the company stored on each account record.
     if not deposit_to:
         acct_type = "Cash" if payment_mode == "Cash" else "Bank"
-        deposit_to = frappe.db.get_value(
-            "Account", {"account_type": acct_type, "company": company, "is_group": 0}, "name"
+        deposit_to = frappe.db.sql(
+            """SELECT name FROM `tabAccount`
+               WHERE account_type = %s AND LOWER(company) = LOWER(%s)
+                 AND is_group = 0 AND disabled = 0
+               LIMIT 1""",
+            (acct_type, company), as_dict=True
         )
+        deposit_to = deposit_to[0]["name"] if deposit_to else None
+
     if not deposit_to:
         frappe.throw("Could not find a Cash/Bank account. Please set one up under Accounts.")
 
-    # Resolve Accounts Receivable account from the invoice or from our Account DocType
-    debtors_account = getattr(inv, "debit_to", None) or frappe.db.get_value(
-        "Account",
-        {"account_type": "Receivable", "company": company, "is_group": 0},
-        "name",
-    )
+    # Use the deposit_to account's own company as the canonical company name.
+    # This is the authoritative value — the account itself knows its company.
+    company = frappe.db.get_value("Account", deposit_to, "company") or company
+
+    # Resolve Accounts Receivable — look up using the same canonical company.
+    debtors_account = getattr(inv, "debit_to", None)
+    if debtors_account:
+        # Verify the invoice's debit_to account belongs to the same company
+        # using case-insensitive comparison; if not, fall back to lookup.
+        ar_company = frappe.db.get_value("Account", debtors_account, "company")
+        if ar_company and ar_company.lower() != company.lower():
+            debtors_account = None
+
+    if not debtors_account:
+        rows = frappe.db.sql(
+            """SELECT name FROM `tabAccount`
+               WHERE account_type = 'Receivable' AND LOWER(company) = LOWER(%s)
+                 AND is_group = 0
+               LIMIT 1""",
+            (company,), as_dict=True
+        )
+        debtors_account = rows[0]["name"] if rows else None
+
     if not debtors_account:
         frappe.throw(
             f"No Receivable account found for company '{company}'. "
@@ -617,4 +646,67 @@ def get_itc_ledger(company=None, from_date=None, to_date=None):
     rows = _itc(company=company, from_date=from_date, to_date=to_date)
     return [dict(r) for r in rows]
 
-    frappe.throw(f"Unknown action: {action}")
+
+# ─── Company Name Normalisation ───────────────────────────────────────────────
+
+@frappe.whitelist(allow_guest=False)
+def normalize_company_names():
+    """
+    One-time migration: pick the most-frequently used casing of the company
+    name from tabAccount and normalise every other record to match it.
+
+    Run via: bench execute zoho_books_clone.api.books_data.normalize_company_names
+    Or call via the API (System Manager only).
+    """
+    if "System Manager" not in frappe.get_roles(frappe.session.user):
+        frappe.throw("Only System Managers can run this migration.")
+
+    # Find the canonical company name (most common casing in Account records)
+    rows = frappe.db.sql(
+        """SELECT company, COUNT(*) AS cnt
+           FROM `tabAccount`
+           WHERE company IS NOT NULL AND company != ''
+           GROUP BY company
+           ORDER BY cnt DESC
+           LIMIT 1""",
+        as_dict=True,
+    )
+    if not rows:
+        return {"message": "No accounts found — nothing to normalise."}
+
+    canonical = rows[0]["company"]
+
+    # Tables and fields to normalise
+    targets = [
+        ("tabAccount",          "company"),
+        ("tabSales Invoice",    "company"),
+        ("tabPurchase Invoice", "company"),
+        ("tabPayment Entry",    "company"),
+        ("tabJournal Entry",    "company"),
+        ("tabStock Entry",      "company"),
+        ("tabGeneral Ledger Entry", "company"),
+        ("tabStock Ledger Entry",   "company"),
+        ("tabWarehouse",        "company"),
+        ("tabCost Center",      "company"),
+    ]
+
+    updated = {}
+    for table, field in targets:
+        try:
+            frappe.db.sql(
+                f"UPDATE `{table}` SET `{field}` = %s "
+                f"WHERE LOWER(`{field}`) = LOWER(%s) AND `{field}` != %s",
+                (canonical, canonical, canonical),
+            )
+            count = frappe.db.sql("SELECT ROW_COUNT()")[0][0]
+            if count:
+                updated[table] = count
+        except Exception:
+            pass  # Table may not exist on this install
+
+    frappe.db.commit()
+    return {
+        "canonical_company": canonical,
+        "rows_updated": updated,
+        "message": f"Normalised company name to '{canonical}' across {len(updated)} tables.",
+    }

@@ -65,26 +65,42 @@ def post_sales_invoice(doc) -> None:
 # ─── Purchase Invoice ──────────────────────────────────────────────────────────
 
 def post_purchase_invoice(doc) -> None:
-    """DR Expense / CR Payable on Purchase Invoice submit."""
-    _require(doc, "credit_to",      "Credit To (Accounts Payable) account")
-    _require(doc, "expense_account","Expense Account")
+    """
+    DR Expense (net_total) + DR ITC Tax Accounts / CR Payable (grand_total).
+
+    Correctly separates:
+      - Net purchase cost   → Expense account (debit = net_total)
+      - Input Tax Credit    → Each tax line's account_head (debit = tax_amount)
+      - Total payable       → AP account (credit = grand_total)
+
+    This ensures GST ITC is tracked per tax type in the GL, enabling accurate
+    GSTR-2A reconciliation via get_itc_ledger().
+    """
+    _require(doc, "credit_to",       "Credit To (Accounts Payable) account")
+    _require(doc, "expense_account", "Expense Account")
+
+    net_total   = flt(doc.net_total)
+    grand_total = flt(doc.grand_total)
+    total_tax   = flt(doc.total_tax) if hasattr(doc, "total_tax") else (grand_total - net_total)
 
     gl_map = [
+        # DR Expense account for net purchase cost (excluding tax)
         {
             "account":      doc.expense_account,
-            "debit":        flt(doc.grand_total),
+            "debit":        net_total,
             "credit":       0,
             "voucher_type": doc.doctype,
             "voucher_no":   doc.name,
             "posting_date": doc.posting_date,
             "company":      doc.company,
             "fiscal_year":  doc.fiscal_year or "",
-            "remarks":      f"Expense — Bill {doc.name}",
+            "remarks":      f"Purchase cost (net) — Bill {doc.name}",
         },
+        # CR Payable for full amount owed to supplier
         {
             "account":      doc.credit_to,
             "debit":        0,
-            "credit":       flt(doc.grand_total),
+            "credit":       grand_total,
             "voucher_type": doc.doctype,
             "voucher_no":   doc.name,
             "posting_date": doc.posting_date,
@@ -95,6 +111,42 @@ def post_purchase_invoice(doc) -> None:
             "remarks":      f"Payable to {doc.supplier} — Bill {doc.name}",
         },
     ]
+
+    # DR individual ITC accounts per tax line (CGST, SGST, IGST, etc.)
+    tax_lines_posted = flt(0)
+    for tax in (doc.taxes or []):
+        tax_amount = flt(tax.tax_amount)
+        if not tax_amount:
+            continue
+
+        account = tax.account_head
+        if not account:
+            # No specific account — fall into the expense line (already included in net fallback)
+            continue
+
+        gl_map.append({
+            "account":      account,
+            "debit":        tax_amount,
+            "credit":       0,
+            "voucher_type": doc.doctype,
+            "voucher_no":   doc.name,
+            "posting_date": doc.posting_date,
+            "company":      doc.company,
+            "fiscal_year":  doc.fiscal_year or "",
+            "remarks":      f"ITC — {tax.tax_type or tax.description or 'Tax'} — Bill {doc.name}",
+        })
+        tax_lines_posted += tax_amount
+
+    # If no tax lines had account_heads, the tax was already included in the
+    # expense debit via grand_total fallback. We need to adjust: swap net_total
+    # debit back to grand_total so the entry remains balanced.
+    if not tax_lines_posted and total_tax:
+        for entry in gl_map:
+            if entry["account"] == doc.expense_account:
+                entry["debit"] = grand_total
+                entry["remarks"] = f"Purchase cost (gross, no ITC accounts) — Bill {doc.name}"
+                break
+
     make_gl_entries(gl_map)
 
 

@@ -11,7 +11,7 @@ Audit fixes applied:
 import frappe
 from frappe import _
 from frappe.model.document import Document
-from frappe.utils import flt, now_datetime, today, get_datetime
+from frappe.utils import flt, today
 
 
 SE_TYPE_DIRECTION = {
@@ -159,6 +159,33 @@ class StockEntry(Document):
             "is_cancelled": 0,
         })
         sle.insert(ignore_permissions=True)
+        self._sync_bin(item_code, warehouse, qty_after, valuation_rate, stock_value_difference)
+
+    def _sync_bin(self, item_code, warehouse, new_qty, valuation_rate, _stock_value_diff=None):
+        """Create or update the Bin record for item+warehouse after an SLE."""
+        bin_name = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse})
+        new_value = flt(new_qty) * flt(valuation_rate)
+        if bin_name:
+            old_reserved = flt(frappe.db.get_value("Bin", bin_name, "reserved_qty"))
+            old_ordered  = flt(frappe.db.get_value("Bin", bin_name, "ordered_qty"))
+            frappe.db.set_value("Bin", bin_name, {
+                "actual_qty":     new_qty,
+                "stock_value":    new_value,
+                "valuation_rate": valuation_rate if new_qty else 0,
+                "projected_qty":  new_qty + old_ordered - old_reserved,
+            }, update_modified=True)
+        else:
+            frappe.get_doc({
+                "doctype":        "Bin",
+                "item_code":      item_code,
+                "warehouse":      warehouse,
+                "actual_qty":     new_qty,
+                "reserved_qty":   0,
+                "ordered_qty":    0,
+                "projected_qty":  new_qty,
+                "valuation_rate": valuation_rate if new_qty else 0,
+                "stock_value":    new_value,
+            }).insert(ignore_permissions=True)
 
     def _post_gl_entries(self):
         """
@@ -181,11 +208,16 @@ class StockEntry(Document):
 
         if self.stock_entry_type == "Material Issue":
             # Stock leaving — debit COGS, credit Inventory
-            cogs_account = self._get_account_by_type("Cost of Goods Sold")
+            # Try: "Cost of Goods Sold" → "Expense" → skip with log
+            cogs_account = (
+                self._get_account_by_type("Cost of Goods Sold")
+                or self._get_account_by_type("Expense")
+            )
             if not cogs_account:
                 frappe.log_error(
-                    f"Stock Entry {self.name}: no Cost of Goods Sold account found. "
-                    "GL entries skipped.",
+                    f"Stock Entry {self.name}: no COGS or Expense account found for company "
+                    f"'{self.company}'. GL entries skipped. "
+                    "Create an account with type 'Cost of Goods Sold' or 'Expense'.",
                     "Inventory GL Posting"
                 )
                 return
@@ -318,5 +350,6 @@ class StockEntry(Document):
                 "is_cancelled": 0,
             })
             rev.insert(ignore_permissions=True)
+            self._sync_bin(sle.item_code, sle.warehouse, qty_after, flt(sle.valuation_rate))
 
         frappe.db.commit()

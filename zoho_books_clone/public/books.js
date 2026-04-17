@@ -426,7 +426,7 @@
       onMounted(() => document.addEventListener("pointerdown", onDoc, true));
       onUnmounted(() => document.removeEventListener("pointerdown", onDoc, true));
 
-      return { q, open, inputEl, trigEl, dropStyle, displayLabel, filtered, openDD, pick, icon };
+      return { q, open, inputEl, trigEl, dropStyle, displayLabel, normalized, filtered, openDD, pick, icon };
     },
     template: `
 <div class="ss-wrap">
@@ -1450,20 +1450,29 @@
         } catch {
           // keep hardcoded defaults: Bank Transfer, Cash, Cheque, NEFT, RTGS, UPI
         }
+        // Load accounts via get_accounts (handles company resolution + fallbacks)
         try {
-          const bank = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Bank", "Cash"]], ["is_group", "=", 0]], limit: 50 });
-          accounts_bank.value = bank;
-        } catch (e) { console.warn("Bank accounts failed:", e.message); }
-        try {
-          const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 });
-          accounts_ar.value = ar;
-        } catch (e) { console.warn("AR accounts failed:", e.message); }
-        try {
-          const ap = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Payable"], ["is_group", "=", 0]], limit: 50 });
-          accounts_ap.value = ap;
-        } catch (e) { console.warn("AP accounts failed:", e.message); }
-        try { customers.value = await apiList("Customer", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
-        try { suppliers.value = await apiList("Supplier", { fields: ["name"], limit: 50, order: "name asc" }); } catch { }
+          const accts = await apiGET("zoho_books_clone.api.docs.get_accounts", { company: c });
+          accounts_bank.value = accts.bank || [];
+          accounts_ar.value   = accts.ar   || [];
+          accounts_ap.value   = accts.ap   || [];
+        } catch (e) {
+          // Fallback: load without company filter
+          try {
+            const bank = await apiList("Account", { fields: ["name"], filters: [["account_type", "in", ["Bank", "Cash"]], ["is_group", "=", 0]], limit: 50 });
+            accounts_bank.value = bank;
+          } catch { }
+          try {
+            const ar = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Receivable"], ["is_group", "=", 0]], limit: 50 });
+            accounts_ar.value = ar;
+          } catch { }
+          try {
+            const ap = await apiList("Account", { fields: ["name"], filters: [["account_type", "=", "Payable"], ["is_group", "=", 0]], limit: 50 });
+            accounts_ap.value = ap;
+          } catch { }
+        }
+        try { customers.value = await apiList("Customer", { fields: ["name"], limit: 200, order: "name asc" }); } catch { }
+        try { suppliers.value = await apiList("Supplier", { fields: ["name"], limit: 200, order: "name asc" }); } catch { }
         _autoFillAccounts();
       }
 
@@ -1516,16 +1525,19 @@
           let peName;
           if (invoices.value.length) {
             // Use backend utility which handles GL + invoice outstanding update
-            const method = form.payment_type === "Receive" ? "zoho_books_clone.payments.utils.make_payment_entry_from_invoice" : "zoho_books_clone.payments.utils.make_payment_entry_from_purchase_invoice";
-            peName = await apiGET(method, {
-              source_name: invoices.value[0].name,
-              paid_amount: form.paid_amount,
-              payment_date: form.payment_date,
+            const method = form.payment_type === "Receive"
+              ? "zoho_books_clone.payments.utils.make_payment_entry_from_invoice"
+              : "zoho_books_clone.payments.utils.make_payment_entry_from_purchase_invoice";
+            const args = {
+              source_name:     invoices.value[0].name,
+              paid_amount:     form.paid_amount,
+              payment_date:    form.payment_date,
               mode_of_payment: form.mode_of_payment,
-              reference_no: form.reference_no,
-              paid_to: form.payment_type === "Receive" ? form.paid_to : undefined,
-              paid_from: form.payment_type === "Pay" ? form.paid_from : undefined,
-            });
+              reference_no:    form.reference_no,
+            };
+            if (form.payment_type === "Receive" && form.paid_to)   args.paid_to   = form.paid_to;
+            if (form.payment_type === "Pay"     && form.paid_from)  args.paid_from = form.paid_from;
+            peName = await apiPOST(method, args);
           } else {
             // Standalone payment without invoice link
             const doc = {
@@ -2356,15 +2368,20 @@
       });
 
       async function openRecPay() {
-        // Load bank/cash accounts fresh each time
+        // Load bank/cash accounts for the invoice's company (use get_accounts for proper resolution)
         try {
-          const accs = await apiList("Account", {
-            fields: ["name", "account_type"],
-            filters: [["is_group", "=", 0]],
-            limit: 100
-          });
-          // Filter client-side to avoid server-side IN operator issues
-          recPayAccounts.value = accs.filter(a => ["Bank", "Cash"].includes(a.account_type));
+          const invCompany = inv.value?.company || co();
+          const accts = await apiGET("zoho_books_clone.api.docs.get_accounts", { company: invCompany });
+          recPayAccounts.value = accts.bank || [];
+          // Fallback: load without company filter if empty
+          if (!recPayAccounts.value.length) {
+            const fallback = await apiList("Account", {
+              fields: ["name", "account_type"],
+              filters: [["account_type", "in", ["Bank", "Cash"]], ["is_group", "=", 0]],
+              limit: 100
+            });
+            recPayAccounts.value = fallback;
+          }
           if (!recPay.deposit_to && recPayAccounts.value.length) {
             recPay.deposit_to = recPayAccounts.value[0].name;
           }
@@ -4679,24 +4696,59 @@
 
       async function advanceStatus(name, newStatus) {
         try {
-          await apiSave({ doctype:"Sales Order", name, status:newStatus });
-          const o = list.value.find(x => x.name === name);
-          if (o) o.status = newStatus;
+          if (newStatus === "Confirmed") {
+            // Call backend workflow service — validates stock, sets status
+            await apiPOST("zoho_books_clone.services.workflow_service.confirm_sales_order", { sales_order: name });
+          } else {
+            await apiSave({ doctype:"Sales Order", name, status:newStatus });
+          }
+          await load();
+          const updated = list.value.find(x => x.name === name);
+          if (viewOrder.value?.name === name && updated) viewOrder.value = { ...updated };
           toast("Order " + name + " → " + newStatus);
           showDrawer.value = false;
-        } catch(e) { toast("Update failed: " + e.message, "error"); }
+        } catch(e) { toast("Update failed: " + (e.message || e), "error"); }
       }
 
-      // ── Convert modal ──
+      // ── Create Delivery ──
+      const showDeliver = ref(false);
+      const deliverTarget = ref(null);
+      const delivering = ref(false);
+      function openDeliver(o) { deliverTarget.value = o; showDeliver.value = true; }
+      async function doDeliver() {
+        delivering.value = true;
+        try {
+          const res = await apiPOST("zoho_books_clone.services.workflow_service.create_delivery_from_order", {
+            sales_order: deliverTarget.value.name
+          });
+          await load();
+          const updated = list.value.find(x => x.name === deliverTarget.value.name);
+          if (viewOrder.value?.name === deliverTarget.value.name && updated) viewOrder.value = { ...updated };
+          toast(res.fully_delivered
+            ? "Delivery created — order fully delivered!"
+            : `Delivery ${res.stock_entry} created (${res.items_delivered} item(s) delivered)`
+          );
+        } catch(e) { toast("Delivery failed: " + (e.message || e), "error"); }
+        finally { delivering.value = false; showDeliver.value = false; }
+      }
+
+      // ── Convert to Invoice modal ──
       const showConvert = ref(false);
       const convertTarget = ref(null);
+      const converting = ref(false);
       function openConvert(o) { convertTarget.value = o; showConvert.value = true; }
-      function doConvert() {
-        const o = convertTarget.value;
-        localStorage.setItem("convert_to_invoice", JSON.stringify({ ...o, source_type:"Sales Order", source_name:o.name }));
-        toast("Drafting invoice — please save it to confirm", "info");
-        showConvert.value = false; showDrawer.value = false;
-        router.push({ name: "invoices" });
+      async function doConvert() {
+        converting.value = true;
+        try {
+          const res = await apiPOST("zoho_books_clone.services.workflow_service.create_invoice_from_order", {
+            sales_order: convertTarget.value.name
+          });
+          await load();
+          toast("Invoice " + res.sales_invoice + " created!", "success");
+          showConvert.value = false; showDrawer.value = false;
+          router.push({ name: "invoices" });
+        } catch(e) { toast("Invoice creation failed: " + (e.message || e), "error"); }
+        finally { converting.value = false; }
       }
 
       // ── Delete modal ──
@@ -4732,7 +4784,8 @@
         netTotal, taxTotal, grandTotal,
         recalc, addItem, removeItem, addTax, removeTax, onItemPick,
         pickCustomer, saveOrder, advanceStatus, openAdd, openEdit, openView,
-        showConvert, convertTarget, openConvert, doConvert,
+        showConvert, convertTarget, converting, openConvert, doConvert,
+        showDeliver, deliverTarget, delivering, openDeliver, doDeliver,
         showDelete, deleteTarget, deleting, confirmDelete, doDelete,
         load, icon, fmt, fmtDate, flt,
       };
@@ -5056,11 +5109,12 @@
                   <button class="nim-btn nim-btn-ghost" @click="openEdit(viewOrder.name)"><span v-html="icon('edit',13)"></span> Edit</button>
                   <button v-if="viewOrder.status==='Draft'" class="nim-btn" style="background:#2563eb;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
                     @click="advanceStatus(viewOrder.name,'Confirmed')">Confirm Order</button>
-                  <button v-if="viewOrder.status==='Confirmed'" class="nim-btn" style="background:#d97706;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
-                    @click="advanceStatus(viewOrder.name,'Processing')">Mark Processing</button>
-                  <button v-if="viewOrder.status==='Processing'" class="nim-btn" style="background:#059669;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
-                    @click="advanceStatus(viewOrder.name,'Ready')">Mark Ready</button>
-                  <button v-if="viewOrder.status!=='Invoiced'&&viewOrder.status!=='Cancelled'" class="nim-btn nim-btn-primary" @click="openConvert(viewOrder)">
+                  <button v-if="['Confirmed','Processing','Ready','Partly Delivered'].includes(viewOrder.status)" class="nim-btn" style="background:#059669;color:#fff;height:37px;padding:0 14px;border-radius:8px;font-size:13.5px;font-weight:600;border:none;cursor:pointer"
+                    @click="openDeliver(viewOrder)">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                    Create Delivery
+                  </button>
+                  <button v-if="!['Invoiced','Cancelled','Draft'].includes(viewOrder.status)" class="nim-btn nim-btn-primary" @click="openConvert(viewOrder)">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                     Create Invoice
                   </button>
@@ -5084,6 +5138,37 @@
     </transition>
   </teleport>
 
+  <!-- ── Create Delivery Modal ── -->
+  <teleport to="body">
+    <div v-if="showDeliver" class="nim-overlay" @click.self="showDeliver=false">
+      <div class="nim-dialog" style="max-width:440px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#059669,#047857)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+            <div class="nim-header-title">Create Delivery</div>
+          </div>
+          <button class="nim-close" @click="showDeliver=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Create a stock delivery (Material Issue) for order <strong>{{deliverTarget?.name}}</strong> —
+            <strong>{{deliverTarget?.customer}}</strong>?<br>
+            <span style="font-size:12px;color:#6b7280;margin-top:8px;display:block">
+              This will reduce inventory for all undelivered items on this order.
+            </span>
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" :disabled="delivering" @click="showDeliver=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" style="background:#059669;border-color:#059669" :disabled="delivering" @click="doDeliver">
+            <span v-if="delivering" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{delivering ? 'Creating…' : 'Create Delivery'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
   <!-- ── Convert to Invoice Modal ── -->
   <teleport to="body">
     <div v-if="showConvert" class="nim-overlay" @click.self="showConvert=false">
@@ -5102,10 +5187,11 @@
           </p>
         </div>
         <div class="nim-footer">
-          <button class="nim-btn nim-btn-ghost" @click="showConvert=false">Cancel</button>
-          <button class="nim-btn nim-btn-primary" @click="doConvert">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-            Create Invoice
+          <button class="nim-btn nim-btn-ghost" :disabled="converting" @click="showConvert=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" :disabled="converting" @click="doConvert">
+            <span v-if="converting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            {{converting ? 'Creating…' : 'Create Invoice'}}
           </button>
         </div>
       </div>
@@ -6294,6 +6380,14 @@
         if (!flt(form.amount)) { toast("Please enter an amount", "error"); return; }
         saving.value = true;
         try {
+          const company = await resolveCompany();
+          // Resolve bank/cash + receivable accounts for this company
+          const accts = await apiGET("zoho_books_clone.api.docs.get_accounts", { company });
+          const paidTo   = (accts.bank || [])[0]?.name || "";
+          const paidFrom = (accts.ar   || [])[0]?.name || "";
+          if (!paidTo)   { toast("No Bank/Cash account found for company", "error"); saving.value = false; return; }
+          if (!paidFrom) { toast("No Receivable account found for company", "error"); saving.value = false; return; }
+          const paidAmt = flt(form.amount);
           const doc = {
             doctype: "Payment Entry",
             payment_type: "Receive",
@@ -6301,13 +6395,23 @@
             party: cust,
             payment_date: form.date || todayStr(),
             mode_of_payment: form.mode,
-            paid_amount: flt(form.amount),
+            paid_amount: paidAmt,
+            received_amount: paidAmt,
+            paid_from: paidFrom,
+            paid_to: paidTo,
+            company,
+            currency: "INR",
+            paid_from_account_currency: "INR",
+            paid_to_account_currency: "INR",
+            source_exchange_rate: 1,
+            target_exchange_rate: 1,
             reference_no: form.ref.trim(),
-            remarks: form.remarks.trim(),
-            reference_date: form.cheque_date || null,
+            reference_date: form.cheque_date || form.date || todayStr(),
+            remarks: form.remarks.trim() || `Payment from ${cust}`,
           };
           if (drawerMode.value === "edit") doc.name = form.name;
-          await apiSave(doc);
+          const saved = await apiSave(doc);
+          try { await apiSubmit("Payment Entry", saved.name); } catch { /* keep as draft if submit fails */ }
           await load();
           toast("Payment recorded!");
           showDrawer.value = false;
@@ -7114,26 +7218,61 @@
       /* ── Advance status ── */
       async function advanceStatus(name, newStatus) {
         try {
-          await apiSave({ doctype: "Purchase Order", name, status: newStatus });
+          if (newStatus === "Confirmed") {
+            await apiPOST("zoho_books_clone.services.workflow_service.confirm_purchase_order", { purchase_order: name });
+          } else if (newStatus === "Received") {
+            // "Mark Received" — actually creates a stock receipt
+            const tgt = list.value.find(o => o.name === name);
+            receiveTarget.value = tgt || { name };
+            showReceive.value = true;
+            return;
+          } else {
+            await apiSave({ doctype: "Purchase Order", name, status: newStatus });
+          }
           await load();
-          toast("Order " + name + " → " + newStatus);
-          showDrawer.value = false;
           const updated = list.value.find(o => o.name === name);
           if (updated && viewOrder.value?.name === name) viewOrder.value = { ...updated };
-        } catch(e) { toast("Update failed: " + e.message, "error"); }
+          toast("Order " + name + " → " + newStatus);
+          showDrawer.value = false;
+        } catch(e) { toast("Update failed: " + (e.message || e), "error"); }
+      }
+
+      /* ── Receive Goods modal ── */
+      const showReceive = ref(false);
+      const receiveTarget = ref(null);
+      const receiving = ref(false);
+      async function doReceive() {
+        receiving.value = true;
+        try {
+          const res = await apiPOST("zoho_books_clone.services.workflow_service.receive_goods_from_order", {
+            purchase_order: receiveTarget.value.name
+          });
+          await load();
+          const updated = list.value.find(o => o.name === receiveTarget.value.name);
+          if (updated && viewOrder.value?.name === receiveTarget.value.name) viewOrder.value = { ...updated };
+          toast(res.fully_received
+            ? "Goods received — order fully received!"
+            : `Receipt ${res.stock_entry} created (${res.items_received} item(s) received)`
+          );
+        } catch(e) { toast("Receive failed: " + (e.message || e), "error"); }
+        finally { receiving.value = false; showReceive.value = false; }
       }
 
       /* ── Convert to Bill ── */
+      const converting = ref(false);
       function openConvert(name) { convertTarget.value = name; showConvert.value = true; }
       async function doConvert() {
-        const o = list.value.find(x => x.name === convertTarget.value); if (!o) { showConvert.value = false; return; }
+        converting.value = true;
         try {
-          await apiSave({ doctype: "Purchase Order", name: convertTarget.value, status: "Billed" });
+          const res = await apiPOST("zoho_books_clone.services.workflow_service.create_bill_from_order", {
+            purchase_order: convertTarget.value
+          });
           await load();
-          toast("Order billed. Open Purchase Bills to see the new bill.", "info");
-        } catch(e) { toast("Convert failed: " + e.message, "error"); }
-        showConvert.value = false; showDrawer.value = false;
-        router.push("/purchases");
+          toast("Bill " + res.purchase_invoice + " created!", "success");
+          showConvert.value = false; showDrawer.value = false;
+          router.push("/purchases");
+        } catch(e) { toast("Bill creation failed: " + (e.message || e), "error"); }
+        finally { converting.value = false; }
       }
 
       /* ── Delete ── */
@@ -7148,9 +7287,10 @@
         finally { showDelete.value = false; deleting.value = false; showDrawer.value = false; }
       }
 
-      const nextStatusMap = { Draft: "Sent", Sent: "Confirmed", Confirmed: "Received", Received: "Billed" };
-      const nextLabelMap = { Draft: "Mark Sent", Sent: "Confirm Order", Confirmed: "Mark Received", Received: "Mark Billed" };
-      const nextColorMap = { Draft: "#E67700", Sent: "#E67700", Confirmed: "#2F9E44", Received: "#7048E8" };
+      // "Received" status triggers receive-goods modal, not a simple status update
+      const nextStatusMap = { Draft: "Sent", Sent: "Confirmed", Confirmed: "Received" };
+      const nextLabelMap = { Draft: "Mark Sent", Sent: "Confirm Order", Confirmed: "Receive Goods" };
+      const nextColorMap = { Draft: "#E67700", Sent: "#E67700", Confirmed: "#2F9E44" };
 
       onMounted(load);
 
@@ -7160,7 +7300,8 @@
         showDrawer, drawerMode, saving, viewOrder, form,
         selVendor, vendSearch, showVendDrop, vendDropItems,
         itemSearch, showItemDrop, itemDropItems,
-        showConvert, convertTarget, showDelete, deleteTarget, deleting,
+        showConvert, convertTarget, converting, showDelete, deleteTarget, deleting,
+        showReceive, receiveTarget, receiving, doReceive,
         nextStatusMap, nextLabelMap, nextColorMap,
         load, openAdd, openEdit, openView, saveOrder, advanceStatus,
         openConvert, doConvert, confirmDelete, doDelete,
@@ -7631,13 +7772,46 @@
             Create a Purchase Bill from <strong>{{convertTarget}}</strong>
             for <strong>{{list.find(o=>o.name===convertTarget)?.vendor}}</strong>
             — <strong>{{fmt(list.find(o=>o.name===convertTarget)?.grand_total)}}</strong>.<br><br>
-            This will mark the order as <strong>Billed</strong>.
+            This will create a Purchase Invoice and mark the order as <strong>Billed</strong>.
           </p>
         </div>
         <div class="nim-footer">
-          <button class="nim-btn nim-btn-ghost" @click="showConvert=false">Cancel</button>
-          <button class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700" @click="doConvert">
-            Create Bill
+          <button class="nim-btn nim-btn-ghost" :disabled="converting" @click="showConvert=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700" :disabled="converting" @click="doConvert">
+            <span v-if="converting" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{converting ? 'Creating…' : 'Create Bill'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Receive Goods modal -->
+  <teleport to="body">
+    <div v-if="showReceive" class="nim-overlay" @click.self="showReceive=false">
+      <div class="nim-dialog" style="max-width:440px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#2F9E44,#276437)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+            </div>
+            <div class="nim-header-title">Receive Goods</div>
+          </div>
+          <button class="nim-close" @click="showReceive=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Receive goods for order <strong>{{receiveTarget?.name}}</strong>?<br>
+            <span style="font-size:12px;color:#6b7280;margin-top:8px;display:block">
+              This creates a Material Receipt Stock Entry for all unreceived items and updates your inventory.
+            </span>
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" :disabled="receiving" @click="showReceive=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" style="background:#2F9E44;border-color:#2F9E44" :disabled="receiving" @click="doReceive">
+            <span v-if="receiving" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{receiving ? 'Receiving…' : 'Receive Goods'}}
           </button>
         </div>
       </div>
@@ -13297,6 +13471,8 @@
       const delTarget  = ref(null);
       const drawerTab  = ref("basic");
       const itemGroups = ref([]);
+      const warehouses = ref([]);
+      const defaultAccounts = ref({ income: "", expense: "" });
 
       const form = reactive({
         name:"", item_code:"", item_name:"", item_group:"", item_type:"Product",
@@ -13323,6 +13499,18 @@
           const g = await apiList("Item Group", { fields:["name"], order:"name asc", limit:200 });
           itemGroups.value = (g||[]).map(r=>r.name);
         } catch { itemGroups.value = ["All Item Groups","Products","Services","Raw Materials","Finished Goods","Furniture"]; }
+        try {
+          const wh = await apiList("Warehouse", { fields:["name","warehouse_name","warehouse_type"], filters:[["disabled","=",0],["is_group","=",0]], order:"warehouse_name asc", limit:200 });
+          warehouses.value = (wh||[]).map(r=>({ name:r.name, label:(r.warehouse_name||r.name)+(r.warehouse_type?" ("+r.warehouse_type+")":"") }));
+        } catch { warehouses.value = []; }
+        try {
+          const company = await resolveCompany();
+          const accts = await apiGET("zoho_books_clone.api.docs.get_accounts", { company });
+          const incomeAcc   = (accts.income || [])[0]?.name || "";
+          const expenseAccs = await apiList("Account", { fields:["name"], filters:[["account_type","in",["Expense","Cost of Goods Sold"]],["is_group","=",0],["company","=",company]], order:"name asc", limit:10 });
+          const expenseAcc  = (expenseAccs||[])[0]?.name || "";
+          defaultAccounts.value = { income: incomeAcc, expense: expenseAcc };
+        } catch { defaultAccounts.value = { income: "", expense: "" }; }
         loading.value = false;
       }
 
@@ -13342,7 +13530,8 @@
         Object.assign(form, { name:"", item_code:"", item_name:"", item_group:"", item_type:"Product",
           stock_uom:"Nos", hsn_code:"", description:"", disabled:0,
           standard_rate:0, standard_buying_rate:0, gst_rate:18, tax_code:"",
-          income_account:"", expense_account:"",
+          income_account: defaultAccounts.value.income,
+          expense_account: defaultAccounts.value.expense,
           is_stock_item:1, valuation_method:"FIFO", default_warehouse:"",
           reorder_level:0, reorder_qty:0, opening_stock:0 });
         showDrawer.value = true;
@@ -13352,7 +13541,8 @@
         Object.assign(form, { ...row,
           hsn_code: row.hsn_code||"", description: row.description||"",
           standard_buying_rate: row.standard_buying_rate||0, tax_code: row.tax_code||"",
-          income_account: row.income_account||"", expense_account: row.expense_account||"",
+          income_account:  row.income_account  || defaultAccounts.value.income,
+          expense_account: row.expense_account || defaultAccounts.value.expense,
           valuation_method: row.valuation_method||"FIFO", default_warehouse: row.default_warehouse||"",
           reorder_level: row.reorder_level||0, reorder_qty: row.reorder_qty||0, opening_stock: row.opening_stock||0,
         });
@@ -13392,7 +13582,7 @@
       }
 
       onMounted(load);
-      return { list, loading, search, filterTab, viewMode, filtered, showDrawer, drawerMode, saving, deleting, showDel, delTarget, drawerTab, form, itemGroups, ITEM_TYPES, VAL_METHODS, openAdd, openEdit, saveItem, confirmDel, doDelete, fmt, flt, fmtDate, icon };
+      return { list, loading, search, filterTab, viewMode, filtered, showDrawer, drawerMode, saving, deleting, showDel, delTarget, drawerTab, form, itemGroups, warehouses, ITEM_TYPES, VAL_METHODS, openAdd, openEdit, saveItem, confirmDel, doDelete, fmt, flt, fmtDate, icon };
     },
     template: `
 <div class="b-page">
@@ -13559,7 +13749,9 @@
                   <option v-for="m in VAL_METHODS" :key="m" :value="m">{{m}}</option>
                 </select>
               </div>
-              <div><label class="nim-label">Default Warehouse</label><input class="nim-input" v-model="form.default_warehouse" placeholder="Warehouse name"/></div>
+              <div><label class="nim-label">Default Warehouse</label>
+                <searchable-select v-model="form.default_warehouse" :options="warehouses" value-key="name" label-key="label" placeholder="Select warehouse…" :clearable="true"/>
+              </div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
               <div><label class="nim-label">Reorder Level</label><input type="number" class="nim-input" v-model="form.reorder_level" min="0" style="font-family:var(--mono)"/></div>

@@ -180,23 +180,36 @@ def recalculate_bin(item_code: str, warehouse: str) -> dict:
     bin_name = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse})
 
     if not bin_name:
-        # Nothing to recalculate if no Bin exists yet
+        # Create the Bin so future queries have a record to read
+        frappe.get_doc({
+            "doctype":        "Bin",
+            "item_code":      item_code,
+            "warehouse":      warehouse,
+            "actual_qty":     correct_qty,
+            "reserved_qty":   0,
+            "ordered_qty":    0,
+            "projected_qty":  correct_qty,
+            "valuation_rate": correct_rate,
+            "stock_value":    correct_value,
+        }).insert(ignore_permissions=True)
         return {
             "item_code": item_code,
             "warehouse": warehouse,
-            "status":    "no_bin",
-            "message":   "Bin does not exist — nothing to recalculate.",
+            "status":    "created",
+            "new_qty":   correct_qty,
+            "new_value": correct_value,
         }
 
     old_qty   = flt(frappe.db.get_value("Bin", bin_name, "actual_qty"))
     old_value = flt(frappe.db.get_value("Bin", bin_name, "stock_value"))
+    ordered   = flt(frappe.db.get_value("Bin", bin_name, "ordered_qty"))
+    reserved  = flt(frappe.db.get_value("Bin", bin_name, "reserved_qty"))
 
     frappe.db.set_value("Bin", bin_name, {
         "actual_qty":     correct_qty,
         "stock_value":    correct_value,
         "valuation_rate": correct_rate,
-        "projected_qty":  correct_qty + flt(frappe.db.get_value("Bin", bin_name, "ordered_qty"))
-                          - flt(frappe.db.get_value("Bin", bin_name, "reserved_qty")),
+        "projected_qty":  correct_qty + ordered - reserved,
     }, update_modified=True)
 
     return {
@@ -214,15 +227,23 @@ def recalculate_bin(item_code: str, warehouse: str) -> dict:
 
 def recalculate_all_bins(warehouse: str | None = None) -> list[dict]:
     """
-    Recalculate every Bin, optionally scoped to a single warehouse.
-    Returns a list of recalculation result dicts (one per Bin).
+    Recalculate every Bin from SLEs, optionally scoped to a single warehouse.
+    Also creates Bins for item+warehouse pairs that have SLEs but no Bin yet.
+    Returns a list of recalculation result dicts (one per item+warehouse pair).
     """
-    filters = {}
-    if warehouse:
-        filters["warehouse"] = warehouse
+    wh_cond = "AND warehouse = %(warehouse)s" if warehouse else ""
+    params  = {"warehouse": warehouse} if warehouse else {}
 
-    bins = frappe.get_all("Bin", filters=filters, fields=["item_code", "warehouse"])
-    return [recalculate_bin(b.item_code, b.warehouse) for b in bins]
+    # Collect all distinct item+warehouse pairs from active SLEs
+    pairs = frappe.db.sql(f"""
+        SELECT DISTINCT item_code, warehouse
+        FROM `tabStock Ledger Entry`
+        WHERE is_cancelled = 0
+        {wh_cond}
+        ORDER BY item_code, warehouse
+    """, params, as_dict=True)
+
+    return [recalculate_bin(p.item_code, p.warehouse) for p in pairs]
 
 
 # ── Bin Upsert (helper for controllers) ──────────────────────────────────────
