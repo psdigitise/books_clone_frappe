@@ -4,7 +4,7 @@ All raw SQL lives here — controllers import from this module
 instead of writing inline SQL.
 """
 import frappe
-from frappe.utils import flt, getdate, today
+from frappe.utils import flt, today
 
 
 # ── General Ledger ────────────────────────────────────────────────────────────
@@ -333,10 +333,13 @@ def get_slow_moving_items(
     warehouse: str | None = None,
 ) -> list[dict]:
     """Items with no stock movement in the last N days that still have stock."""
-    wh_cond = "AND b.warehouse = %(warehouse)s" if warehouse else ""
-    params = {"days": days}
+    wh_cond      = "AND b.warehouse = %(warehouse)s" if warehouse else ""
+    company_cond = "AND b.company   = %(company)s"   if company   else ""
+    params: dict = {"days": days}
     if warehouse:
         params["warehouse"] = warehouse
+    if company:
+        params["company"] = company
 
     return frappe.db.sql(f"""
         SELECT
@@ -356,6 +359,7 @@ def get_slow_moving_items(
             AND sle.is_cancelled = 0
         WHERE b.actual_qty > 0
           {wh_cond}
+          {company_cond}
         GROUP BY b.item_code, b.warehouse
         HAVING last_movement_date IS NULL
             OR DATEDIFF(CURDATE(), last_movement_date) > %(days)s
@@ -593,6 +597,215 @@ def get_gstr_summary(company: str, from_date: str, to_date: str) -> dict:
             "total_itc":        total_itc,
             "net_tax_liability": total_output - total_itc,
         },
+    }
+
+
+# ── Report Drill-Down (Audit Part 3 — Limited Report Drill-Down) ──────────────
+
+@frappe.whitelist()
+def get_account_ledger(
+    account: str,
+    company: str,
+    from_date: str,
+    to_date: str,
+    party_type: str = None,
+    party: str = None,
+) -> dict:
+    """
+    Drill-down: full GL ledger for a single account in a date range.
+    Returns opening balance, all period movements, closing balance.
+    Used when the user clicks an account balance in P&L / Balance Sheet.
+    """
+    # Opening balance (all entries before from_date)
+    opening_result = frappe.db.sql("""
+        SELECT COALESCE(SUM(debit) - SUM(credit), 0) AS opening
+        FROM `tabGeneral Ledger Entry`
+        WHERE account     = %(account)s
+          AND company     = %(company)s
+          AND is_cancelled = 0
+          AND posting_date < %(from_date)s
+    """, {"account": account, "company": company, "from_date": from_date}, as_dict=True)
+    opening = flt(opening_result[0].opening) if opening_result else 0.0
+
+    # Period entries
+    conds = [
+        "account = %(account)s",
+        "company = %(company)s",
+        "is_cancelled = 0",
+        "posting_date BETWEEN %(from_date)s AND %(to_date)s",
+    ]
+    params = {"account": account, "company": company,
+              "from_date": from_date, "to_date": to_date}
+
+    if party_type:
+        conds.append("party_type = %(party_type)s")
+        params["party_type"] = party_type
+    if party:
+        conds.append("party = %(party)s")
+        params["party"] = party
+
+    where = " AND ".join(conds)
+    entries = frappe.db.sql(f"""
+        SELECT
+            name, posting_date, voucher_type, voucher_no,
+            party_type, party, debit, credit, remarks,
+            (SUM(debit - credit) OVER (
+                ORDER BY posting_date, creation
+                ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+            ) + %(opening)s) AS running_balance
+        FROM `tabGeneral Ledger Entry`
+        WHERE {where}
+        ORDER BY posting_date, creation
+    """, {**params, "opening": opening}, as_dict=True)
+
+    total_debit  = sum(flt(e.debit)  for e in entries)
+    total_credit = sum(flt(e.credit) for e in entries)
+    closing      = opening + total_debit - total_credit
+
+    return {
+        "account":     account,
+        "from_date":   from_date,
+        "to_date":     to_date,
+        "opening":     opening,
+        "total_debit": total_debit,
+        "total_credit":total_credit,
+        "closing":     closing,
+        "entries":     [dict(e) for e in entries],
+    }
+
+
+@frappe.whitelist()
+def get_voucher_detail(voucher_type: str, voucher_no: str) -> dict:
+    """
+    Drill-down: all GL entries for a single voucher (invoice, payment, etc.).
+    Also returns metadata about the source document.
+    Used when clicking any voucher_no link in ledger or report views.
+    """
+    gl_entries = frappe.db.sql("""
+        SELECT
+            name, posting_date, account, party_type, party,
+            debit, credit, remarks, voucher_type, voucher_no,
+            is_cancelled, is_reversal
+        FROM `tabGeneral Ledger Entry`
+        WHERE voucher_type = %(vt)s AND voucher_no = %(vn)s
+        ORDER BY posting_date, creation
+    """, {"vt": voucher_type, "vn": voucher_no}, as_dict=True)
+
+    total_debit  = sum(flt(e.debit)  for e in gl_entries if not e.is_cancelled)
+    total_credit = sum(flt(e.credit) for e in gl_entries if not e.is_cancelled)
+
+    # Fetch lightweight source doc fields for context
+    extra = {}
+    try:
+        if voucher_type in ("Sales Invoice",):
+            extra = frappe.get_value(voucher_type, voucher_no,
+                ["customer", "customer_name", "grand_total", "outstanding_amount"],
+                as_dict=True) or {}
+        elif voucher_type in ("Purchase Invoice",):
+            extra = frappe.get_value(voucher_type, voucher_no,
+                ["supplier", "grand_total", "outstanding_amount"],
+                as_dict=True) or {}
+        elif voucher_type == "Payment Entry":
+            extra = frappe.get_value(voucher_type, voucher_no,
+                ["party_type", "party", "paid_amount", "payment_type"],
+                as_dict=True) or {}
+        elif voucher_type == "Stock Entry":
+            extra = frappe.get_value(voucher_type, voucher_no,
+                ["stock_entry_type", "total_outgoing_value", "total_incoming_value"],
+                as_dict=True) or {}
+    except Exception:
+        pass
+
+    return {
+        "voucher_type":  voucher_type,
+        "voucher_no":    voucher_no,
+        "gl_entries":    [dict(e) for e in gl_entries],
+        "total_debit":   total_debit,
+        "total_credit":  total_credit,
+        "is_balanced":   abs(total_debit - total_credit) < 0.01,
+        "source_doc":    dict(extra) if extra else {},
+    }
+
+
+@frappe.whitelist()
+def get_pl_account_breakdown(
+    company: str, from_date: str, to_date: str, account_type: str = "Income"
+) -> list[dict]:
+    """
+    Drill-down: P&L breakdown by individual account within a type (Income/Expense).
+    Click Income total → see each income account with its amount.
+    Click an account → get_account_ledger for full transactions.
+    """
+    return frappe.db.sql("""
+        SELECT
+            gle.account,
+            a.account_type,
+            COALESCE(SUM(gle.credit) - SUM(gle.debit), 0) AS amount,
+            COUNT(DISTINCT gle.voucher_no) AS transaction_count
+        FROM `tabGeneral Ledger Entry` gle
+        JOIN `tabAccount` a ON a.name = gle.account
+        WHERE gle.company      = %(company)s
+          AND gle.is_cancelled  = 0
+          AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s
+          AND a.account_type   = %(account_type)s
+        GROUP BY gle.account, a.account_type
+        ORDER BY ABS(SUM(gle.credit) - SUM(gle.debit)) DESC
+    """, {"company": company, "from_date": from_date,
+          "to_date": to_date, "account_type": account_type}, as_dict=True)
+
+
+@frappe.whitelist()
+def get_party_ledger(
+    party_type: str,
+    party: str,
+    company: str,
+    from_date: str = None,
+    to_date: str = None,
+) -> dict:
+    """
+    Drill-down: complete ledger for a customer or supplier — all invoices,
+    payments, and outstanding per document.  Used in customer/supplier cards.
+    """
+    inv_dt     = "Sales Invoice"    if party_type == "Customer" else "Purchase Invoice"
+    party_fld  = "customer"         if party_type == "Customer" else "supplier"
+
+    inv_filters = {party_fld: party, "company": company, "docstatus": 1}
+    if from_date:
+        inv_filters["posting_date"] = [">=", from_date]
+    if to_date:
+        inv_filters["posting_date"] = ["<=", to_date]
+
+    invoices = frappe.get_all(
+        inv_dt,
+        filters=inv_filters,
+        fields=["name", "posting_date", "due_date", "grand_total",
+                "outstanding_amount", "status", "currency"],
+        order_by="posting_date desc",
+        limit=500,
+    )
+
+    pay_filters = {"party_type": party_type, "party": party,
+                   "company": company, "docstatus": 1}
+    payments = frappe.get_all(
+        "Payment Entry",
+        filters=pay_filters,
+        fields=["name", "payment_date", "payment_type", "paid_amount", "mode_of_payment"],
+        order_by="payment_date desc",
+        limit=200,
+    )
+
+    total_invoiced    = sum(flt(i.grand_total)        for i in invoices)
+    total_outstanding = sum(flt(i.outstanding_amount) for i in invoices)
+    total_paid        = total_invoiced - total_outstanding
+
+    return {
+        "party_type":        party_type,
+        "party":             party,
+        "total_invoiced":    total_invoiced,
+        "total_paid":        total_paid,
+        "total_outstanding": total_outstanding,
+        "invoices":          [dict(i) for i in invoices],
+        "payments":          [dict(p) for p in payments],
     }
 
 

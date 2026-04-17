@@ -6,16 +6,15 @@ Heavy queries are delegated to inventory.utils or db.queries.
 """
 
 import frappe
-from frappe import _
 from frappe.utils import flt, today, getdate
 
 from zoho_books_clone.inventory.utils import (
     get_stock_balance,
     get_stock_ledger,
     get_reorder_alerts,
-    get_total_stock_value,
     get_item_price,
-    get_or_create_bin,
+    recalculate_bin,
+    recalculate_all_bins,
 )
 
 
@@ -290,3 +289,25 @@ def get_inventory_kpis(company=None):
         "reorder_alerts":      len(reorder),
         "reorder_items":       reorder[:10],   # top-10 most critical
     }
+
+
+# ── Bin Recalculation (Audit-5) ───────────────────────────────────────────────
+
+@frappe.whitelist(allow_guest=False)
+def recalculate_bin_from_ledger(item_code, warehouse):
+    """
+    Audit-5: Recompute a single Bin balance from Stock Ledger Entries.
+    Use when you suspect Bin drift after cancellations or direct DB edits.
+    Returns a summary of the before/after values.
+    """
+    return recalculate_bin(item_code, warehouse)
+
+
+@frappe.whitelist(allow_guest=False)
+def recalculate_all_bins_from_ledger(warehouse=None):
+    """
+    Audit-5: Recompute all Bin balances from Stock Ledger Entries.
+    Optionally scoped to a single warehouse.
+    Returns a list of per-Bin result dicts with drift information.
+    """
+    return recalculate_all_bins(warehouse=warehouse or None)

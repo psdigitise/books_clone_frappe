@@ -5,7 +5,7 @@ one consistent set of safety checks before being saved or submitted.
 """
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, today
+from frappe.utils import flt, getdate
 
 
 # ─── Hook entry point ─────────────────────────────────────────────────────────
@@ -19,6 +19,7 @@ def on_validate(doc, method=None):
     _check_posting_date(doc)
     _check_positive_amounts(doc)
     _check_period_not_closed(doc)
+    _check_lock_date(doc)          # Audit: strict period lock
 
 
 def on_submit(doc, method=None):
@@ -91,6 +92,39 @@ def _check_period_not_closed(doc):
         frappe.throw(_(
             "Fiscal Year {0} is closed. Re-open it before posting to {1}."
         ).format(closed[0][0], posting_date))
+
+
+def _check_lock_date(doc):
+    """
+    Audit: Strict period lock — block any save/submit on a document whose
+    posting date falls on or before the Books Lock Date configured in
+    Books Settings.  System Managers are exempt so they can perform corrections.
+    """
+    try:
+        lock_date = frappe.db.get_single_value("Books Settings", "lock_date")
+    except Exception:
+        return   # Books Settings may not exist yet during install
+
+    if not lock_date:
+        return
+
+    date_field = _posting_date_field(doc)
+    if not date_field:
+        return
+
+    posting_date = getattr(doc, date_field, None)
+    if not posting_date:
+        return
+
+    # System Managers bypass the lock so they can make corrections
+    if "System Manager" in frappe.get_roles(frappe.session.user):
+        return
+
+    if getdate(posting_date) <= getdate(lock_date):
+        frappe.throw(_(
+            "The period up to {0} is locked. You cannot create or edit {1} documents "
+            "dated on or before the lock date. Contact your System Manager to unlock the period."
+        ).format(frappe.bold(lock_date), doc.doctype))
 
 
 def _check_required_accounts(doc):

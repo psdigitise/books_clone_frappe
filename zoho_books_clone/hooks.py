@@ -18,9 +18,19 @@ fixtures = [
 
 # Central validation layer (P2/Issue 10) — runs on every financial document
 _CV = "zoho_books_clone.accounts.central_validator"
+# Stock link layer (Audit-2 / Audit-3) — auto stock entries on invoice submit/cancel
+_SL = "zoho_books_clone.inventory.stock_link"
 doc_events = {
-    "Sales Invoice":    {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
-    "Purchase Invoice": {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
+    "Sales Invoice": {
+        "validate":  f"{_CV}.on_validate",
+        "on_submit": [f"{_CV}.on_submit", f"{_SL}.on_sales_invoice_submit"],
+        "on_cancel": f"{_SL}.on_sales_invoice_cancel",
+    },
+    "Purchase Invoice": {
+        "validate":  f"{_CV}.on_validate",
+        "on_submit": [f"{_CV}.on_submit", f"{_SL}.on_purchase_invoice_submit"],
+        "on_cancel": f"{_SL}.on_purchase_invoice_cancel",
+    },
     "Payment Entry":    {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
     "Journal Entry":    {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
     "Credit Note":      {"validate": f"{_CV}.on_validate", "on_submit": f"{_CV}.on_submit"},
@@ -66,6 +76,7 @@ global_search_doctypes = {
     ],
     "Books Setup": [
         {"doctype": "Currency"},
+        {"doctype": "Currency Exchange"},
         {"doctype": "UOM"},
         {"doctype": "Books Payment Mode"},
         {"doctype": "Payment Terms"},

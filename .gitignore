@@ -30,6 +30,17 @@ Thumbs.db
 *.env
 secrets.json
 
+# Session / credentials — never commit
+cookies.txt
+*.cookies.txt
+
+# Audit / report documents — keep locally, not in repo
+*.docx
+*.xlsx
+*.pdf
+*_Audit*.docx
+*_Report*.docx
+
 # Logs
 *.log
 

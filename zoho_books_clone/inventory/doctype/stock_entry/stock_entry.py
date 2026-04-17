@@ -2,6 +2,10 @@
 Stock Entry — records every physical stock movement.
 On submit: creates Stock Ledger Entries → Bin is updated automatically.
 On cancel: reverses all SLEs (sets is_cancelled=1 and creates mirror entries).
+
+Audit fixes applied:
+  - Negative stock blocked in _validate_items (P2/Audit-1)
+  - GL entries posted on submit for Material Issue/Receipt (P2/Audit-4)
 """
 
 import frappe
@@ -68,6 +72,20 @@ class StockEntry(Document):
             if flt(row.qty) <= 0:
                 frappe.throw(_(f"Row {i}: Qty must be greater than 0."))
 
+            # Audit-1: Block negative stock — check available qty before outgoing movements
+            if direction.get("s") and row.s_warehouse:
+                available = flt(frappe.db.get_value(
+                    "Bin",
+                    {"item_code": row.item_code, "warehouse": row.s_warehouse},
+                    "actual_qty",
+                ) or 0)
+                if available < flt(row.qty):
+                    frappe.throw(_(
+                        "Row {0}: Insufficient stock for item <b>{1}</b> in warehouse <b>{2}</b>. "
+                        "Available: {3}, Required: {4}."
+                    ).format(i, row.item_code, row.s_warehouse,
+                             frappe.bold(available), frappe.bold(flt(row.qty))))
+
             # Calculate row amount
             row.amount = flt(row.qty) * flt(row.basic_rate)
 
@@ -83,6 +101,7 @@ class StockEntry(Document):
 
     def on_submit(self):
         self._make_sle()
+        self._post_gl_entries()   # Audit-4: link inventory to accounting
 
     def _make_sle(self):
         direction = SE_TYPE_DIRECTION.get(self.stock_entry_type, {})
@@ -141,10 +160,127 @@ class StockEntry(Document):
         })
         sle.insert(ignore_permissions=True)
 
+    def _post_gl_entries(self):
+        """
+        Audit-4: Post GL entries so inventory movements reflect in accounting.
+        Material Issue:    DR COGS / CR Inventory Asset   (stock leaves)
+        Material Receipt:  DR Inventory Asset / CR Stock Adjustment  (stock arrives)
+        Material Transfer: no net GL impact (value stays in inventory).
+        """
+        if self.stock_entry_type not in ("Material Issue", "Material Receipt"):
+            return
+
+        inventory_account = self._get_account_by_type("Stock")
+        if not inventory_account:
+            frappe.log_error(
+                f"Stock Entry {self.name}: no Stock-type account found for company "
+                f"'{self.company}'. GL entries skipped.",
+                "Inventory GL Posting"
+            )
+            return
+
+        if self.stock_entry_type == "Material Issue":
+            # Stock leaving — debit COGS, credit Inventory
+            cogs_account = self._get_account_by_type("Cost of Goods Sold")
+            if not cogs_account:
+                frappe.log_error(
+                    f"Stock Entry {self.name}: no Cost of Goods Sold account found. "
+                    "GL entries skipped.",
+                    "Inventory GL Posting"
+                )
+                return
+            gl_map = [
+                {
+                    "account":      cogs_account,
+                    "debit":        flt(self.total_outgoing_value),
+                    "credit":       0,
+                    "voucher_type": "Stock Entry",
+                    "voucher_no":   self.name,
+                    "posting_date": self.posting_date,
+                    "company":      self.company,
+                    "remarks":      f"COGS — Stock Issue {self.name}",
+                },
+                {
+                    "account":      inventory_account,
+                    "debit":        0,
+                    "credit":       flt(self.total_outgoing_value),
+                    "voucher_type": "Stock Entry",
+                    "voucher_no":   self.name,
+                    "posting_date": self.posting_date,
+                    "company":      self.company,
+                    "remarks":      f"Inventory reduction — Stock Issue {self.name}",
+                },
+            ]
+        else:
+            # Material Receipt — debit Inventory, credit Stock Adjustment
+            adj_account = (
+                self._get_account_by_type("Stock Adjustment")
+                or self._get_account_by_type("Temporary")
+                or inventory_account   # fallback: self-balancing on same account
+            )
+            gl_map = [
+                {
+                    "account":      inventory_account,
+                    "debit":        flt(self.total_incoming_value),
+                    "credit":       0,
+                    "voucher_type": "Stock Entry",
+                    "voucher_no":   self.name,
+                    "posting_date": self.posting_date,
+                    "company":      self.company,
+                    "remarks":      f"Inventory addition — Stock Receipt {self.name}",
+                },
+                {
+                    "account":      adj_account,
+                    "debit":        0,
+                    "credit":       flt(self.total_incoming_value),
+                    "voucher_type": "Stock Entry",
+                    "voucher_no":   self.name,
+                    "posting_date": self.posting_date,
+                    "company":      self.company,
+                    "remarks":      f"Stock received — {self.name}",
+                },
+            ]
+
+        try:
+            from zoho_books_clone.accounts.doctype.general_ledger_entry.general_ledger_entry import (
+                make_gl_entries,
+            )
+            make_gl_entries(gl_map)
+        except Exception as exc:
+            # GL failure must not roll back the stock movement itself.
+            # Log and alert; the accountant can reconcile manually.
+            frappe.log_error(
+                f"Stock Entry {self.name}: GL posting failed — {exc}",
+                "Inventory GL Posting"
+            )
+            frappe.msgprint(
+                _(
+                    "Stock updated, but GL entries could not be posted automatically. "
+                    "Please post a Journal Entry manually for {0}."
+                ).format(self.name),
+                indicator="orange",
+                alert=True,
+            )
+
+    def _get_account_by_type(self, account_type: str) -> str | None:
+        """Return the name of the first leaf account of the given type for this company."""
+        row = frappe.db.get_value(
+            "Account",
+            {"account_type": account_type, "company": self.company, "is_group": 0},
+            "name",
+        )
+        return row or None
+
     # ── Cancel ────────────────────────────────────────────────────────────────
 
     def on_cancel(self):
         self._reverse_sle()
+        # Reverse GL entries that were posted on submit
+        try:
+            from zoho_books_clone.accounts.accounting_engine import reverse_voucher
+            reverse_voucher("Stock Entry", self.name)
+        except Exception:
+            pass   # GL reversal is best-effort; stock reversal is the primary action
 
     def _reverse_sle(self):
         sles = frappe.get_all(

@@ -301,6 +301,14 @@
     warehouse: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/><path d="M12 12h.01"/>',
     ledger:    '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><line x1="12" y1="6" x2="16" y2="6"/><line x1="12" y1="10" x2="16" y2="10"/>',
     bell:      '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
+    box:       '<path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+    folder:    '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+    download:  '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+    stack:     '<path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>',
+    qr:        '<rect x="3" y="3" width="5" height="5" rx="1"/><rect x="16" y="3" width="5" height="5" rx="1"/><rect x="3" y="16" width="5" height="5" rx="1"/><rect x="7" y="7" width="3" height="3"/><rect x="14" y="7" width="3" height="3"/><rect x="7" y="14" width="3" height="3"/><path d="M16 16h.01M16 19h.01M19 16h.01M19 19h.01"/><path d="M14 14h2v2h-2zM18 14h2v2h-2zM14 18h2v2h-2zM18 18h2v2h-2z"/>',
+    gstfile:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/><circle cx="16" cy="17" r="1.5"/>',
+    shield:    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+    percent:   '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -14537,103 +14545,382 @@
   const InventoryValuation = defineComponent({
     name: "InventoryValuation",
     setup() {
-      const list       = ref([]);
-      const loading    = ref(true);
-      const search     = ref("");
-      const warehouse  = ref("");
-      const warehouses = ref([]);
+      const list        = ref([]);
+      const itemsMeta   = ref({}); // item_code -> { standard_rate, valuation_method }
+      const loading     = ref(false);
+      const method      = ref("FIFO");
+      const showZero    = ref(false);
+      const filterWH    = ref("");
+      const filterGrp   = ref("");
+      const warehouses  = ref([]);
+      const groups      = ref([]);
+      const showDrawer  = ref(false);
+      const drawerItem  = ref(null);
+      const drawerDetail= ref(null);
+      const drawerLoad  = ref(false);
+      const showLC      = ref(false);
+      const lcCharges   = ref([
+        { name:"Freight",   amount:0, basis:"Actual" },
+        { name:"Insurance", amount:0, basis:"Actual" },
+      ]);
 
-      const summary = computed(() => ({
-        items:      list.value.length,
-        totalValue: list.value.reduce((s,r) => s + flt(r.stock_value), 0),
-        totalQty:   list.value.reduce((s,r) => s + flt(r.actual_qty), 0),
-        zeroStock:  list.value.filter(r => flt(r.actual_qty) <= 0).length,
+      const METHOD_DESC = {
+        "FIFO": "<b>FIFO (First In, First Out)</b> — oldest stock layers are consumed first. Each purchase creates a new cost layer. Best for perishables and items with fluctuating prices.",
+        "Moving Average": "<b>Moving Average (Weighted Average)</b> — the average cost is recalculated after every purchase. All units share the same average rate at any point in time. Simpler and smooths out price fluctuations.",
+      };
+
+      const enriched = computed(() => list.value.map(r => {
+        const m = itemsMeta.value[r.item_code] || {};
+        return { ...r, selling_price: flt(m.standard_rate), val_method: m.valuation_method || method.value };
       }));
 
       const filtered = computed(() => {
-        const q = search.value.toLowerCase().trim();
-        return q
-          ? list.value.filter(r => (r.item_code + (r.item_name||"") + (r.warehouse||"")).toLowerCase().includes(q))
-          : list.value;
+        let rows = enriched.value;
+        if (!showZero.value) rows = rows.filter(r => flt(r.actual_qty) > 0);
+        if (filterWH.value)  rows = rows.filter(r => r.warehouse === filterWH.value);
+        if (filterGrp.value) rows = rows.filter(r => r.item_group === filterGrp.value);
+        return rows;
       });
+
+      const summary = computed(() => {
+        const rows = filtered.value;
+        const totStock = rows.reduce((s,r) => s + flt(r.stock_value), 0);
+        const totSell  = rows.reduce((s,r) => s + flt(r.actual_qty) * flt(r.selling_price), 0);
+        const profit   = totSell - totStock;
+        const low      = rows.filter(r => r.below_reorder).length;
+        return { items: rows.length, totStock, totSell, profit, low,
+                 marginPct: totSell ? (profit/totSell*100).toFixed(1) : "0.0" };
+      });
+
+      function marginPct(r) {
+        const sell = flt(r.selling_price); const cost = flt(r.valuation_rate);
+        if (!sell || !cost) return null;
+        return ((sell - cost) / sell * 100).toFixed(1);
+      }
+      function marginColor(m) {
+        if (m === null) return "var(--muted)";
+        return m >= 30 ? "#2F9E44" : m >= 15 ? "#E67700" : "#C92A2A";
+      }
+      function fmtCompact(v) {
+        const n = flt(v);
+        if (n >= 10000000) return "\u20b9" + (n/10000000).toFixed(2) + "Cr";
+        if (n >= 100000)   return "\u20b9" + (n/100000).toFixed(2) + "L";
+        return fmt(n);
+      }
+      function lcTotal() { return lcCharges.value.reduce((s,c) => s + flt(c.amount), 0); }
 
       async function load() {
         loading.value = true;
         try {
-          const params = {};
-          if (warehouse.value) params.warehouse = warehouse.value;
-          list.value = await apiGET("zoho_books_clone.api.inventory.get_stock_summary", params) || [];
-        } catch(e) { toast("Could not load valuation: " + e.message,"error"); list.value = []; }
+          const p = { show_zero_stock: showZero.value ? 1 : 0 };
+          if (filterWH.value)  p.warehouse   = filterWH.value;
+          if (filterGrp.value) p.item_group  = filterGrp.value;
+          list.value = await apiGET("zoho_books_clone.api.inventory.get_stock_summary", p) || [];
+        } catch(e) { toast("Failed to load stock data", "error"); list.value = []; }
         loading.value = false;
       }
 
+      async function loadMeta() {
+        try {
+          const items = await apiList("Item", { fields:["name","standard_rate","valuation_method"], limit:2000 }) || [];
+          const m = {};
+          items.forEach(i => { m[i.name] = { standard_rate: i.standard_rate, valuation_method: i.valuation_method }; });
+          itemsMeta.value = m;
+        } catch {}
+      }
+
+      async function openDetail(r) {
+        drawerItem.value = r; showDrawer.value = true;
+        drawerLoad.value = true; drawerDetail.value = null;
+        try { drawerDetail.value = await apiGET("zoho_books_clone.api.inventory.get_item_stock_detail", { item_code: r.item_code }); }
+        catch {}
+        drawerLoad.value = false;
+      }
+
+      function exportCSV() {
+        const rows = filtered.value;
+        const hdrs = ["Item Code","Item Name","Group","UOM","Qty","Valuation Rate","Stock Value","Selling Price","Selling Value","Margin %"];
+        const data = rows.map(r => {
+          const m = marginPct(r);
+          return [r.item_code, r.item_name||r.item_code, r.item_group||"", r.uom||"Nos",
+                  flt(r.actual_qty).toFixed(2), flt(r.valuation_rate).toFixed(2), flt(r.stock_value).toFixed(2),
+                  flt(r.selling_price).toFixed(2), (flt(r.actual_qty)*flt(r.selling_price)).toFixed(2),
+                  m !== null ? m+"%" : ""];
+        });
+        const csv = [hdrs.join(","), ...data.map(row => row.map(v => `"${String(v).replace(/"/g,'""')}"`).join(","))].join("\n");
+        const a = document.createElement("a");
+        a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        a.download = "stock-valuation-" + new Date().toISOString().slice(0,10) + ".csv";
+        a.click();
+        toast("Exported " + rows.length + " items");
+      }
+
       onMounted(async () => {
-        try { warehouses.value = await apiList("Warehouse", { fields:["name"], filters:[["disabled","=",0],["is_group","=",0]], order:"name asc", limit:200 }) || []; } catch {}
-        load();
+        try { warehouses.value = await apiList("Warehouse", { fields:["name","warehouse_name"], filters:[["disabled","=",0],["is_group","=",0]], limit:300 }) || []; } catch {}
+        try { groups.value = await apiList("Item Group", { fields:["name"], limit:200 }) || []; } catch {}
+        await Promise.all([load(), loadMeta()]);
       });
 
-      return { list, loading, search, warehouse, warehouses, filtered, summary,
-        load, fmt, fmtDate, icon, flt };
+      return { list, loading, method, showZero, filterWH, filterGrp, warehouses, groups,
+               showDrawer, drawerItem, drawerDetail, drawerLoad, showLC, lcCharges,
+               METHOD_DESC, enriched, filtered, summary,
+               marginPct, marginColor, fmtCompact, lcTotal,
+               load, openDetail, exportCSV, fmt, fmtDate, flt, icon };
     },
     template: `
-<div class="cust-page">
-  <div class="dn-sum-strip">
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Items Tracked</div><div class="dn-sum-val">{{summary.items}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Stock Value</div><div class="dn-sum-val" style="color:#E67700;font-size:16px">{{fmt(summary.totalValue)}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Qty</div><div class="dn-sum-val">{{summary.totalQty.toFixed(2)}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Zero Stock Items</div><div class="dn-sum-val" style="color:#C92A2A">{{summary.zeroStock}}</div></div>
+<div class="cust-page" style="padding:0">
+
+  <!-- Hero strip -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:20px 20px 0">
+    <div style="background:linear-gradient(135deg,#3d1d8c 0%,#7048E8 100%);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;color:#fff">
+      <div style="position:absolute;right:14px;top:14px;font-size:28px;opacity:.12">📈</div>
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.7;margin-bottom:5px">Total Stock Value</div>
+      <div style="font-size:20px;font-weight:700;font-family:var(--mono)">{{fmtCompact(summary.totStock)}}</div>
+      <div style="font-size:12px;opacity:.6;margin-top:3px">{{summary.items}} items in stock</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden">
+      <div style="position:absolute;right:14px;top:14px;font-size:22px;opacity:.15;color:#2F9E44">↑</div>
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#2F9E44;margin-bottom:5px">Selling Value (MRP)</div>
+      <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#2F9E44">{{fmtCompact(summary.totSell)}}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">At current selling prices</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden">
+      <div style="position:absolute;right:14px;top:14px;font-size:22px;opacity:.15;color:#E67700">🎯</div>
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#E67700;margin-bottom:5px">Unrealised Profit</div>
+      <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#E67700">{{fmtCompact(summary.profit)}}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">Overall margin: {{summary.marginPct}}%</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 18px;position:relative;overflow:hidden">
+      <div style="position:absolute;right:14px;top:14px;font-size:22px;opacity:.15;color:#C92A2A">▲</div>
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#C92A2A;margin-bottom:5px">Below Reorder Level</div>
+      <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#C92A2A">{{summary.low}}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">Items need restocking</div>
+    </div>
   </div>
 
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-search">
-        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
-        <input class="cust-search-input" v-model="search" placeholder="Search items…"/>
-      </div>
-      <div style="min-width:220px">
-        <searchable-select v-model="warehouse" :options="warehouses" placeholder="All warehouses" @update:modelValue="load"/>
-      </div>
+  <!-- Controls bar -->
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;margin:14px 20px 0;display:flex;align-items:flex-end;gap:14px;flex-wrap:wrap">
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Warehouse</span>
+      <select v-model="filterWH" @change="load" style="border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px;color:var(--text);background:var(--surface);outline:none;min-width:160px">
+        <option value="">All Warehouses</option>
+        <option v-for="w in warehouses" :key="w.name" :value="w.name">{{w.warehouse_name||w.name}}</option>
+      </select>
     </div>
-    <div class="cust-toolbar-right">
-      <button class="nim-btn nim-btn-ghost" @click="load"><span v-html="icon('refresh')"></span> Refresh</button>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Item Group</span>
+      <select v-model="filterGrp" @change="load" style="border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px;color:var(--text);background:var(--surface);outline:none;min-width:140px">
+        <option value="">All Groups</option>
+        <option v-for="g in groups" :key="g.name" :value="g.name">{{g.name}}</option>
+      </select>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--muted)">Show Zero Stock?</span>
+      <select v-model="showZero" @change="load" style="border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px;color:var(--text);background:var(--surface);outline:none">
+        <option :value="false">Hide zero stock</option>
+        <option :value="true">Show all items</option>
+      </select>
+    </div>
+    <div style="margin-left:auto;display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" @click="showLC=true">
+        <span v-html="icon('stack',13)"></span> Landed Cost
+      </button>
+      <button class="nim-btn nim-btn-ghost" @click="exportCSV">
+        <span v-html="icon('download',13)"></span> Export
+      </button>
+      <button class="nim-btn nim-btn-ghost" @click="load">
+        <span v-html="icon('refresh',13)"></span> Refresh
+      </button>
     </div>
   </div>
 
-  <div class="cust-table-card">
-    <div class="cust-table-wrap">
+  <!-- Method tabs -->
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 20px 0;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;gap:8px">
+      <button @click="method='FIFO'" :style="'padding:8px 18px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid '+(method==='FIFO'?'#7048E8':'var(--border)')+';background:'+(method==='FIFO'?'#F3F0FF':'var(--surface)')+';color:'+(method==='FIFO'?'#7048E8':'var(--muted)')">FIFO</button>
+      <button @click="method='Moving Average'" :style="'padding:8px 18px;border-radius:20px;font-size:13px;font-weight:600;cursor:pointer;border:1.5px solid '+(method==='Moving Average'?'#7048E8':'var(--border)')+';background:'+(method==='Moving Average'?'#F3F0FF':'var(--surface)')+';color:'+(method==='Moving Average'?'#7048E8':'var(--muted)')">Moving Average</button>
+    </div>
+    <span style="font-size:12px;color:var(--muted)">{{filtered.length}} items</span>
+  </div>
+  <div style="font-size:12.5px;color:var(--muted);padding:8px 20px 0;background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:6px;margin:8px 20px 0;line-height:1.6" v-html="METHOD_DESC[method]"></div>
+
+  <!-- Table -->
+  <div style="margin:14px 20px 20px;background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+    <div style="overflow-x:auto">
       <table class="cust-table">
         <thead><tr>
-          <th>Item Code</th><th>Item Name</th><th>Warehouse</th><th>UOM</th>
-          <th style="text-align:right">Qty in Hand</th>
-          <th style="text-align:right">Reserved</th>
-          <th style="text-align:right">Valuation Rate</th>
+          <th>Item</th><th>Group</th><th>Method</th>
+          <th style="text-align:right">Qty</th><th>UOM</th>
+          <th style="text-align:right">Val. Rate</th>
           <th style="text-align:right">Stock Value</th>
+          <th style="text-align:right">Selling Price</th>
+          <th style="text-align:right">Selling Value</th>
+          <th style="text-align:right">Margin %</th>
+          <th style="width:40px"></th>
         </tr></thead>
         <tbody>
-          <tr v-if="loading"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td></tr>
-          <tr v-else-if="!filtered.length"><td colspan="8" class="cust-empty">
+          <tr v-if="loading"><td colspan="11" style="padding:20px"><div class="b-shimmer" style="height:32px;border-radius:6px"></div></td></tr>
+          <tr v-else-if="!filtered.length"><td colspan="11" class="cust-empty">
             <div class="cust-empty-icon">📦</div>
-            <div class="cust-empty-title">{{search?'No items match':'No stock data'}}</div>
-            <div class="cust-empty-sub">{{search?'Try a different search':'Stock entries will appear here once items are received'}}</div>
+            <div class="cust-empty-title">No items match the current filters</div>
+            <div class="cust-empty-sub">Adjust warehouse or group filter, or enable "Show zero stock"</div>
           </td></tr>
-          <tr v-else v-for="r in filtered" :key="r.item_code+(r.warehouse||'')" class="cust-row"
-              :style="flt(r.actual_qty)<=0?'opacity:.6':''">
-            <td style="font-family:var(--mono);font-size:12px;font-weight:700;color:#3B5BDB">{{r.item_code}}</td>
-            <td style="font-weight:500">{{r.item_name||r.item_code}}</td>
-            <td style="font-size:12.5px;color:var(--muted)">{{r.warehouse||'—'}}</td>
-            <td style="font-size:12px;color:var(--muted)">{{r.stock_uom||'Nos'}}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:700" :style="flt(r.actual_qty)>0?'color:#2F9E44':'color:#C92A2A'">
-              {{flt(r.actual_qty).toFixed(2)}}
-            </td>
-            <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{flt(r.reserved_qty).toFixed(2)}}</td>
-            <td style="text-align:right;font-family:var(--mono)">{{fmt(r.valuation_rate)}}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{fmt(r.stock_value)}}</td>
-          </tr>
+          <template v-else v-for="r in filtered" :key="r.item_code+(r.warehouse||'')">
+            <tr class="cust-row" @click="openDetail(r)" style="cursor:pointer">
+              <td>
+                <div style="font-weight:600;font-size:13px">{{r.item_name||r.item_code}}</div>
+                <div style="font-size:11px;color:var(--muted);font-family:var(--mono)">{{r.item_code}}</div>
+              </td>
+              <td style="font-size:12px;color:var(--muted)">{{r.item_group||'—'}}</td>
+              <td>
+                <span :style="'display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:'+(method==='FIFO'?'#EEF2FF':'#EBFBEE')+';color:'+(method==='FIFO'?'#3B5BDB':'#2F9E44')">{{method==='FIFO'?'FIFO':'Avg'}}</span>
+              </td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:700" :style="flt(r.actual_qty)>0?(r.below_reorder?'color:#C92A2A':'color:#2F9E44'):'color:#C92A2A'">
+                {{flt(r.actual_qty).toFixed(2)}}{{r.below_reorder?' ▲':''}}
+              </td>
+              <td style="font-size:12px;color:var(--muted)">{{r.uom||'Nos'}}</td>
+              <td style="text-align:right;font-family:var(--mono)">{{fmt(r.valuation_rate)}}</td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#7048E8">{{fmtCompact(r.stock_value)}}</td>
+              <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{r.selling_price?fmt(r.selling_price):'—'}}</td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:600;color:#2F9E44">{{r.selling_price?fmtCompact(flt(r.actual_qty)*flt(r.selling_price)):'—'}}</td>
+              <td style="text-align:right">
+                <template v-if="marginPct(r)!==null">
+                  <div style="display:flex;align-items:center;gap:6px;justify-content:flex-end">
+                    <span style="font-weight:700;font-family:var(--mono)" :style="'color:'+marginColor(parseFloat(marginPct(r)))">{{marginPct(r)}}%</span>
+                    <div style="width:50px;height:6px;background:#E8ECF0;border-radius:3px;overflow:hidden">
+                      <div :style="'height:100%;border-radius:3px;width:'+Math.min(100,parseFloat(marginPct(r)))+'%;background:'+marginColor(parseFloat(marginPct(r)))" ></div>
+                    </div>
+                  </div>
+                </template>
+                <span v-else style="color:var(--muted)">—</span>
+              </td>
+              <td style="text-align:center">
+                <button class="nim-btn nim-btn-ghost" style="padding:4px 7px" @click.stop="openDetail(r)">
+                  <span v-html="icon('eye',13)"></span>
+                </button>
+              </td>
+            </tr>
+          </template>
         </tbody>
+        <tfoot v-if="filtered.length">
+          <tr style="background:#F0EEFF">
+            <td colspan="6" style="padding:10px 14px;font-weight:700;font-size:13px">Total ({{filtered.length}} items)</td>
+            <td style="text-align:right;padding:10px 14px;font-family:var(--mono);font-weight:700;color:#7048E8">{{fmtCompact(summary.totStock)}}</td>
+            <td></td>
+            <td style="text-align:right;padding:10px 14px;font-family:var(--mono);font-weight:700;color:#2F9E44">{{fmtCompact(summary.totSell)}}</td>
+            <td colspan="2"></td>
+          </tr>
+        </tfoot>
       </table>
     </div>
-    <div class="cust-row-count" v-if="filtered.length">{{filtered.length}} items · Total Value: <b>{{fmt(summary.totalValue)}}</b></div>
+    <div v-if="filtered.length" style="text-align:right;font-size:12px;color:var(--muted);padding:8px 14px;border-top:1px solid var(--border)">
+      {{filtered.length}} items &nbsp;·&nbsp; Stock value: <b style="color:#7048E8">{{fmtCompact(summary.totStock)}}</b>
+      &nbsp;·&nbsp; Selling value: <b style="color:#2F9E44">{{fmtCompact(summary.totSell)}}</b>
+      &nbsp;·&nbsp; Unrealised profit: <b style="color:#E67700">{{fmtCompact(summary.profit)}}</b>
+    </div>
   </div>
+
+  <!-- Item Detail Drawer -->
+  <div v-if="showDrawer" style="position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.45);display:flex;justify-content:flex-end" @click.self="showDrawer=false">
+    <div style="width:540px;max-width:95vw;height:100%;background:var(--surface);display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15)">
+      <div style="background:#7048E8;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <div>
+          <div style="color:#fff;font-size:15px;font-weight:700">{{drawerItem?.item_name||drawerItem?.item_code}}</div>
+          <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:2px">{{drawerItem?.item_code}} · {{method}} Valuation</div>
+        </div>
+        <button @click="showDrawer=false" style="background:rgba(255,255,255,.2);border:none;cursor:pointer;width:28px;height:28px;border-radius:6px;color:#fff;display:flex;align-items:center;justify-content:center">
+          <span v-html="icon('x',14)"></span>
+        </button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:20px">
+        <div v-if="drawerLoad" class="b-shimmer" style="height:120px;border-radius:8px;margin-bottom:14px"></div>
+        <template v-else-if="drawerItem">
+          <!-- Value summary -->
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+            <div style="background:#F3F0FF;border:1px solid rgba(112,72,232,.15);border-radius:8px;padding:14px 16px;text-align:center">
+              <div style="font-size:11px;color:#7048E8;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Stock Value</div>
+              <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#7048E8">{{fmtCompact(drawerItem.stock_value)}}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">{{flt(drawerItem.actual_qty).toFixed(2)}} {{drawerItem.uom||'Nos'}} × {{fmt(drawerItem.valuation_rate)}}</div>
+            </div>
+            <div style="background:#EBFBEE;border:1px solid rgba(47,158,68,.2);border-radius:8px;padding:14px 16px;text-align:center">
+              <div style="font-size:11px;color:#2F9E44;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">Selling Value</div>
+              <div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#2F9E44">{{drawerItem.selling_price?fmtCompact(flt(drawerItem.actual_qty)*flt(drawerItem.selling_price)):'—'}}</div>
+              <div style="font-size:12px;color:var(--muted);margin-top:2px">{{drawerItem.selling_price?fmt(drawerItem.selling_price)+' / '+( drawerItem.uom||'Nos'):'No selling price set'}}</div>
+            </div>
+          </div>
+          <!-- Margin banner -->
+          <template v-if="marginPct(drawerItem)!==null">
+            <div :style="'background:'+(parseFloat(marginPct(drawerItem))>=30?'#EBFBEE':parseFloat(marginPct(drawerItem))>=15?'#FFF3BF':'#FFF5F5')+';border:1px solid '+(parseFloat(marginPct(drawerItem))>=30?'rgba(47,158,68,.2)':parseFloat(marginPct(drawerItem))>=15?'rgba(230,119,0,.2)':'rgba(201,42,42,.2)')+';border-radius:8px;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;font-size:13px'" >
+              <span :style="'color:'+marginColor(parseFloat(marginPct(drawerItem)))">Gross Margin: <b>{{marginPct(drawerItem)}}%</b></span>
+              <span :style="{color:marginColor(parseFloat(marginPct(drawerItem))),'font-weight':'600'}">Profit/unit: <b>{{fmt(flt(drawerItem.selling_price)-flt(drawerItem.valuation_rate))}}</b></span>
+            </div>
+          </template>
+          <!-- Per-warehouse stock (from detail API) -->
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Stock by Warehouse</div>
+          <div v-if="drawerDetail" style="border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
+            <div v-for="w in drawerDetail.warehouses" :key="w.warehouse" style="display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid #F1F3F5;font-size:13px">
+              <span>🏭 {{w.warehouse}}</span>
+              <span style="font-family:var(--mono);font-weight:600">{{flt(w.actual_qty).toFixed(2)}} {{drawerItem.uom||'Nos'}}</span>
+            </div>
+            <div v-if="!drawerDetail.warehouses.length" style="padding:12px 14px;color:var(--muted);font-size:13px;text-align:center">No warehouse data</div>
+          </div>
+          <div v-else style="background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px">
+            <div style="display:flex;justify-content:space-between">
+              <span>{{drawerItem.warehouse||'All warehouses'}}</span>
+              <span style="font-family:var(--mono);font-weight:600">{{flt(drawerItem.actual_qty).toFixed(2)}} {{drawerItem.uom||'Nos'}}</span>
+            </div>
+          </div>
+          <!-- Stats grid -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
+            <div style="background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+              <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:4px">Reserved Qty</div>
+              <div style="font-size:16px;font-weight:700;font-family:var(--mono)">{{flt(drawerItem.reserved_qty).toFixed(2)}}</div>
+            </div>
+            <div style="background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+              <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:4px">Projected Qty</div>
+              <div style="font-size:16px;font-weight:700;font-family:var(--mono)">{{flt(drawerItem.projected_qty).toFixed(2)}}</div>
+            </div>
+            <div style="background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:12px 14px">
+              <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:4px">Reorder Level</div>
+              <div style="font-size:16px;font-weight:700;font-family:var(--mono)" :style="drawerItem.below_reorder?'color:#C92A2A':''">{{flt(drawerItem.reorder_level).toFixed(2)}}</div>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- Landed Cost Modal -->
+  <div v-if="showLC" style="position:fixed;inset:0;z-index:950;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px" @click.self="showLC=false">
+    <div style="background:var(--surface);border-radius:12px;width:100%;max-width:540px;overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px">
+        <span v-html="icon('stack',16)"></span> Landed Cost Voucher
+      </div>
+      <div style="padding:20px;max-height:65vh;overflow-y:auto">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+          Landed cost adds freight, insurance, customs duty, and other charges to the cost of purchased items. Charges are distributed across items proportionally.
+        </div>
+        <div style="font-weight:600;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:10px">Charges to Allocate</div>
+        <div v-for="(c,i) in lcCharges" :key="i" style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)">
+          <input v-model="c.name" class="nim-input" placeholder="Charge name" style="flex:1"/>
+          <input v-model.number="c.amount" type="number" class="nim-input" placeholder="0.00" style="width:110px;text-align:right;font-family:var(--mono)"/>
+          <select v-model="c.basis" class="nim-input" style="width:130px">
+            <option>Actual</option><option>Percentage</option><option>By Quantity</option><option>By Amount</option>
+          </select>
+        </div>
+        <button @click="lcCharges.push({name:'',amount:0,basis:'Actual'})" style="margin-top:10px;width:100%;font-size:12.5px;color:#7048E8;background:none;border:1px dashed rgba(112,72,232,.3);border-radius:6px;padding:7px 14px;cursor:pointer">+ Add Charge</button>
+        <div style="background:#F3F0FF;border:1px solid rgba(112,72,232,.15);border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;font-size:13px;margin-top:14px">
+          <span style="color:var(--muted)">Total Landed Cost</span>
+          <span style="font-family:var(--mono);font-weight:700;color:#7048E8">{{fmt(lcTotal())}}</span>
+        </div>
+      </div>
+      <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--surf2,#F8F9FC)">
+        <button class="nim-btn nim-btn-ghost" @click="showLC=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="showLC=false;toast('Landed cost noted — apply via Purchase Receipt')">Apply</button>
+      </div>
+    </div>
+  </div>
+
 </div>`
   });
 
@@ -14644,97 +14931,2025 @@
   const InventoryReorderAlerts = defineComponent({
     name: "InventoryReorderAlerts",
     setup() {
-      const list    = ref([]);
-      const loading = ref(true);
-      const search  = ref("");
+      // allRules = all items with reorder_level > 0 (from stock_summary)
+      const allRules   = ref([]);
+      const alertItems = ref([]); // items actually below reorder level
+      const loading    = ref(false);
+      const activeTab  = ref("alerts");   // "alerts" | "rules" | "history"
+      const alertFilt  = ref("all");      // "all" | "critical" | "warning" | "safe"
+      const search     = ref("");
+      const filterWH   = ref("");
+      const warehouses = ref([]);
+      const poHistory  = ref([]);
+
+      // PO draft modal
+      const showPO     = ref(false);
+      const poRule     = ref(null);
+      const poQty      = ref(0);
+      const poPrice    = ref(0);
+      const poReqdBy   = ref("");
+
+      // Add/edit rule drawer
+      const showRuleDrawer = ref(false);
+      const editingRule    = ref(null);
+      const ruleForm       = reactive({ item_code:"", warehouse:"", min_level:0, reorder_qty:10,
+                                        max_level:0, safety_stock:0, lead_time:7, uom:"Nos",
+                                        supplier:"", buying_price:0, auto_po:false, urgency:"medium" });
+
+      // ── Derived ─────────────────────────────────────────────────────────────
+      function alertLevel(r) {
+        const qty = flt(r.actual_qty);
+        if (qty <= 0) return "critical";
+        if (qty < flt(r.reorder_level)) return "warning";
+        return "safe";
+      }
+      function stockPct(r) {
+        const qty = flt(r.actual_qty);
+        const max = flt(r.max_level) || flt(r.reorder_level) * 3 || 100;
+        return Math.min(100, Math.round(qty / max * 100));
+      }
+      function reorderPct(r) {
+        const max = flt(r.max_level) || flt(r.reorder_level) * 3 || 100;
+        return Math.round(flt(r.reorder_level) / max * 100);
+      }
+      function daysToStockout(r) {
+        const qty = flt(r.actual_qty);
+        if (!qty) return 0;
+        const daily = (flt(r.reorder_qty) || 10) / (flt(r.lead_time) || 7);
+        return daily ? Math.floor(qty / daily) : 999;
+      }
+      function levelColors(level) {
+        return { critical:"#C92A2A", warning:"#E67700", safe:"#2F9E44" }[level] || "#868E96";
+      }
+      function levelBg(level) {
+        return { critical:"#FFF5F5", warning:"#FFFBF0", safe:"#F0FBF3" }[level] || "#F8F9FA";
+      }
+      function fmtCompact(v) {
+        const n = flt(v);
+        if (n >= 100000) return "\u20b9" + (n/100000).toFixed(1) + "L";
+        return fmt(n);
+      }
+      function addDays(n) {
+        const d = new Date(); d.setDate(d.getDate() + n);
+        return d.toISOString().slice(0, 10);
+      }
 
       const summary = computed(() => ({
-        total:    list.value.length,
-        critical: list.value.filter(r => flt(r.actual_qty) <= 0).length,
-        warning:  list.value.filter(r => flt(r.actual_qty) > 0 && flt(r.actual_qty) < flt(r.reorder_level) * 0.5).length,
-        totalShortage: list.value.reduce((s,r) => s + flt(r.shortage_qty), 0),
+        critical: allRules.value.filter(r => alertLevel(r) === "critical").length,
+        warning:  allRules.value.filter(r => alertLevel(r) === "warning").length,
+        safe:     allRules.value.filter(r => alertLevel(r) === "safe").length,
+        total:    allRules.value.length,
       }));
 
-      const filtered = computed(() => {
-        const q = search.value.toLowerCase().trim();
-        return q
-          ? list.value.filter(r => (r.item_code + (r.item_name||"") + (r.warehouse||"")).toLowerCase().includes(q))
-          : list.value;
+      const filteredAlerts = computed(() => {
+        const q = search.value.toLowerCase();
+        return allRules.value.filter(r => {
+          if (alertFilt.value !== "all" && alertLevel(r) !== alertFilt.value) return false;
+          if (filterWH.value && r.warehouse !== filterWH.value) return false;
+          if (q && !(r.item_code + (r.item_name||"") + (r.warehouse||"")).toLowerCase().includes(q)) return false;
+          return true;
+        }).sort((a,b) => {
+          const o = { critical:0, warning:1, safe:2 };
+          return (o[alertLevel(a)]||0) - (o[alertLevel(b)]||0);
+        });
       });
 
-      function urgency(r) {
-        if (flt(r.actual_qty) <= 0) return { cls:"b-badge-red",    lbl:"Critical"  };
-        if (flt(r.actual_qty) < flt(r.reorder_level) * 0.5) return { cls:"b-badge-amber", lbl:"Warning"  };
-        return { cls:"b-badge-blue", lbl:"Low Stock" };
+      // ── Load ────────────────────────────────────────────────────────────────
+      async function load() {
+        loading.value = true;
+        try {
+          // Load all items with reorder_level configured
+          const rows = await apiGET("zoho_books_clone.api.inventory.get_stock_summary", { show_zero_stock: 1 }) || [];
+          allRules.value = rows.filter(r => flt(r.reorder_level) > 0);
+        } catch(e) { toast("Could not load reorder data", "error"); allRules.value = []; }
+        loading.value = false;
+      }
+
+      async function loadPOHistory() {
+        try {
+          poHistory.value = await apiList("Purchase Order", {
+            fields: ["name","transaction_date","supplier","total","status","amended_from"],
+            order: "transaction_date desc", limit: 30
+          }) || [];
+        } catch { poHistory.value = []; }
+      }
+
+      // ── PO Draft ────────────────────────────────────────────────────────────
+      function openPO(r) {
+        poRule.value = r;
+        poQty.value = flt(r.reorder_qty) || 10;
+        poPrice.value = flt(r.valuation_rate) || 0;
+        poReqdBy.value = addDays(flt(r.lead_time) || 7);
+        showPO.value = true;
+      }
+      async function submitPO() {
+        const r = poRule.value;
+        try {
+          await apiSave({
+            doctype: "Purchase Order",
+            transaction_date: new Date().toISOString().slice(0,10),
+            supplier: r.supplier || "",
+            schedule_date: poReqdBy.value,
+            items: [{ item_code: r.item_code, qty: poQty.value, rate: poPrice.value,
+                      warehouse: r.warehouse || "" }],
+          });
+          toast("Purchase Order created for " + (r.item_name || r.item_code));
+          showPO.value = false;
+          loadPOHistory();
+        } catch(e) { toast("Could not create PO: " + e.message, "error"); }
+      }
+      async function createAllPOs() {
+        const toOrder = allRules.value.filter(r => alertLevel(r) !== "safe");
+        if (!toOrder.length) { toast("No items need restocking right now", "info"); return; }
+        let created = 0;
+        for (const r of toOrder) {
+          try {
+            await apiSave({
+              doctype: "Purchase Order",
+              transaction_date: new Date().toISOString().slice(0,10),
+              supplier: r.supplier || "",
+              schedule_date: addDays(flt(r.lead_time) || 7),
+              items: [{ item_code: r.item_code, qty: flt(r.reorder_qty) || 10,
+                        rate: flt(r.valuation_rate), warehouse: r.warehouse || "" }],
+            });
+            created++;
+          } catch {}
+        }
+        toast(created + " Purchase Order(s) created");
+        loadPOHistory();
+      }
+
+      // ── Rules drawer ────────────────────────────────────────────────────────
+      function openAddRule() {
+        editingRule.value = null;
+        Object.assign(ruleForm, { item_code:"", warehouse:"", min_level:0, reorder_qty:10,
+          max_level:0, safety_stock:0, lead_time:7, uom:"Nos", supplier:"", buying_price:0,
+          auto_po:false, urgency:"medium" });
+        showRuleDrawer.value = true;
+      }
+      function openEditRule(r) {
+        editingRule.value = r;
+        Object.assign(ruleForm, { item_code: r.item_code, warehouse: r.warehouse||"",
+          min_level: r.reorder_level, reorder_qty: r.reorder_qty, max_level: r.max_level||0,
+          safety_stock: r.safety_stock||0, lead_time: r.lead_time||7, uom: r.uom||"Nos",
+          supplier: r.supplier||"", buying_price: r.valuation_rate||0,
+          auto_po: false, urgency: "medium" });
+        showRuleDrawer.value = true;
+      }
+      async function saveRule() {
+        if (!ruleForm.item_code) { toast("Select an item", "error"); return; }
+        if (!ruleForm.min_level) { toast("Reorder level is required", "error"); return; }
+        try {
+          await apiSave({ doctype: "Item", name: ruleForm.item_code,
+            reorder_levels: [{ warehouse: ruleForm.warehouse, warehouse_reorder_level: ruleForm.min_level,
+              warehouse_reorder_qty: ruleForm.reorder_qty, material_request_type: "Purchase" }] });
+          toast("Reorder rule saved");
+          showRuleDrawer.value = false;
+          load();
+        } catch(e) { toast("Could not save rule: " + (e.message||""), "error"); }
+      }
+
+      onMounted(async () => {
+        try { warehouses.value = await apiList("Warehouse", { fields:["name","warehouse_name"], filters:[["disabled","=",0],["is_group","=",0]], limit:200 }) || []; } catch {}
+        await load();
+        loadPOHistory();
+      });
+
+      return { allRules, loading, activeTab, alertFilt, search, filterWH, warehouses,
+               poHistory, showPO, poRule, poQty, poPrice, poReqdBy,
+               showRuleDrawer, editingRule, ruleForm,
+               summary, filteredAlerts,
+               alertLevel, stockPct, reorderPct, daysToStockout, levelColors, levelBg, fmtCompact, addDays,
+               load, loadPOHistory, openPO, submitPO, createAllPOs, openAddRule, openEditRule, saveRule,
+               fmt, fmtDate, flt, icon };
+    },
+    template: `
+<div class="cust-page" style="padding:0">
+
+  <!-- Hero strip -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:20px 20px 0">
+    <div @click="alertFilt='critical';activeTab='alerts'" style="background:linear-gradient(135deg,#7a1515 0%,#C92A2A 100%);color:#fff;border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;cursor:pointer;border:2px solid transparent" :style="alertFilt==='critical'?'border-color:#ff6b6b':''">
+      <div style="position:absolute;right:14px;top:14px;font-size:26px;opacity:.15">⚠</div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.75;margin-bottom:5px">Critical — Out of Stock</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono)">{{summary.critical}}</div>
+      <div style="font-size:12px;opacity:.65;margin-top:3px">Stock = 0 or negative</div>
+    </div>
+    <div @click="alertFilt='warning';activeTab='alerts'" style="background:linear-gradient(135deg,#7f3e00 0%,#E67700 100%);color:#fff;border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;cursor:pointer;border:2px solid transparent" :style="alertFilt==='warning'?'border-color:#ffa94d':''">
+      <div style="position:absolute;right:14px;top:14px;font-size:26px;opacity:.15">📋</div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.75;margin-bottom:5px">Warning — Below Reorder</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono)">{{summary.warning}}</div>
+      <div style="font-size:12px;opacity:.65;margin-top:3px">Stock ≤ reorder level</div>
+    </div>
+    <div @click="alertFilt='safe';activeTab='alerts'" style="background:linear-gradient(135deg,#1a4a22 0%,#2F9E44 100%);color:#fff;border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;cursor:pointer;border:2px solid transparent" :style="alertFilt==='safe'?'border-color:#69db7c':''">
+      <div style="position:absolute;right:14px;top:14px;font-size:26px;opacity:.15">✓</div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.75;margin-bottom:5px">Safe — Adequate Stock</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono)">{{summary.safe}}</div>
+      <div style="font-size:12px;opacity:.65;margin-top:3px">Above reorder level</div>
+    </div>
+    <div @click="alertFilt='all';activeTab='alerts'" style="background:linear-gradient(135deg,#3d1d8c 0%,#7048E8 100%);color:#fff;border-radius:10px;padding:16px 18px;position:relative;overflow:hidden;cursor:pointer;border:2px solid transparent" :style="alertFilt==='all'?'border-color:#a5b4fc':''">
+      <div style="position:absolute;right:14px;top:14px;font-size:26px;opacity:.15">📊</div>
+      <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.75;margin-bottom:5px">Total Items Tracked</div>
+      <div style="font-size:28px;font-weight:700;font-family:var(--mono)">{{summary.total}}</div>
+      <div style="font-size:12px;opacity:.65;margin-top:3px">With reorder rules set</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div style="display:flex;border-bottom:1px solid var(--border);background:var(--surface);margin:14px 20px 0;border-radius:10px 10px 0 0;overflow:hidden">
+    <button @click="activeTab='alerts'" :style="'padding:11px 18px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:'+(activeTab==='alerts'?'#7048E8':'var(--muted)')+';border-bottom:2px solid '+(activeTab==='alerts'?'#7048E8':'transparent')">⚠ Active Alerts</button>
+    <button @click="activeTab='rules'" :style="'padding:11px 18px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:'+(activeTab==='rules'?'#7048E8':'var(--muted)')+';border-bottom:2px solid '+(activeTab==='rules'?'#7048E8':'transparent')">⚙ Reorder Rules</button>
+    <button @click="activeTab='history';loadPOHistory()" :style="'padding:11px 18px;font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:'+(activeTab==='history'?'#7048E8':'var(--muted)')+';border-bottom:2px solid '+(activeTab==='history'?'#7048E8':'transparent')">📋 PO History</button>
+  </div>
+
+  <!-- ── ALERTS TAB ── -->
+  <div v-if="activeTab==='alerts'" style="padding:0 20px 20px">
+    <!-- Action bar -->
+    <div style="display:flex;align-items:center;gap:8px;padding:12px 0;flex-wrap:wrap">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <template v-for="p in [{id:'all',lbl:'All',cnt:summary.total,bg:'#F3F0FF',c:'#7048E8'},{id:'critical',lbl:'Critical',cnt:summary.critical,bg:'#FFE3E3',c:'#C92A2A'},{id:'warning',lbl:'Warning',cnt:summary.warning,bg:'#FFF3BF',c:'#E67700'},{id:'safe',lbl:'Safe',cnt:summary.safe,bg:'#EBFBEE',c:'#2F9E44'}]" :key="p.id">
+          <button @click="alertFilt=p.id" :style="'display:inline-flex;align-items:center;gap:5px;padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);border:1px solid '+(alertFilt===p.id?p.c:'var(--border)')+';background:'+(alertFilt===p.id?p.bg:'var(--surface)')+';color:'+(alertFilt===p.id?p.c:'var(--muted)')">
+            {{p.lbl}} <span :style="'font-size:10.5px;padding:1px 5px;border-radius:8px;background:'+p.bg+';color:'+p.c">{{p.cnt}}</span>
+          </button>
+        </template>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:5px 12px">
+          <span v-html="icon('search',12)" style="color:var(--muted);flex-shrink:0"></span>
+          <input v-model="search" style="border:none;outline:none;font-size:13px;width:160px;background:transparent;color:var(--text)" placeholder="Search item, warehouse…"/>
+        </div>
+        <select v-model="filterWH" style="border:1px solid var(--border);border-radius:6px;padding:7px 10px;font-size:13px;background:var(--surface);outline:none">
+          <option value="">All Warehouses</option>
+          <option v-for="w in warehouses" :key="w.name" :value="w.name">{{w.warehouse_name||w.name}}</option>
+        </select>
+        <button class="nim-btn nim-btn-ghost" @click="load"><span v-html="icon('refresh',12)"></span> Refresh</button>
+        <button class="nim-btn nim-btn-primary" @click="createAllPOs"><span v-html="icon('order',13)"></span> Auto-Create POs</button>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div v-if="loading">
+      <div class="b-shimmer" style="height:120px;border-radius:10px;margin-bottom:12px"></div>
+      <div class="b-shimmer" style="height:120px;border-radius:10px;margin-bottom:12px"></div>
+    </div>
+
+    <!-- Empty -->
+    <div v-else-if="!filteredAlerts.length" style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:48px;text-align:center;color:var(--muted)">
+      <div style="font-size:36px;margin-bottom:12px">✓</div>
+      <div style="font-weight:600;font-size:15px;color:var(--text);margin-bottom:6px">No alerts match the current filter</div>
+      <div style="font-size:13px">All tracked items are at healthy stock levels</div>
+    </div>
+
+    <!-- Alert cards -->
+    <div v-else style="display:grid;grid-template-columns:1fr;gap:12px">
+      <div v-for="r in filteredAlerts" :key="r.item_code+(r.warehouse||'')"
+           :style="'background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;border-left:4px solid '+levelColors(alertLevel(r))">
+        <!-- Card header -->
+        <div style="padding:14px 18px;display:flex;align-items:center;gap:14px">
+          <div :style="'width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;background:'+levelBg(alertLevel(r))+';color:'+levelColors(alertLevel(r))">
+            {{alertLevel(r)==='critical'?'⚠':alertLevel(r)==='warning'?'📋':'✓'}}
+          </div>
+          <div style="flex:1">
+            <div style="font-size:14px;font-weight:700;margin-bottom:2px">{{r.item_name||r.item_code}}</div>
+            <div style="font-size:12px;color:var(--muted)">{{r.item_code}} · {{r.warehouse||'All warehouses'}}</div>
+          </div>
+          <span :style="'display:inline-flex;align-items:center;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:600;background:'+levelBg(alertLevel(r))+';color:'+levelColors(alertLevel(r))">
+            {{alertLevel(r)==='critical'?'CRITICAL':alertLevel(r)==='warning'?'WARNING':'SAFE'}}
+          </span>
+        </div>
+        <!-- Stock level bar -->
+        <div style="padding:0 18px 12px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+            <span :style="'font-size:12px;font-weight:600;flex-shrink:0;width:110px;color:'+levelColors(alertLevel(r))">
+              Current: {{flt(r.actual_qty).toFixed(2)}} {{r.uom||'Nos'}}
+            </span>
+            <div style="flex:1;height:10px;background:#E8ECF0;border-radius:10px;overflow:hidden;position:relative">
+              <div :style="'height:100%;border-radius:10px;background:'+levelColors(alertLevel(r))+';width:'+stockPct(r)+'%'"></div>
+              <div :style="'position:absolute;top:-2px;bottom:-2px;width:2px;background:#333;border-radius:1px;left:'+reorderPct(r)+'%'" :title="'Reorder at '+r.reorder_level"></div>
+            </div>
+            <span style="font-size:11.5px;font-family:var(--mono);color:var(--muted);width:36px;text-align:right">{{stockPct(r)}}%</span>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--muted)">
+            <span>0</span>
+            <span :style="'color:'+levelColors(alertLevel(r))">Reorder at {{flt(r.reorder_level).toFixed(0)}}</span>
+            <span>Max {{flt(r.max_level)||'∞'}}</span>
+          </div>
+        </div>
+        <!-- Stats -->
+        <div style="padding:0 18px 14px;display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px">
+          <div style="padding:8px 12px;border-radius:8px;background:var(--surf2,#F8F9FC)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">Current Stock</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono)" :style="'color:'+levelColors(alertLevel(r))">{{flt(r.actual_qty).toFixed(2)}}</div>
+          </div>
+          <div style="padding:8px 12px;border-radius:8px;background:var(--surf2,#F8F9FC)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">Reorder Level</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono)">{{flt(r.reorder_level).toFixed(0)}}</div>
+          </div>
+          <div style="padding:8px 12px;border-radius:8px;background:var(--surf2,#F8F9FC)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">Reorder Qty</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:#7048E8">{{flt(r.reorder_qty).toFixed(0)}}</div>
+          </div>
+          <div style="padding:8px 12px;border-radius:8px;background:var(--surf2,#F8F9FC)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">Days to Stockout</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono)" :style="daysToStockout(r)<7?'color:#C92A2A':daysToStockout(r)<14?'color:#E67700':'color:#2F9E44'">
+              {{daysToStockout(r)===999?'∞':daysToStockout(r)+'d'}}
+            </div>
+          </div>
+          <div style="padding:8px 12px;border-radius:8px;background:var(--surf2,#F8F9FC)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);margin-bottom:3px">Shortage Qty</div>
+            <div style="font-size:15px;font-weight:700;font-family:var(--mono);color:#E67700">{{Math.max(0, flt(r.reorder_level)-flt(r.actual_qty)).toFixed(0)}}</div>
+          </div>
+        </div>
+        <!-- Footer -->
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 18px;background:var(--surf2,#F8F9FC);border-top:1px solid var(--border)">
+          <div style="font-size:12px;color:var(--muted)">
+            <template v-if="alertLevel(r)!=='safe'">
+              Order <b>{{flt(r.reorder_qty).toFixed(0)}} {{r.uom||'Nos'}}</b>
+              &nbsp;·&nbsp; Est. cost: <b>{{fmtCompact(flt(r.reorder_qty)*flt(r.valuation_rate))}}</b>
+            </template>
+            <template v-else>Stock is adequate — no action needed</template>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="nim-btn nim-btn-ghost" style="font-size:12px;padding:5px 10px" @click="openEditRule(r)">Edit Rule</button>
+            <button v-if="alertLevel(r)!=='safe'" @click="openPO(r)"
+                    :style="'display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;border:1px solid transparent;color:#fff;background:'+(alertLevel(r)==='critical'?'#C92A2A':'#E67700')">
+              <span v-html="icon('order',12)"></span> Create PO
+            </button>
+            <span v-else style="font-size:12px;color:#2F9E44;padding:5px 10px">✓ No action needed</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="!loading&&filteredAlerts.length" style="text-align:right;font-size:12px;color:var(--muted);padding:8px 0">{{filteredAlerts.length}} items</div>
+  </div>
+
+  <!-- ── RULES TAB ── -->
+  <div v-if="activeTab==='rules'" style="padding:0 20px 20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0">
+      <div style="font-size:13px;color:var(--muted)">Items with reorder levels configured. Click Edit to update thresholds.</div>
+      <button class="nim-btn nim-btn-primary" @click="openAddRule"><span v-html="icon('plus',13)"></span> Add Rule</button>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div style="overflow-x:auto">
+        <table class="cust-table">
+          <thead><tr>
+            <th>Item</th><th>Warehouse</th>
+            <th style="text-align:right">Reorder Level</th>
+            <th style="text-align:right">Reorder Qty</th>
+            <th style="text-align:right">Current Stock</th>
+            <th style="text-align:center">Status</th>
+            <th style="text-align:center;width:70px">Actions</th>
+          </tr></thead>
+          <tbody>
+            <tr v-if="loading"><td colspan="7" style="padding:14px"><div class="b-shimmer" style="height:32px;border-radius:6px"></div></td></tr>
+            <tr v-else-if="!allRules.length"><td colspan="7" class="cust-empty">
+              <div class="cust-empty-icon">⚙</div>
+              <div class="cust-empty-title">No reorder rules set</div>
+              <div class="cust-empty-sub">Set reorder levels on items to see them here</div>
+            </td></tr>
+            <tr v-else v-for="r in allRules" :key="r.item_code+(r.warehouse||'')" class="cust-row">
+              <td>
+                <div style="font-weight:600;font-size:13px">{{r.item_name||r.item_code}}</div>
+                <div style="font-size:11px;color:var(--muted);font-family:var(--mono)">{{r.item_code}}</div>
+              </td>
+              <td style="font-size:12.5px;color:var(--muted)">{{r.warehouse||'—'}}</td>
+              <td style="text-align:right;font-family:var(--mono)">{{flt(r.reorder_level).toFixed(0)}}</td>
+              <td style="text-align:right;font-family:var(--mono);color:#7048E8">{{flt(r.reorder_qty).toFixed(0)}}</td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:700" :style="'color:'+levelColors(alertLevel(r))">{{flt(r.actual_qty).toFixed(2)}}</td>
+              <td style="text-align:center">
+                <span :style="'display:inline-flex;align-items:center;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:'+levelBg(alertLevel(r))+';color:'+levelColors(alertLevel(r))">
+                  {{alertLevel(r).toUpperCase()}}
+                </span>
+              </td>
+              <td style="text-align:center">
+                <button class="nim-btn nim-btn-ghost" style="padding:4px 8px;font-size:12px" @click="openEditRule(r)">
+                  <span v-html="icon('edit',12)"></span>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── PO HISTORY TAB ── -->
+  <div v-if="activeTab==='history'" style="padding:0 20px 20px">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-top:12px">
+      <div style="overflow-x:auto">
+        <table class="cust-table">
+          <thead><tr>
+            <th>Date</th><th>PO Number</th><th>Supplier</th>
+            <th style="text-align:right">Total</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            <tr v-if="!poHistory.length"><td colspan="5" class="cust-empty">
+              <div class="cust-empty-icon">📋</div>
+              <div class="cust-empty-title">No purchase orders found</div>
+              <div class="cust-empty-sub">POs created from Reorder Alerts will appear here</div>
+            </td></tr>
+            <tr v-else v-for="p in poHistory" :key="p.name" class="cust-row">
+              <td style="font-size:12.5px;color:var(--muted)">{{fmtDate(p.transaction_date)}}</td>
+              <td style="font-family:var(--mono);font-size:12.5px;font-weight:700;color:#7048E8">{{p.name}}</td>
+              <td style="font-size:12.5px">{{p.supplier||'—'}}</td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(p.total)}}</td>
+              <td>
+                <span :style="'display:inline-flex;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:'+(p.status==='Submitted'?'#EEF2FF':p.status==='To Receive and Bill'?'#EBFBEE':p.status==='Draft'?'#F1F3F5':'#F3F0FF')+';color:'+(p.status==='Submitted'?'#3B5BDB':p.status==='To Receive and Bill'?'#2F9E44':p.status==='Draft'?'var(--muted)':'#7048E8')">{{p.status}}</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- PO Draft Modal -->
+  <div v-if="showPO" style="position:fixed;inset:0;z-index:950;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;padding:20px" @click.self="showPO=false">
+    <div style="background:var(--surface);border-radius:12px;width:100%;max-width:560px;overflow:hidden">
+      <div style="padding:16px 20px;border-bottom:1px solid var(--border);font-size:15px;font-weight:700;display:flex;align-items:center;gap:10px">
+        <span v-html="icon('order',16)"></span>
+        Draft Purchase Order — {{poRule?.item_name||poRule?.item_code}}
+      </div>
+      <div style="padding:20px">
+        <div style="background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:14px 16px;margin-bottom:16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:13px">
+          <div><div style="color:var(--muted);font-size:11px;margin-bottom:2px">Item</div><div style="font-weight:600">{{poRule?.item_name||poRule?.item_code}}</div></div>
+          <div><div style="color:var(--muted);font-size:11px;margin-bottom:2px">Warehouse</div><div>{{poRule?.warehouse||'—'}}</div></div>
+          <div><div style="color:var(--muted);font-size:11px;margin-bottom:2px">Current Stock</div><div style="color:#C92A2A;font-weight:700">{{flt(poRule?.actual_qty).toFixed(2)}} {{poRule?.uom||'Nos'}}</div></div>
+          <div><div style="color:var(--muted);font-size:11px;margin-bottom:2px">Reorder Level</div><div>{{flt(poRule?.reorder_level).toFixed(0)}} {{poRule?.uom||'Nos'}}</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Order Qty</label>
+            <input v-model.number="poQty" type="number" min="1" class="nim-input" style="font-family:var(--mono)"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Unit Rate (₹)</label>
+            <input v-model.number="poPrice" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Required By</label>
+            <input v-model="poReqdBy" type="date" class="nim-input"/>
+          </div>
+        </div>
+        <div style="background:#F3F0FF;border:1px solid rgba(112,72,232,.15);border-radius:8px;padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+          <span style="font-size:13px;font-weight:600">Total PO Value</span>
+          <span style="font-size:18px;font-weight:700;font-family:var(--mono);color:#7048E8">{{fmt(poQty*poPrice)}}</span>
+        </div>
+      </div>
+      <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--surf2,#F8F9FC)">
+        <button class="nim-btn nim-btn-ghost" @click="showPO=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="submitPO"><span v-html="icon('check',13)"></span> Submit PO</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Rule Drawer -->
+  <div v-if="showRuleDrawer" style="position:fixed;inset:0;z-index:900;background:rgba(0,0,0,.45);display:flex;justify-content:flex-end" @click.self="showRuleDrawer=false">
+    <div style="width:520px;max-width:95vw;height:100%;background:var(--surface);display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15)">
+      <div style="background:#7048E8;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+        <div>
+          <div style="color:#fff;font-size:15px;font-weight:700">{{editingRule?'Edit Reorder Rule':'Add Reorder Rule'}}</div>
+          <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:2px">Set min stock levels and auto-PO triggers</div>
+        </div>
+        <button @click="showRuleDrawer=false" style="background:rgba(255,255,255,.2);border:none;cursor:pointer;width:28px;height:28px;border-radius:6px;color:#fff;display:flex;align-items:center;justify-content:center">
+          <span v-html="icon('x',14)"></span>
+        </button>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:20px">
+        <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:8px">Item &amp; Location</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Item Code</label>
+            <input v-model="ruleForm.item_code" class="nim-input" :readonly="!!editingRule" :placeholder="editingRule?editingRule.item_code:'Item code'"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Warehouse</label>
+            <select v-model="ruleForm.warehouse" class="nim-input">
+              <option value="">All Warehouses</option>
+              <option v-for="w in warehouses" :key="w.name" :value="w.name">{{w.warehouse_name||w.name}}</option>
+            </select>
+          </div>
+        </div>
+        <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:8px;padding-top:14px;border-top:1px solid var(--border)">Stock Levels</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Reorder Level (min)</label>
+            <input v-model.number="ruleForm.min_level" type="number" min="0" class="nim-input" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Reorder Qty</label>
+            <input v-model.number="ruleForm.reorder_qty" type="number" min="1" class="nim-input" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Max Level</label>
+            <input v-model.number="ruleForm.max_level" type="number" min="0" class="nim-input" style="font-family:var(--mono)"/></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Safety Stock</label>
+            <input v-model.number="ruleForm.safety_stock" type="number" min="0" class="nim-input" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Lead Time (days)</label>
+            <input v-model.number="ruleForm.lead_time" type="number" min="0" class="nim-input" style="font-family:var(--mono)"/></div>
+        </div>
+        <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:8px;padding-top:14px;border-top:1px solid var(--border)">Supplier &amp; PO Settings</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Preferred Supplier</label>
+            <input v-model="ruleForm.supplier" class="nim-input" placeholder="Vendor name"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Buying Price (₹)</label>
+            <input v-model.number="ruleForm.buying_price" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)"/></div>
+        </div>
+      </div>
+      <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--surf2,#F8F9FC);flex-shrink:0">
+        <button class="nim-btn nim-btn-ghost" @click="showRuleDrawer=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="saveRule" style="min-width:120px">Save Rule</button>
+      </div>
+    </div>
+  </div>
+
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     GST RETURNS — GSTR-1
+  ═══════════════════════════════════════════════════════════════ */
+  const GSTReturnsGSTR1 = defineComponent({
+    name: "GSTReturnsGSTR1",
+    setup() {
+      const list = ref([]);
+      const loading = ref(false);
+      const now = new Date();
+      const period = reactive({ month: now.getMonth() + 1, year: now.getFullYear() });
+      const gstin = ref("");
+      const filingStatus = ref("Not Filed");
+      const activeTab = ref("B2B");
+      const selectedInv = ref(null);
+      const showDetail = ref(false);
+      const showFileModal = ref(false);
+      const fileOtp = ref("");
+
+      const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const TABS = ["B2B","B2CL","B2CS","CDNR","HSN","Nil/Exempt","Advances"];
+      const YEARS = Array.from({length:6}, (_,i) => now.getFullYear() - i);
+
+      // B2B = high-value (>2.5L), B2CS = small, Nil = zero-tax
+      const b2b     = computed(() => list.value.filter(i => flt(i.grand_total) > 250000));
+      const b2cl    = computed(() => list.value.filter(i => flt(i.grand_total) > 250000));
+      const b2cs    = computed(() => list.value.filter(i => flt(i.grand_total) <= 250000));
+      const nilData = computed(() => list.value.filter(i => flt(i.total_tax) === 0));
+      const tabData = computed(() => {
+        if (activeTab.value==="B2B")        return b2b.value;
+        if (activeTab.value==="B2CL")       return b2cl.value;
+        if (activeTab.value==="B2CS")       return b2cs.value;
+        if (activeTab.value==="Nil/Exempt") return nilData.value;
+        return list.value;
+      });
+
+      const taxable   = computed(() => list.value.reduce((s,i) => s+flt(i.net_total),0));
+      const totalTax  = computed(() => list.value.reduce((s,i) => s+flt(i.total_tax),0));
+      const cgstTotal = computed(() => totalTax.value / 2);
+      const sgstTotal = computed(() => totalTax.value / 2);
+      const igstTotal = computed(() => 0);
+
+      async function load() {
+        loading.value = true;
+        try {
+          const lastDay  = new Date(period.year, period.month, 0).getDate();
+          const fromDate = `${period.year}-${String(period.month).padStart(2,"0")}-01`;
+          const toDate   = `${period.year}-${String(period.month).padStart(2,"0")}-${lastDay}`;
+          const data = await apiList("Sales Invoice", {
+            filters: [["docstatus","=",1],["posting_date",">=",fromDate],["posting_date","<=",toDate]],
+            fields: ["name","customer","customer_name","posting_date","net_total","total_tax","grand_total","status"],
+            limit: 500,
+          });
+          list.value = data || [];
+          filingStatus.value = "Not Filed";
+        } catch(e) { toast("Failed to load invoices","error"); }
+        finally { loading.value = false; }
+      }
+
+      function exportJson() {
+        const fp = `${String(period.month).padStart(2,"0")}${period.year}`;
+        const payload = {
+          gstin: gstin.value, fp,
+          b2b:  b2b.value.map(i => ({ inv:[{ inum:i.name, idt:i.posting_date, val:flt(i.grand_total), rchrg:"N",
+              itms:[{num:1, itm_det:{txval:flt(i.net_total),camt:flt(i.total_tax)/2,samt:flt(i.total_tax)/2,iamt:0}}]
+            }] })),
+          b2cs: b2cs.value.map(i => ({ typ:"OE", txval:flt(i.net_total), camt:flt(i.total_tax)/2, samt:flt(i.total_tax)/2, iamt:0 })),
+        };
+        const blob = new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `GSTR1_${fp}.json`;
+        a.click();
+        toast("GSTR-1 JSON exported");
+      }
+
+      function fileReturn() {
+        if (!fileOtp.value) { toast("Enter OTP to proceed","error"); return; }
+        filingStatus.value = "Filed"; showFileModal.value = false; fileOtp.value = "";
+        toast("GSTR-1 filed successfully","success");
+      }
+
+      onMounted(load);
+      return { list, loading, period, gstin, filingStatus, activeTab, selectedInv, showDetail, showFileModal, fileOtp,
+               MONTHS, TABS, YEARS, b2b, b2cl, b2cs, nilData, tabData,
+               taxable, cgstTotal, sgstTotal, igstTotal, totalTax,
+               load, exportJson, fileReturn, fmt, fmtDate, flt, icon };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px;background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:5px 10px">
+        <select v-model.number="period.month" class="nim-input" style="border:none;background:transparent;padding:2px 4px;font-weight:600;font-size:13px">
+          <option v-for="(m,i) in MONTHS" :key="i" :value="i+1">{{m}}</option>
+        </select>
+        <select v-model.number="period.year" class="nim-input" style="border:none;background:transparent;padding:2px 4px;font-weight:600;font-size:13px">
+          <option v-for="y in YEARS" :key="y" :value="y">{{y}}</option>
+        </select>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span style="font-size:12px;color:var(--muted);font-weight:600">GSTIN:</span>
+        <input v-model="gstin" class="nim-input" placeholder="29XXXXX..." style="width:190px;font-family:var(--mono);font-size:12px"/>
+      </div>
+      <span :style="{background:filingStatus==='Filed'?'#EBFBEE':'#FFF3BF',color:filingStatus==='Filed'?'#2F9E44':'#E67700',padding:'3px 12px',borderRadius:'20px',fontSize:'11.5px',fontWeight:600}">
+        {{filingStatus}}
+      </span>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" @click="load" :disabled="loading"><span v-html="icon('refresh',14)" style="vertical-align:-3px;margin-right:4px"/>Refresh</button>
+      <button class="nim-btn nim-btn-ghost" @click="exportJson"><span v-html="icon('download',14)" style="vertical-align:-3px;margin-right:4px"/>Export JSON</button>
+      <button class="nim-btn nim-btn-primary" @click="showFileModal=true" :disabled="filingStatus==='Filed'">File on Portal</button>
+    </div>
+  </div>
+
+  <!-- Summary Tiles -->
+  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:14px;padding:16px 20px 0">
+    <div v-for="tile in [
+      {label:'Taxable Value',val:taxable,color:'#1971C2',bg:'#E7F5FF'},
+      {label:'CGST',val:cgstTotal,color:'#2F9E44',bg:'#EBFBEE'},
+      {label:'SGST',val:sgstTotal,color:'#0CA678',bg:'#E6FCF5'},
+      {label:'IGST',val:igstTotal,color:'#7048E8',bg:'#F3F0FF'},
+      {label:'Total Tax',val:totalTax,color:'#C92A2A',bg:'#FFF5F5'},
+    ]" :key="tile.label" :style="{background:tile.bg,borderRadius:'10px',padding:'14px 16px',borderLeft:'3px solid '+tile.color}">
+      <div style="font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;opacity:.75">{{tile.label}}</div>
+      <div :style="{fontSize:'19px',fontWeight:700,color:tile.color,marginTop:'6px',fontFamily:'var(--mono)'}">&#8377;{{fmt(tile.val)}}</div>
+      <div style="font-size:11px;color:var(--muted);margin-top:2px">{{list.length}} inv</div>
+    </div>
+  </div>
+
+  <!-- Section Tabs -->
+  <div style="padding:16px 20px 0;display:flex;gap:4px;flex-wrap:wrap">
+    <button v-for="tab in TABS" :key="tab" @click="activeTab=tab"
+      :style="{padding:'6px 14px',borderRadius:'6px 6px 0 0',fontSize:'12px',fontWeight:600,cursor:'pointer',border:'1px solid var(--border)',borderBottom:'none',background:activeTab===tab?'white':'var(--surf2,#F8F9FC)',color:activeTab===tab?'#7048E8':'var(--muted)'}">
+      {{tab}}
+      <span v-if="tab==='B2B'" style="margin-left:4px;background:#7048E8;color:white;border-radius:10px;padding:0 6px;font-size:10px">{{b2b.length}}</span>
+      <span v-if="tab==='B2CL'" style="margin-left:4px;background:#1971C2;color:white;border-radius:10px;padding:0 6px;font-size:10px">{{b2cl.length}}</span>
+      <span v-if="tab==='B2CS'" style="margin-left:4px;background:#2F9E44;color:white;border-radius:10px;padding:0 6px;font-size:10px">{{b2cs.length}}</span>
+      <span v-if="tab==='Nil/Exempt'" style="margin-left:4px;background:#868E96;color:white;border-radius:10px;padding:0 6px;font-size:10px">{{nilData.length}}</span>
+    </button>
+  </div>
+
+  <!-- Table -->
+  <div class="cust-table-card" style="margin:0 20px 20px;border-radius:0 8px 8px 8px;border-top:2px solid #7048E8;overflow-x:auto">
+    <div v-if="loading" style="text-align:center;padding:48px;color:var(--muted)">Loading...</div>
+    <table v-else class="cust-table" style="min-width:800px">
+      <thead><tr>
+        <th>Invoice No.</th><th>Customer</th><th>Date</th>
+        <th class="num">Taxable (Net)</th><th class="num">CGST (est.)</th>
+        <th class="num">SGST (est.)</th><th class="num">Total Tax</th><th class="num">Grand Total</th>
+      </tr></thead>
+      <tbody>
+        <tr v-if="!tabData.length"><td colspan="8" style="text-align:center;padding:40px;color:var(--muted)">No invoices for this period &amp; section</td></tr>
+        <tr v-for="inv in tabData" :key="inv.name" @click="selectedInv=inv;showDetail=true" style="cursor:pointer">
+          <td><span style="color:#7048E8;font-weight:600;font-family:var(--mono)">{{inv.name}}</span></td>
+          <td>{{inv.customer}}</td>
+          <td>{{fmtDate(inv.posting_date)}}</td>
+          <td class="num">&#8377;{{fmt(inv.net_total)}}</td>
+          <td class="num" style="color:#2F9E44">&#8377;{{fmt(flt(inv.total_tax)/2)}}</td>
+          <td class="num" style="color:#0CA678">&#8377;{{fmt(flt(inv.total_tax)/2)}}</td>
+          <td class="num" style="color:#7048E8">&#8377;{{fmt(inv.total_tax)}}</td>
+          <td class="num" style="font-weight:700">&#8377;{{fmt(inv.grand_total)}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Invoice Detail Drawer -->
+  <div v-if="showDetail && selectedInv" class="nim-overlay" @click.self="showDetail=false">
+    <div class="nim-dialog" style="width:520px">
+      <div class="nim-header">
+        <span style="font-weight:700">{{selectedInv.name}}</span>
+        <button class="nim-btn nim-btn-ghost" @click="showDetail=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div v-for="[lbl,val] in [
+          ['Customer',selectedInv.customer],['Customer Name',selectedInv.customer_name||'—'],
+          ['Date',fmtDate(selectedInv.posting_date)],['Status',selectedInv.status||'—'],
+          ['Net (Taxable)','₹'+fmt(selectedInv.net_total)],['Total Tax','₹'+fmt(selectedInv.total_tax)],
+          ['CGST (est.)','₹'+fmt(flt(selectedInv.total_tax)/2)],['SGST (est.)','₹'+fmt(flt(selectedInv.total_tax)/2)],
+          ['Grand Total','₹'+fmt(selectedInv.grand_total)],['IGST','₹0 (intra-state)'],
+        ]" :key="lbl" style="background:var(--surf2,#F8F9FC);border-radius:6px;padding:10px 12px">
+          <div style="font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">{{lbl}}</div>
+          <div style="font-size:13px;font-weight:600;word-break:break-all">{{val}}</div>
+        </div>
+      </div>
+      <div class="nim-footer"><button class="nim-btn nim-btn-ghost" @click="showDetail=false">Close</button></div>
+    </div>
+  </div>
+
+  <!-- File on Portal Modal -->
+  <div v-if="showFileModal" class="nim-overlay" @click.self="showFileModal=false">
+    <div class="nim-dialog" style="width:440px">
+      <div class="nim-header">
+        <span style="font-weight:700">File GSTR-1 on Portal</span>
+        <button class="nim-btn nim-btn-ghost" @click="showFileModal=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <div style="background:#E7F5FF;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#1971C2">
+          Filing GSTR-1 for <strong>{{MONTHS[period.month-1]}} {{period.year}}</strong> — {{list.length}} invoices.<br>
+          An OTP has been sent to your registered mobile number.
+        </div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#495057;margin-bottom:6px">OTP</label>
+        <input v-model="fileOtp" class="nim-input" placeholder="• • • • • •" maxlength="6"
+          style="font-family:var(--mono);letter-spacing:6px;text-align:center;font-size:20px"/>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showFileModal=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="fileReturn">Confirm &amp; File</button>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     GST RETURNS — GSTR-3B
+  ═══════════════════════════════════════════════════════════════ */
+  const GSTReturnsGSTR3B = defineComponent({
+    name: "GSTReturnsGSTR3B",
+    setup() {
+      const salesList = ref([]);
+      const purchList = ref([]);
+      const loading   = ref(false);
+      const saving    = ref(false);
+      const now = new Date();
+      const period = reactive({ month: now.getMonth() + 1, year: now.getFullYear() });
+      const openSecs = ref(new Set(["3.1","4"]));
+      const showPayModal = ref(false);
+      const payRef = ref("");
+      const filingStatus = ref("Not Filed");
+
+      const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+      const YEARS  = Array.from({length:6}, (_,i) => now.getFullYear() - i);
+
+      // 3.1 Outward supply totals (auto-fill from sales)
+      const outward = reactive({ taxable:0, cgst:0, sgst:0, igst:0, cess:0 });
+      // 4 ITC Available (auto-fill from purchases)
+      const itc = reactive({ cgst:0, sgst:0, igst:0, cess:0 });
+      // 5.1 Interest / Late fee (manual)
+      const interest = reactive({ cgst:0, sgst:0, igst:0 });
+      const lateFee  = reactive({ cgst:0, sgst:0, igst:0 });
+
+      const netLiability = computed(() => (outward.cgst+outward.sgst+outward.igst) - (itc.cgst+itc.sgst+itc.igst));
+      const totalLiability = computed(() => outward.cgst+outward.sgst+outward.igst+interest.cgst+interest.sgst+interest.igst+lateFee.cgst+lateFee.sgst+lateFee.igst);
+      const itcTotal = computed(() => itc.cgst+itc.sgst+itc.igst);
+
+      function fillFromData() {
+        const sTax = salesList.value.reduce((s,i)=>s+flt(i.total_tax),0);
+        const pTax = purchList.value.reduce((s,i)=>s+flt(i.total_tax),0);
+        outward.taxable = salesList.value.reduce((s,i)=>s+flt(i.net_total),0);
+        outward.cgst    = Math.round(sTax/2*100)/100;
+        outward.sgst    = Math.round(sTax/2*100)/100;
+        outward.igst    = 0;
+        itc.cgst        = Math.round(pTax/2*100)/100;
+        itc.sgst        = Math.round(pTax/2*100)/100;
+        itc.igst        = 0;
       }
 
       async function load() {
         loading.value = true;
         try {
-          list.value = await apiGET("zoho_books_clone.api.inventory.get_reorder_items", {}) || [];
-        } catch(e) { toast("Could not load reorder alerts: " + e.message,"error"); list.value = []; }
-        loading.value = false;
+          const lastDay  = new Date(period.year, period.month, 0).getDate();
+          const fromDate = `${period.year}-${String(period.month).padStart(2,"0")}-01`;
+          const toDate   = `${period.year}-${String(period.month).padStart(2,"0")}-${lastDay}`;
+          const flds     = ["name","net_total","total_tax","grand_total"];
+          const [s, p] = await Promise.all([
+            apiList("Sales Invoice",    {filters:[["docstatus","=",1],["posting_date",">=",fromDate],["posting_date","<=",toDate]], fields:flds, limit:500}),
+            apiList("Purchase Invoice", {filters:[["docstatus","=",1],["posting_date",">=",fromDate],["posting_date","<=",toDate]], fields:flds, limit:500}),
+          ]);
+          salesList.value = s||[]; purchList.value = p||[];
+          fillFromData();
+          filingStatus.value = "Not Filed";
+        } catch(e) { toast("Failed to load data","error"); }
+        finally { loading.value = false; }
+      }
+
+      function toggleSec(k) {
+        const s = new Set(openSecs.value);
+        s.has(k) ? s.delete(k) : s.add(k);
+        openSecs.value = s;
+      }
+
+      function exportJson() {
+        const fp = `${String(period.month).padStart(2,"0")}${period.year}`;
+        const payload = {
+          fp,
+          sup_details: { osup_det:{ txval:outward.taxable, camt:outward.cgst, samt:outward.sgst, iamt:outward.igst } },
+          itc_elg:     { itc_avl:{ cgst:itc.cgst, sgst:itc.sgst, igst:itc.igst } },
+          intr_ltfee:  { intr_details:{ cgst:interest.cgst, sgst:interest.sgst, igst:interest.igst } },
+        };
+        const blob = new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `GSTR3B_${fp}.json`;
+        a.click();
+        toast("GSTR-3B JSON exported");
+      }
+
+      function payAndFile() {
+        if (!payRef.value) { toast("Enter challan reference","error"); return; }
+        filingStatus.value = "Filed"; showPayModal.value = false; payRef.value = "";
+        toast("GSTR-3B filed successfully","success");
       }
 
       onMounted(load);
-      return { list, loading, search, filtered, summary, urgency,
-        load, fmt, fmtDate, flt, icon };
+      return { salesList, purchList, loading, saving, period, openSecs, showPayModal, payRef, filingStatus,
+               MONTHS, YEARS, outward, itc, interest, lateFee,
+               netLiability, totalLiability, itcTotal,
+               load, toggleSec, exportJson, payAndFile, fmt, flt, icon };
     },
-    template: `
-<div class="cust-page">
-  <div class="dn-sum-strip">
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Items Below Reorder</div><div class="dn-sum-val">{{summary.total}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Critical (Zero Stock)</div><div class="dn-sum-val" style="color:#C92A2A">{{summary.critical}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Warning (&lt;50% Level)</div><div class="dn-sum-val" style="color:#E67700">{{summary.warning}}</div></div>
-    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Shortage Qty</div><div class="dn-sum-val" style="color:#3B5BDB">{{summary.totalShortage.toFixed(2)}}</div></div>
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:6px;background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:5px 10px">
+        <select v-model.number="period.month" class="nim-input" style="border:none;background:transparent;padding:2px 4px;font-weight:600;font-size:13px">
+          <option v-for="(m,i) in MONTHS" :key="i" :value="i+1">{{m}}</option>
+        </select>
+        <select v-model.number="period.year" class="nim-input" style="border:none;background:transparent;padding:2px 4px;font-weight:600;font-size:13px">
+          <option v-for="y in YEARS" :key="y" :value="y">{{y}}</option>
+        </select>
+      </div>
+      <span :style="{background:filingStatus==='Filed'?'#EBFBEE':'#FFF3BF',color:filingStatus==='Filed'?'#2F9E44':'#E67700',padding:'3px 12px',borderRadius:'20px',fontSize:'11.5px',fontWeight:600}">
+        {{filingStatus}}
+      </span>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" @click="load" :disabled="loading"><span v-html="icon('refresh',14)" style="vertical-align:-3px;margin-right:4px"/>Refresh</button>
+      <button class="nim-btn nim-btn-ghost" @click="exportJson"><span v-html="icon('download',14)" style="vertical-align:-3px;margin-right:4px"/>Export JSON</button>
+      <button class="nim-btn nim-btn-primary" @click="showPayModal=true" :disabled="filingStatus==='Filed'">Pay &amp; File</button>
+    </div>
   </div>
 
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-search">
-        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
-        <input class="cust-search-input" v-model="search" placeholder="Search items…"/>
+  <!-- Hero Cards -->
+  <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:16px 20px 0">
+    <div style="background:linear-gradient(135deg,#C92A2A,#E03131);border-radius:12px;padding:18px 20px;color:white">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;opacity:.85">Net Tax Payable</div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">&#8377;{{fmt(Math.max(0,netLiability))}}</div>
+      <div style="font-size:11.5px;opacity:.8;margin-top:4px">After ITC deduction</div>
+    </div>
+    <div style="background:linear-gradient(135deg,#1864AB,#1971C2);border-radius:12px;padding:18px 20px;color:white">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;opacity:.85">Total Tax Liability</div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">&#8377;{{fmt(totalLiability)}}</div>
+      <div style="font-size:11.5px;opacity:.8;margin-top:4px">Incl. interest &amp; late fee</div>
+    </div>
+    <div style="background:linear-gradient(135deg,#2B8A3E,#2F9E44);border-radius:12px;padding:18px 20px;color:white">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;opacity:.85">ITC Available</div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">&#8377;{{fmt(itcTotal)}}</div>
+      <div style="font-size:11.5px;opacity:.8;margin-top:4px">Input tax credit</div>
+    </div>
+  </div>
+
+  <!-- Form Sections -->
+  <div style="padding:16px 20px 24px;display:flex;flex-direction:column;gap:10px">
+
+    <!-- 3.1 Outward Supplies -->
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div @click="toggleSec('3.1')" style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;cursor:pointer;background:var(--surf2,#F8F9FC)">
+        <div style="font-weight:700;font-size:13.5px">3.1 — Details of Outward Supplies and Inward Supplies on Reverse Charge</div>
+        <span v-html="icon(openSecs.has('3.1')?'chevU':'chevD',16)" style="color:var(--muted)"/>
+      </div>
+      <div v-if="openSecs.has('3.1')" style="padding:16px 18px;overflow-x:auto">
+        <table class="cust-table" style="min-width:600px">
+          <thead><tr><th>Nature</th><th class="num">Taxable Value</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="font-size:12.5px">a. Outward taxable supplies (other than zero rated, nil and exempt)</td>
+              <td class="num"><input v-model.number="outward.taxable" type="number" class="nim-input" style="text-align:right;width:120px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="outward.cgst"    type="number" class="nim-input" style="text-align:right;width:100px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="outward.sgst"    type="number" class="nim-input" style="text-align:right;width:100px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="outward.igst"    type="number" class="nim-input" style="text-align:right;width:100px;font-family:var(--mono)"/></td>
+            </tr>
+            <tr style="background:#F8F9FA;font-weight:700">
+              <td>Total</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.taxable)}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.cgst)}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.sgst)}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.igst)}}</td>
+            </tr>
+          </tbody>
+        </table>
       </div>
     </div>
-    <div class="cust-toolbar-right">
-      <button class="nim-btn nim-btn-ghost" @click="load"><span v-html="icon('refresh')"></span> Refresh</button>
+
+    <!-- 4 ITC -->
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div @click="toggleSec('4')" style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;cursor:pointer;background:var(--surf2,#F8F9FC)">
+        <div style="font-weight:700;font-size:13.5px">4 — Eligible ITC</div>
+        <span v-html="icon(openSecs.has('4')?'chevU':'chevD',16)" style="color:var(--muted)"/>
+      </div>
+      <div v-if="openSecs.has('4')" style="padding:16px 18px;overflow-x:auto">
+        <table class="cust-table" style="min-width:600px">
+          <thead><tr><th>Details</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="font-size:12.5px">(A) ITC Available (whether in full or part)</td>
+              <td class="num"><input v-model.number="itc.cgst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="itc.sgst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="itc.igst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+            </tr>
+            <tr style="background:#EBFBEE;font-weight:700">
+              <td>Net ITC Available</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itc.cgst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itc.sgst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itc.igst)}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 5.1 Interest / Late Fee -->
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div @click="toggleSec('5.1')" style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;cursor:pointer;background:var(--surf2,#F8F9FC)">
+        <div style="font-weight:700;font-size:13.5px">5.1 — Interest and Late Fee for Previous Tax Period</div>
+        <span v-html="icon(openSecs.has('5.1')?'chevU':'chevD',16)" style="color:var(--muted)"/>
+      </div>
+      <div v-if="openSecs.has('5.1')" style="padding:16px 18px;overflow-x:auto">
+        <table class="cust-table" style="min-width:600px">
+          <thead><tr><th>Description</th><th class="num">CGST</th><th class="num">SGST</th><th class="num">IGST</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="font-size:12.5px">Interest</td>
+              <td class="num"><input v-model.number="interest.cgst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="interest.sgst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="interest.igst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+            </tr>
+            <tr>
+              <td style="font-size:12.5px">Late Fee</td>
+              <td class="num"><input v-model.number="lateFee.cgst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="lateFee.sgst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+              <td class="num"><input v-model.number="lateFee.igst" type="number" class="nim-input" style="text-align:right;width:110px;font-family:var(--mono)"/></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- 6 Payment Summary -->
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div @click="toggleSec('6')" style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;cursor:pointer;background:var(--surf2,#F8F9FC)">
+        <div style="font-weight:700;font-size:13.5px">6 — Payment of Tax</div>
+        <span v-html="icon(openSecs.has('6')?'chevU':'chevD',16)" style="color:var(--muted)"/>
+      </div>
+      <div v-if="openSecs.has('6')" style="padding:16px 18px;overflow-x:auto">
+        <table class="cust-table" style="min-width:700px">
+          <thead><tr><th>Tax</th><th class="num">Tax Payable</th><th class="num">ITC</th><th class="num">Cash</th><th class="num">Interest</th><th class="num">Late Fee</th></tr></thead>
+          <tbody>
+            <tr v-for="[tax,liab,itcv,intr,lf] in [
+              ['CGST',outward.cgst,itc.cgst,interest.cgst,lateFee.cgst],
+              ['SGST',outward.sgst,itc.sgst,interest.sgst,lateFee.sgst],
+              ['IGST',outward.igst,itc.igst,interest.igst,lateFee.igst],
+            ]" :key="tax">
+              <td style="font-weight:700">{{tax}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(liab)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(Math.min(itcv,liab))}}</td>
+              <td class="num" style="font-family:var(--mono);color:#C92A2A">&#8377;{{fmt(Math.max(0,liab-itcv))}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(intr)}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(lf)}}</td>
+            </tr>
+            <tr style="background:#F8F9FA;font-weight:800;border-top:2px solid var(--border)">
+              <td>Total</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.cgst+outward.sgst+outward.igst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itcTotal)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#C92A2A">&#8377;{{fmt(Math.max(0,netLiability))}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(interest.cgst+interest.sgst+interest.igst)}}</td>
+              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(lateFee.cgst+lateFee.sgst+lateFee.igst)}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Pay & File Modal -->
+  <div v-if="showPayModal" class="nim-overlay" @click.self="showPayModal=false">
+    <div class="nim-dialog" style="width:440px">
+      <div class="nim-header">
+        <span style="font-weight:700">Pay &amp; File GSTR-3B</span>
+        <button class="nim-btn nim-btn-ghost" @click="showPayModal=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <div style="background:#FFF3BF;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#E67700">
+          Net payable via cash ledger: <strong>&#8377;{{fmt(Math.max(0,netLiability))}}</strong>
+        </div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#495057;margin-bottom:6px">Challan Reference / UTR</label>
+        <input v-model="payRef" class="nim-input" placeholder="e.g. CRN2026XXXX" style="font-family:var(--mono)"/>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showPayModal=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="payAndFile">Confirm Payment &amp; File</button>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     GST RETURNS — e-Invoice
+  ═══════════════════════════════════════════════════════════════ */
+  const GSTReturnsEInvoice = defineComponent({
+    name: "GSTReturnsEInvoice",
+    setup() {
+      const list         = ref([]);
+      const loading      = ref(false);
+      const search       = ref("");
+      const filterStatus = ref("All");
+      const selectedRows = ref(new Set());
+      const selectedInv  = ref(null);
+      const showDetail   = ref(false);
+      const showCancel   = ref(false);
+      const showEligible = ref(false);
+      const cancelReason = ref("");
+      const generating   = ref(new Set());
+
+      const FILTER_OPTS = ["All","IRN Generated","Pending","Cancelled"];
+      const CANCEL_REASONS = ["Duplicate","Data Entry Error","Order Cancelled","Other"];
+
+      const filtered = computed(() => {
+        let r = list.value;
+        if (filterStatus.value !== "All") {
+          if (filterStatus.value === "IRN Generated") r = r.filter(i => i.irn);
+          else if (filterStatus.value === "Pending")  r = r.filter(i => !i.irn && !i.einv_cancelled);
+          else if (filterStatus.value === "Cancelled") r = r.filter(i => i.einv_cancelled);
+        }
+        if (search.value) {
+          const q = search.value.toLowerCase();
+          r = r.filter(i => (i.name||"").toLowerCase().includes(q) || (i.customer||"").toLowerCase().includes(q));
+        }
+        return r;
+      });
+
+      const totalCount   = computed(() => list.value.length);
+      const irnCount     = computed(() => list.value.filter(i => i.irn).length);
+      const pendingCount = computed(() => list.value.filter(i => !i.irn && !i.einv_cancelled).length);
+      const cancelCount  = computed(() => list.value.filter(i => i.einv_cancelled).length);
+
+      async function load() {
+        loading.value = true;
+        try {
+          const data = await apiList("Sales Invoice", {
+            filters: [["docstatus","=",1]],
+            fields: ["name","customer","customer_name","posting_date","net_total","total_tax","grand_total","status"],
+            order_by: "posting_date desc",
+            limit: 500,
+          });
+          // Preserve any locally-simulated IRN data already in list
+          const existing = Object.fromEntries(list.value.map(i=>[i.name,i]));
+          list.value = (data||[]).map(i => ({
+            ...i,
+            irn:            existing[i.name]?.irn            || null,
+            ack_no:         existing[i.name]?.ack_no         || null,
+            ack_date:       existing[i.name]?.ack_date       || null,
+            ewaybill:       existing[i.name]?.ewaybill       || null,
+            einv_cancelled: existing[i.name]?.einv_cancelled || 0,
+          }));
+        } catch(e) { toast("Failed to load invoices","error"); }
+        finally { loading.value = false; }
+      }
+
+      async function generateIRN(inv) {
+        const g = new Set(generating.value);
+        g.add(inv.name); generating.value = g;
+        try {
+          // Simulate IRN generation — in production this would call the IRP API
+          await new Promise(r => setTimeout(r, 1200));
+          const fakeIRN = "IRN" + inv.name.replace(/\D/g,"") + Date.now().toString(36).toUpperCase();
+          const fakeAck = "ACK" + Date.now().toString(36).toUpperCase();
+          inv.irn      = fakeIRN;
+          inv.ack_no   = fakeAck;
+          inv.ack_date = new Date().toISOString().slice(0,10);
+          toast(`IRN generated for ${inv.name}`,"success");
+        } catch(e) { toast("IRN generation failed","error"); }
+        finally { const g2 = new Set(generating.value); g2.delete(inv.name); generating.value = g2; }
+      }
+
+      async function bulkGenerateIRN() {
+        const pending = filtered.value.filter(i => !i.irn && !i.einv_cancelled);
+        if (!pending.length) { toast("No pending invoices in current view","error"); return; }
+        for (const inv of pending) { await generateIRN(inv); }
+        toast(`Bulk IRN generation complete for ${pending.length} invoices`,"success");
+      }
+
+      function openCancel(inv) { selectedInv.value = inv; cancelReason.value = ""; showCancel.value = true; }
+
+      function confirmCancel() {
+        if (!cancelReason.value) { toast("Select a cancellation reason","error"); return; }
+        selectedInv.value.irn = null; selectedInv.value.einv_cancelled = 1;
+        showCancel.value = false; toast("IRN cancelled","success");
+      }
+
+      function toggleRow(name) {
+        const s = new Set(selectedRows.value);
+        s.has(name) ? s.delete(name) : s.add(name);
+        selectedRows.value = s;
+      }
+
+      function toggleAll() {
+        if (selectedRows.value.size === filtered.value.length)
+          selectedRows.value = new Set();
+        else
+          selectedRows.value = new Set(filtered.value.map(i => i.name));
+      }
+
+      onMounted(load);
+      return {
+        list, loading, search, filterStatus, selectedRows, selectedInv, showDetail, showCancel,
+        showEligible, cancelReason, generating, FILTER_OPTS, CANCEL_REASONS,
+        filtered, totalCount, irnCount, pendingCount, cancelCount,
+        load, generateIRN, bulkGenerateIRN, openCancel, confirmCancel, toggleRow, toggleAll,
+        fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="font-size:14px;font-weight:700;color:var(--txt)">e-Invoice (IRN)</div>
+    <div style="display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" @click="showEligible=true"><span v-html="icon('shield',14)" style="vertical-align:-3px;margin-right:4px"/>Eligibility</button>
+      <button class="nim-btn nim-btn-ghost" @click="load" :disabled="loading"><span v-html="icon('refresh',14)" style="vertical-align:-3px;margin-right:4px"/>Refresh</button>
+      <button class="nim-btn nim-btn-primary" @click="bulkGenerateIRN">Bulk Generate IRN</button>
     </div>
   </div>
 
-  <div class="cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
+  <!-- Summary Cards -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:16px 20px 0">
+    <div v-for="card in [
+      {label:'Total B2B Invoices',val:totalCount,  color:'#1971C2',bg:'#E7F5FF',icon:'file'},
+      {label:'IRN Generated',     val:irnCount,    color:'#2F9E44',bg:'#EBFBEE',icon:'check'},
+      {label:'Pending',           val:pendingCount, color:'#E67700',bg:'#FFF3BF',icon:'alert'},
+      {label:'Cancelled',         val:cancelCount,  color:'#C92A2A',bg:'#FFF5F5',icon:'cancel'},
+    ]" :key="card.label" :style="{background:card.bg,borderRadius:'10px',padding:'14px 16px',borderLeft:'3px solid '+card.color,display:'flex',alignItems:'center',gap:'14px'}">
+      <div :style="{width:'38px',height:'38px',borderRadius:'50%',background:card.color,display:'flex',alignItems:'center',justifyContent:'center',color:'white',flexShrink:0}">
+        <span v-html="icon(card.icon,18)"/>
+      </div>
+      <div>
+        <div style="font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;opacity:.75">{{card.label}}</div>
+        <div :style="{fontSize:'22px',fontWeight:800,color:card.color,fontFamily:'var(--mono)'}">{{card.val}}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Filter & Search Bar -->
+  <div style="padding:12px 20px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+    <div style="position:relative;flex:1;min-width:220px;max-width:340px">
+      <span v-html="icon('search',14)" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--muted)"/>
+      <input v-model="search" class="nim-input" placeholder="Search invoice, customer..." style="padding-left:32px"/>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button v-for="opt in FILTER_OPTS" :key="opt" @click="filterStatus=opt"
+        :style="{padding:'5px 14px',borderRadius:'20px',border:'1.5px solid var(--border)',fontSize:'12px',fontWeight:600,cursor:'pointer',
+          background:filterStatus===opt?'#1971C2':'white',color:filterStatus===opt?'white':'var(--muted)'}">
+        {{opt}}
+      </button>
+    </div>
+  </div>
+
+  <!-- Table -->
+  <div class="cust-table-card" style="margin:12px 20px 20px;overflow-x:auto">
+    <div v-if="loading" style="text-align:center;padding:48px;color:var(--muted)">Loading invoices...</div>
+    <table v-else class="cust-table" style="min-width:1000px">
+      <thead><tr>
+        <th style="width:36px"><input type="checkbox" :checked="selectedRows.size===filtered.length&&filtered.length>0" @change="toggleAll" style="cursor:pointer"/></th>
+        <th>Invoice No.</th><th>Customer</th><th>Date</th>
+        <th class="num">Net</th><th class="num">Tax</th><th class="num">Total</th><th>IRN Status</th><th>Ack No.</th><th style="width:160px">Actions</th>
+      </tr></thead>
+      <tbody>
+        <tr v-if="!filtered.length"><td colspan="10" style="text-align:center;padding:40px;color:var(--muted)">No invoices found</td></tr>
+        <tr v-for="inv in filtered" :key="inv.name">
+          <td><input type="checkbox" :checked="selectedRows.has(inv.name)" @change="toggleRow(inv.name)" style="cursor:pointer"/></td>
+          <td>
+            <span @click="selectedInv=inv;showDetail=true" style="color:#1971C2;font-weight:600;font-family:var(--mono);cursor:pointer">{{inv.name}}</span>
+          </td>
+          <td>{{inv.customer}}</td>
+          <td>{{fmtDate(inv.posting_date)}}</td>
+          <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(inv.net_total)}}</td>
+          <td class="num" style="font-family:var(--mono);color:#7048E8">&#8377;{{fmt(inv.total_tax)}}</td>
+          <td class="num" style="font-weight:700">&#8377;{{fmt(inv.grand_total)}}</td>
+          <td>
+            <span v-if="inv.einv_cancelled" style="background:#FFF5F5;color:#C92A2A;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Cancelled</span>
+            <span v-else-if="inv.irn" style="background:#EBFBEE;color:#2F9E44;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Generated</span>
+            <span v-else style="background:#FFF3BF;color:#E67700;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Pending</span>
+          </td>
+          <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">{{inv.ack_no||'—'}}</td>
+          <td>
+            <div style="display:flex;gap:6px;align-items:center">
+              <button v-if="!inv.irn && !inv.einv_cancelled"
+                class="nim-btn nim-btn-primary" style="padding:3px 10px;font-size:11.5px"
+                @click="generateIRN(inv)" :disabled="generating.has(inv.name)">
+                {{generating.has(inv.name)?'Generating...':'Generate IRN'}}
+              </button>
+              <button v-if="inv.irn && !inv.einv_cancelled"
+                class="nim-btn nim-btn-ghost" style="padding:3px 10px;font-size:11.5px;color:#C92A2A;border-color:#C92A2A"
+                @click="openCancel(inv)">Cancel IRN</button>
+              <button v-if="inv.irn"
+                class="nim-btn nim-btn-ghost" style="padding:3px 8px;font-size:11.5px"
+                @click="selectedInv=inv;showDetail=true" title="View IRN details">
+                <span v-html="icon('eye',13)"/>
+              </button>
+            </div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- IRN Detail Drawer -->
+  <div v-if="showDetail && selectedInv" class="nim-overlay" @click.self="showDetail=false">
+    <div class="nim-dialog" style="width:540px">
+      <div class="nim-header">
+        <span style="font-weight:700">{{selectedInv.name}} — IRN Details</span>
+        <button class="nim-btn nim-btn-ghost" @click="showDetail=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <!-- IRN box -->
+        <div style="background:#F3F0FF;border:1.5px dashed #7048E8;border-radius:10px;padding:14px 16px;margin-bottom:16px">
+          <div style="font-size:10.5px;font-weight:700;color:#7048E8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">Invoice Reference Number (IRN)</div>
+          <div v-if="selectedInv.irn" style="font-family:var(--mono);font-size:12.5px;word-break:break-all;font-weight:600;color:#1A1A2E">{{selectedInv.irn}}</div>
+          <div v-else style="font-size:13px;color:var(--muted)">IRN not yet generated</div>
+        </div>
+        <!-- QR Visual -->
+        <div v-if="selectedInv.irn" style="background:#1A1A2E;border-radius:10px;padding:20px;margin-bottom:16px;display:flex;align-items:center;justify-content:center;gap:20px">
+          <div style="display:grid;grid-template-columns:repeat(5,12px);grid-template-rows:repeat(5,12px);gap:2px">
+            <div v-for="n in 25" :key="n" :style="{background:[1,2,3,4,5,6,10,11,15,16,20,21,22,23,24,25].includes(n)?'white':'transparent',borderRadius:'2px'}"/>
+          </div>
+          <div style="color:white;font-size:11.5px;opacity:.8;text-align:center">
+            <div v-html="icon('qr',32)" style="color:#7048E8;margin-bottom:6px"/>
+            Scan QR to verify
+          </div>
+        </div>
+        <!-- Details grid -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div v-for="[lbl,val] in [
+            ['Customer',selectedInv.customer],['Net Total','₹'+fmt(selectedInv.net_total)],
+            ['Invoice Date',fmtDate(selectedInv.posting_date)],['Grand Total','₹'+fmt(selectedInv.grand_total)],
+            ['Ack No.',selectedInv.ack_no||'—'],['Ack Date',fmtDate(selectedInv.ack_date)||'—'],
+            ['e-Way Bill',selectedInv.ewaybill||'—'],['Status',selectedInv.einv_cancelled?'Cancelled':selectedInv.irn?'Generated':'Pending'],
+          ]" :key="lbl" style="background:var(--surf2,#F8F9FC);border-radius:6px;padding:9px 12px">
+            <div style="font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">{{lbl}}</div>
+            <div style="font-size:13px;font-weight:600;word-break:break-all">{{val}}</div>
+          </div>
+        </div>
+      </div>
+      <div class="nim-footer"><button class="nim-btn nim-btn-ghost" @click="showDetail=false">Close</button></div>
+    </div>
+  </div>
+
+  <!-- Cancel IRN Modal -->
+  <div v-if="showCancel && selectedInv" class="nim-overlay" @click.self="showCancel=false">
+    <div class="nim-dialog" style="width:420px">
+      <div class="nim-header">
+        <span style="font-weight:700">Cancel IRN — {{selectedInv.name}}</span>
+        <button class="nim-btn nim-btn-ghost" @click="showCancel=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <div style="background:#FFF5F5;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#C92A2A">
+          Cancelling an IRN is irreversible within 24 hours of generation. Confirm before proceeding.
+        </div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#495057;margin-bottom:6px">Cancellation Reason</label>
+        <select v-model="cancelReason" class="nim-input">
+          <option value="">Select reason...</option>
+          <option v-for="r in CANCEL_REASONS" :key="r" :value="r">{{r}}</option>
+        </select>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showCancel=false">Back</button>
+        <button class="nim-btn" style="background:#C92A2A;color:white" @click="confirmCancel">Confirm Cancellation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Eligibility Check Modal -->
+  <div v-if="showEligible" class="nim-overlay" @click.self="showEligible=false">
+    <div class="nim-dialog" style="width:480px">
+      <div class="nim-header">
+        <span style="font-weight:700">e-Invoice Eligibility</span>
+        <button class="nim-btn nim-btn-ghost" @click="showEligible=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <div style="background:#E7F5FF;border-radius:8px;padding:14px;margin-bottom:16px">
+          <div style="font-weight:700;font-size:13.5px;color:#1971C2;margin-bottom:8px">e-Invoice Applicability</div>
+          <div style="font-size:13px;color:#1A1A2E;line-height:1.6">
+            e-Invoice is mandatory for taxpayers with aggregate turnover exceeding <strong>&#8377;10 crore</strong> in any financial year from 2017-18 onwards.
+          </div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div v-for="[item, ok] in [
+            ['GSTIN registered',true],
+            ['Annual turnover > ₹10 Cr',true],
+            ['NIC IRP API integrated',false],
+            ['Digital signature certificate',false],
+          ]" :key="item" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surf2,#F8F9FC);border-radius:6px">
+            <span :style="{width:'20px',height:'20px',borderRadius:'50%',background:ok?'#EBFBEE':'#FFF5F5',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}">
+              <span v-html="icon(ok?'check':'x',12)" :style="{color:ok?'#2F9E44':'#C92A2A'}"/>
+            </span>
+            <span style="font-size:13px">{{item}}</span>
+            <span :style="{marginLeft:'auto',fontSize:'11.5px',fontWeight:600,color:ok?'#2F9E44':'#C92A2A'}">{{ok?'Ready':'Setup needed'}}</span>
+          </div>
+        </div>
+      </div>
+      <div class="nim-footer"><button class="nim-btn nim-btn-ghost" @click="showEligible=false">Close</button></div>
+    </div>
+  </div>
+</div>`
+  });
+
+
+  /* ═══════════════════════════════════════════════════════════════
+     GST RETURNS — TDS Management
+  ═══════════════════════════════════════════════════════════════ */
+  const GSTReturnsTDS = defineComponent({
+    name: "GSTReturnsTDS",
+    setup() {
+      const TEAL = "#0C8599";
+
+      const TDS_RATES = {
+        "194C":{rate:1,  desc:"Contractors & Sub-contractors"},
+        "194J":{rate:10, desc:"Professional & Technical Services"},
+        "194A":{rate:10, desc:"Interest (other than on securities)"},
+        "194H":{rate:5,  desc:"Commission & Brokerage"},
+        "194I":{rate:10, desc:"Rent (land/building/furniture)"},
+        "194D":{rate:5,  desc:"Insurance Commission"},
+        "194B":{rate:30, desc:"Winnings from Lottery/Crossword"},
+        "194R":{rate:10, desc:"Perquisites/Benefits"},
+        "192": {rate:null, desc:"Salary (as per slab)"},
+        "195": {rate:20, desc:"Payments to Non-Residents"},
+      };
+      const NATURE_MAP = {
+        "194C":"Contract / Sub-contract Payment","194J":"Professional / Technical Service Fees",
+        "194A":"Interest Payment","194H":"Commission / Brokerage",
+        "194I":"Rent — Office Premises","192":"Salary Payment","195":"Payment to Non-Resident"
+      };
+      const RATE_CHART = [
+        {sec:"192",  title:"Salary",                        rate:"Slab rates",      limit:"₹2.5L / 3L / 5L",        higher:"20%"},
+        {sec:"194A", title:"Interest (Bank / Non-bank)",    rate:"10%",             limit:"₹40,000 / ₹5,000",        higher:"20%"},
+        {sec:"194B", title:"Lottery & Game Winnings",       rate:"30%",             limit:"₹10,000",                 higher:"30%"},
+        {sec:"194C", title:"Contractors & Sub-contractors", rate:"1% (indiv) / 2%", limit:"Single ₹30K, Annual ₹1L", higher:"20%"},
+        {sec:"194D", title:"Insurance Commission",          rate:"5%",              limit:"₹15,000",                 higher:"20%"},
+        {sec:"194H", title:"Commission & Brokerage",        rate:"5%",              limit:"₹15,000",                 higher:"20%"},
+        {sec:"194I", title:"Rent — Plant & Machinery",      rate:"2%",              limit:"₹2,40,000",               higher:"20%"},
+        {sec:"194I", title:"Rent — Land / Building",        rate:"10%",             limit:"₹2,40,000",               higher:"20%"},
+        {sec:"194J", title:"Professional / Technical Fees", rate:"10% (2% tech)",   limit:"₹30,000",                 higher:"20%"},
+        {sec:"194R", title:"Perquisites & Benefits",        rate:"10%",             limit:"₹20,000",                 higher:"20%"},
+        {sec:"194Q", title:"Purchase of Goods",             rate:"0.1%",            limit:"₹50 Lakh",                higher:"5%"},
+        {sec:"195",  title:"Payments to Non-Residents",     rate:"20% (DTAA)",      limit:"Nil",                     higher:"20%"},
+      ];
+      const RETURN_FORMS = [
+        {form:"24Q",  desc:"TDS on Salary Payments",     quarter:"Q4 (Jan–Mar)", due:"31 May 2026", status:"Pending"},
+        {form:"26Q",  desc:"TDS on Non-Salary Payments", quarter:"Q4 (Jan–Mar)", due:"31 May 2026", status:"Pending"},
+        {form:"27Q",  desc:"TDS on Payments to NRI",     quarter:"Q4 (Jan–Mar)", due:"31 May 2026", status:"N/A"},
+        {form:"27EQ", desc:"TCS Return",                 quarter:"Q4 (Jan–Mar)", due:"15 May 2026", status:"N/A"},
+      ];
+      const CALENDAR = [
+        {period:"April 2026",       due_dep:"7 May 2026",  due_ret:"—",           done:false},
+        {period:"March 2026",       due_dep:"30 Apr 2026", due_ret:"31 May 2026", done:true},
+        {period:"Q4 (Jan–Mar 2026)",due_dep:"30 Apr 2026", due_ret:"31 May 2026", done:false},
+        {period:"Q3 (Oct–Dec 2025)",due_dep:"7 Jan 2026",  due_ret:"31 Jan 2026", done:true},
+        {period:"Q2 (Jul–Sep 2025)",due_dep:"7 Oct 2025",  due_ret:"31 Oct 2025", done:true},
+        {period:"Q1 (Apr–Jun 2025)",due_dep:"7 Jul 2025",  due_ret:"31 Jul 2025", done:true},
+      ];
+      const RECEIVABLE = [
+        {deductor:"ABC Corporation",    tan:"MUMA12345A",section:"194J",quarter:"Q4 2025-26",gross:500000,tds:50000,booking_date:"2026-04-10",status:"Matched"},
+        {deductor:"Tech Solutions Ltd", tan:"DELB98765B",section:"194J",quarter:"Q4 2025-26",gross:200000,tds:20000,booking_date:"2026-04-05",status:"Matched"},
+        {deductor:"Global Imports Pvt", tan:"CHEC11111C",section:"194C",quarter:"Q4 2025-26",gross:320000,tds:6400, booking_date:"2026-04-01",status:"Pending"},
+      ];
+      const MOCK_ENTRIES = [
+        {id:"TDS-001",date:"2026-04-05",party:"TechConsult Pvt Ltd",  pan:"AABCT1234D",section:"194J",nature:"Software Development Fees",  amount:250000,rate:10,tds:25000,surcharge:0,cess:4,tds_total:26000,challan:"OLTAS-2604-0012",status:"Deposited",ref:"PINV-2026-0031"},
+        {id:"TDS-002",date:"2026-04-03",party:"Sharma & Associates",  pan:"AABCS5678E",section:"194J",nature:"Legal Consultation Fees",     amount:75000, rate:10,tds:7500, surcharge:0,cess:4,tds_total:7800, challan:"",               status:"Pending",  ref:"PINV-2026-0028"},
+        {id:"TDS-003",date:"2026-03-28",party:"TransCargo Logistics", pan:"AABCT9012F",section:"194C",nature:"Freight & Transportation",     amount:180000,rate:2, tds:3600, surcharge:0,cess:4,tds_total:3744, challan:"OLTAS-2603-0041",status:"Deposited",ref:"PINV-2026-0021"},
+        {id:"TDS-004",date:"2026-03-25",party:"Leasehold Properties", pan:"AABCL3456G",section:"194I",nature:"Office Premises Rent — March",amount:120000,rate:10,tds:12000,surcharge:0,cess:4,tds_total:12480,challan:"OLTAS-2603-0038",status:"Deposited",ref:""},
+        {id:"TDS-005",date:"2026-03-15",party:"Digital Marketing Hub",pan:"AABCD7890H",section:"194H",nature:"Sales Commission",            amount:50000, rate:5, tds:2500, surcharge:0,cess:4,tds_total:2600, challan:"",               status:"Pending",  ref:"PINV-2026-0018"},
+        {id:"TDS-006",date:"2026-02-28",party:"HDFC Bank",            pan:"AAACH2702H",section:"194A",nature:"Fixed Deposit Interest",      amount:62000, rate:10,tds:6200, surcharge:0,cess:4,tds_total:6448, challan:"OLTAS-2602-0019",status:"Deposited",ref:""},
+        {id:"TDS-007",date:"2026-02-15",party:"Rajesh Kumar",         pan:"AABCR1234J",section:"192", nature:"Salary — February 2026",      amount:85000, rate:5, tds:4250, surcharge:0,cess:4,tds_total:4420, challan:"OLTAS-2602-0015",status:"Deposited",ref:""},
+      ];
+      const MOCK_CHALLANS = [
+        {bsr:"0001520",date:"2026-04-07",serial:"00012",quarter:"Q4",tds:26000,surcharge:0,total:26000,status:"Filed"},
+        {bsr:"0001520",date:"2026-03-31",serial:"00041",quarter:"Q4",tds:16224,surcharge:0,total:16224,status:"Filed"},
+        {bsr:"0001520",date:"2026-03-07",serial:"00019",quarter:"Q3",tds:6448,  surcharge:0,total:6448, status:"Filed"},
+        {bsr:"0001520",date:"2026-02-07",serial:"00015",quarter:"Q3",tds:4420,  surcharge:0,total:4420, status:"Filed"},
+      ];
+
+      const entries    = ref([]);
+      const challans   = ref([]);
+      const activeTab  = ref("deductions");
+      const filterSec  = ref("");
+      const filterStat = ref("");
+      const filterMo   = ref(new Date().toISOString().slice(0,7));
+      const searchQ    = ref("");
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const viewEntry  = ref(null);
+      const showChallanModal = ref(false);
+      const showFormModal    = ref(false);
+
+      const form = reactive({date:"",section:"",party:"",pan:"",nature:"",amount:0,rate:0,tds:0,surcharge:0,cess:4,tds_total:0,challan:"",ref:"",remarks:""});
+      const challanForm = reactive({bsr:"",serial:"",date:"",quarter:"Q4",tds:0,surcharge:0,interest:0,penalty:0});
+
+      function loadAll() {
+        try { const s=JSON.parse(localStorage.getItem("books_tds_entries")||"[]"); entries.value = s.length?s:MOCK_ENTRIES.map(e=>({...e})); }
+        catch { entries.value = MOCK_ENTRIES.map(e=>({...e})); }
+        try { const s=JSON.parse(localStorage.getItem("books_tds_challans")||"[]"); challans.value = s.length?s:MOCK_CHALLANS.map(c=>({...c})); }
+        catch { challans.value = MOCK_CHALLANS.map(c=>({...c})); }
+      }
+
+      const filteredEntries = computed(() => entries.value.filter(e => {
+        if (filterSec.value && e.section!==filterSec.value) return false;
+        if (filterStat.value && e.status!==filterStat.value) return false;
+        if (filterMo.value && !(e.date||"").startsWith(filterMo.value)) return false;
+        if (searchQ.value) { const q=searchQ.value.toLowerCase(); if (!(e.party+e.section+e.pan).toLowerCase().includes(q)) return false; }
+        return true;
+      }).sort((a,b) => b.date.localeCompare(a.date)));
+
+      const totalTDS      = computed(() => entries.value.reduce((s,e)=>s+flt(e.tds_total),0));
+      const depositedTDS  = computed(() => entries.value.filter(e=>e.status==="Deposited").reduce((s,e)=>s+flt(e.tds_total),0));
+      const pendingTDS    = computed(() => entries.value.filter(e=>e.status==="Pending").reduce((s,e)=>s+flt(e.tds_total),0));
+      const receivableTDS = computed(() => RECEIVABLE.reduce((s,r)=>s+flt(r.tds),0));
+      const challanCount  = computed(() => challans.value.length);
+
+      function calcTDS() {
+        const amt=flt(form.amount), rate=flt(form.rate), sur=flt(form.surcharge), cess=flt(form.cess);
+        const basic=Math.round(amt*rate/100*100)/100;
+        const surAmt=Math.round(basic*sur/100*100)/100;
+        const cessAmt=Math.round((basic+surAmt)*cess/100*100)/100;
+        form.tds=basic; form.tds_total=Math.round((basic+surAmt+cessAmt)*100)/100;
+      }
+      function autoFillSection() {
+        const info=TDS_RATES[form.section];
+        if (info&&info.rate!==null) form.rate=info.rate;
+        const n=NATURE_MAP[form.section]; if (n) form.nature=n;
+        calcTDS();
+      }
+      const netPayable   = computed(() => Math.max(0, flt(form.amount)-flt(form.tds_total)));
+      const challanTotal = computed(() => flt(challanForm.tds)+flt(challanForm.surcharge)+flt(challanForm.interest)+flt(challanForm.penalty));
+
+      function openAdd() {
+        Object.assign(form,{date:new Date().toISOString().slice(0,10),section:"",party:"",pan:"",nature:"",amount:0,rate:0,tds:0,surcharge:0,cess:4,tds_total:0,challan:"",ref:"",remarks:""});
+        drawerMode.value="add"; showDrawer.value=true;
+      }
+      function openView(entry) { viewEntry.value=entry; drawerMode.value="view"; showDrawer.value=true; }
+      function depositEntry(entry) {
+        entry.status="Deposited"; entry.challan="OLTAS-"+Date.now().toString().slice(-8);
+        localStorage.setItem("books_tds_entries",JSON.stringify(entries.value));
+        toast("Marked as deposited");
+      }
+      function saveEntry() {
+        if (!form.party.trim()) { toast("Party name is required","error"); return; }
+        if (!form.section)      { toast("Section is required","error"); return; }
+        if (!flt(form.amount))  { toast("Payment amount is required","error"); return; }
+        const entry = {
+          id:"TDS-"+String(entries.value.length+1).padStart(3,"0"),
+          date:form.date, party:form.party.trim(), pan:(form.pan||"").toUpperCase(),
+          section:form.section, nature:form.nature.trim(),
+          amount:flt(form.amount), rate:flt(form.rate), tds:flt(form.tds),
+          surcharge:flt(form.surcharge), cess:flt(form.cess), tds_total:flt(form.tds_total),
+          challan:form.challan.trim(), status:form.challan.trim()?"Deposited":"Pending",
+          ref:form.ref.trim(), remarks:form.remarks.trim()
+        };
+        entries.value.unshift(entry);
+        localStorage.setItem("books_tds_entries",JSON.stringify(entries.value));
+        showDrawer.value=false; toast("TDS entry saved");
+      }
+      function saveChallan() {
+        if (!challanForm.bsr||!challanForm.serial) { toast("BSR code and serial required","error"); return; }
+        challans.value.unshift({bsr:challanForm.bsr,date:challanForm.date,serial:challanForm.serial,quarter:challanForm.quarter,tds:flt(challanForm.tds),surcharge:flt(challanForm.surcharge),total:challanTotal.value,status:"Filed"});
+        localStorage.setItem("books_tds_challans",JSON.stringify(challans.value));
+        showChallanModal.value=false;
+        Object.assign(challanForm,{bsr:"",serial:"",date:new Date().toISOString().slice(0,10),quarter:"Q4",tds:0,surcharge:0,interest:0,penalty:0});
+        toast("Challan 281 saved — TDS deposited");
+      }
+
+      onMounted(() => { loadAll(); challanForm.date=new Date().toISOString().slice(0,10); });
+
+      return { RATE_CHART, RETURN_FORMS, CALENDAR, RECEIVABLE, TEAL,
+               entries, challans, activeTab, filterSec, filterStat, filterMo, searchQ,
+               showDrawer, drawerMode, viewEntry, showChallanModal, showFormModal,
+               form, challanForm,
+               filteredEntries, totalTDS, depositedTDS, pendingTDS, receivableTDS, challanCount,
+               netPayable, challanTotal,
+               calcTDS, autoFillSection, openAdd, openView, depositEntry, saveEntry, saveChallan,
+               fmt, fmtDate, flt, icon };
+    },
+    template: `<div class="cust-page">
+  <!-- Toolbar -->
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:10px">
+      <span style="font-size:14px;font-weight:700">TDS Management</span>
+      <span style="font-size:11px;background:#E0F7FA;color:#0C8599;padding:2px 9px;border-radius:20px;font-weight:600">Tax Deducted at Source</span>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" @click="showChallanModal=true">
+        <span v-html="icon('pay',13)" style="vertical-align:-3px;margin-right:4px"/>Pay Challan 281
+      </button>
+      <button class="nim-btn nim-btn-ghost" @click="showFormModal=true">
+        <span v-html="icon('download',13)" style="vertical-align:-3px;margin-right:4px"/>Form 16 / 26Q
+      </button>
+      <button class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="openAdd">
+        <span v-html="icon('plus',13)" style="vertical-align:-3px;margin-right:4px"/>New TDS Entry
+      </button>
+    </div>
+  </div>
+
+  <!-- Info Banner -->
+  <div style="margin:0 20px 14px;background:#EEF2FF;border:1px solid rgba(59,91,219,.15);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#2f4ec4;display:flex;align-items:flex-start;gap:8px">
+    <span v-html="icon('info',14)" style="flex-shrink:0;margin-top:1px;color:#3B5BDB"/>
+    <span>TDS must be deducted at source when making payments above the threshold. <b>Deposit by 7th of next month</b> (30 April for March). File quarterly returns: <b>Form 26Q</b> (non-salary) and <b>Form 24Q</b> (salary) within 31 days of quarter end.</span>
+  </div>
+
+  <!-- Hero Strip -->
+  <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 20px 14px">
+    <div style="background:linear-gradient(135deg,#0a4f5c,#0C8599);border-radius:10px;padding:15px 18px;color:white">
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.8;margin-bottom:5px">TDS Deducted (FY)</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono)">&#8377;{{fmt(totalTDS)}}</div>
+      <div style="font-size:12px;opacity:.7;margin-top:3px">{{entries.length}} deductions this year</div>
+    </div>
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:15px 18px">
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#2F9E44;margin-bottom:5px">Deposited (Challans)</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(depositedTDS)}}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">{{challanCount}} challans paid</div>
+    </div>
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:15px 18px">
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#E67700;margin-bottom:5px">Pending Deposit</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#E67700">&#8377;{{fmt(pendingTDS)}}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">Due by 7th of next month</div>
+    </div>
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:15px 18px">
+      <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#3B5BDB;margin-bottom:5px">TDS Receivable</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#3B5BDB">&#8377;{{fmt(receivableTDS)}}</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:3px">Deducted by customers</div>
+    </div>
+  </div>
+
+  <!-- Tab Strip -->
+  <div style="margin:0 20px 14px;display:flex;background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+    <button v-for="[k,lbl] in [['deductions','TDS Deductions'],['challans','Challan 281'],['receivable','TDS Receivable (26AS)'],['rates','TDS Rate Chart'],['returns','Quarterly Returns']]"
+      :key="k" @click="activeTab=k"
+      :style="{flex:1,padding:'11px 6px',fontSize:'12.5px',fontWeight:600,cursor:'pointer',border:'none',
+        color:activeTab===k?'#0C8599':'var(--muted)',
+        borderBottom:activeTab===k?'2px solid #0C8599':'2px solid transparent',
+        background:activeTab===k?'#E0F7FA':'none',fontFamily:'inherit'}">
+      {{lbl}}
+    </button>
+  </div>
+
+  <!-- TAB: Deductions -->
+  <div v-if="activeTab==='deductions'" style="padding:0 20px 24px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <select v-model="filterSec" class="nim-input" style="width:auto">
+        <option value="">All Sections</option>
+        <option value="194C">194C — Contractors</option>
+        <option value="194J">194J — Professional Fees</option>
+        <option value="194A">194A — Interest</option>
+        <option value="194H">194H — Commission</option>
+        <option value="194I">194I — Rent</option>
+        <option value="192">192 — Salary</option>
+      </select>
+      <select v-model="filterStat" class="nim-input" style="width:auto">
+        <option value="">All Status</option>
+        <option value="Deposited">Deposited</option>
+        <option value="Pending">Pending</option>
+      </select>
+      <input type="month" v-model="filterMo" class="nim-input" style="width:140px"/>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:6px;background:white;border:1px solid var(--border);border-radius:20px;padding:5px 12px">
+        <span v-html="icon('search',12)" style="color:var(--muted)"/>
+        <input v-model="searchQ" class="nim-input" placeholder="Search party, section..." style="border:none;background:transparent;padding:0;width:180px"/>
+      </div>
+    </div>
+    <div class="cust-table-card" style="overflow-x:auto">
+      <table class="cust-table" style="min-width:1100px">
         <thead><tr>
-          <th>Item Code</th><th>Item Name</th><th>Warehouse</th>
-          <th style="text-align:right">Current Qty</th>
-          <th style="text-align:right">Reorder Level</th>
-          <th style="text-align:right">Reorder Qty</th>
-          <th style="text-align:right">Shortage</th>
-          <th style="text-align:center">Urgency</th>
+          <th>Date</th><th>Party / Payee</th><th>PAN</th><th>Section</th><th>Nature of Payment</th>
+          <th class="num">Payment Amt</th><th class="num">Rate</th><th class="num">TDS Deducted</th>
+          <th>Challan No.</th><th>Status</th><th style="width:80px;text-align:center">Actions</th>
         </tr></thead>
         <tbody>
-          <tr v-if="loading"><td colspan="8" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td></tr>
-          <tr v-else-if="!filtered.length"><td colspan="8" class="cust-empty">
-            <div class="cust-empty-icon">✅</div>
-            <div class="cust-empty-title">{{search?'No items match':'All stock levels are healthy'}}</div>
-            <div class="cust-empty-sub">{{search?'Try a different search':'No items are currently below their reorder level'}}</div>
-          </td></tr>
-          <tr v-else v-for="r in filtered" :key="r.item_code+(r.warehouse||'')" class="cust-row">
-            <td style="font-family:var(--mono);font-size:12px;font-weight:700;color:#3B5BDB">{{r.item_code}}</td>
-            <td style="font-weight:500">{{r.item_name||r.item_code}}</td>
-            <td style="font-size:12.5px;color:var(--muted)">{{r.warehouse||'—'}}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#C92A2A">{{flt(r.actual_qty).toFixed(2)}}</td>
-            <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{flt(r.reorder_level).toFixed(2)}}</td>
-            <td style="text-align:right;font-family:var(--mono);color:var(--muted)">{{flt(r.reorder_qty).toFixed(2)}}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{flt(r.shortage_qty).toFixed(2)}}</td>
+          <tr v-if="!filteredEntries.length">
+            <td colspan="11" style="text-align:center;padding:40px;color:var(--muted)">
+              <div style="font-size:28px;margin-bottom:8px">📋</div>
+              <div style="font-weight:600">No TDS entries found</div>
+            </td>
+          </tr>
+          <tr v-for="e in filteredEntries" :key="e.id" @click="openView(e)" style="cursor:pointer">
+            <td style="font-size:12px;color:var(--muted);white-space:nowrap">{{fmtDate(e.date)}}</td>
+            <td>
+              <div style="font-weight:500">{{e.party}}</div>
+              <div v-if="e.ref" style="font-size:11px;color:var(--muted)">{{e.ref}}</div>
+            </td>
+            <td style="font-family:var(--mono);font-size:12px">{{e.pan}}</td>
+            <td><span style="background:#E0F7FA;color:#0C8599;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{e.section}}</span></td>
+            <td style="font-size:12px;color:var(--muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.nature||'—'}}</td>
+            <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(e.amount)}}</td>
+            <td class="num" style="font-family:var(--mono)">{{e.rate}}%</td>
+            <td class="num" style="font-family:var(--mono);font-weight:700;color:#0C8599">&#8377;{{fmt(e.tds_total)}}</td>
+            <td style="font-family:var(--mono);font-size:11.5px;color:var(--muted)">{{e.challan||'—'}}</td>
+            <td>
+              <span :style="{background:e.status==='Deposited'?'#EBFBEE':'#FFF3BF',color:e.status==='Deposited'?'#2F9E44':'#854F0B',padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:600}">
+                {{e.status}}
+              </span>
+            </td>
             <td style="text-align:center">
-              <span class="b-badge" :class="urgency(r).cls">{{urgency(r).lbl}}</span>
+              <div style="display:flex;gap:4px;justify-content:center">
+                <button class="nim-btn nim-btn-ghost" style="padding:3px 7px" @click.stop="openView(e)" title="View">
+                  <span v-html="icon('eye',13)"/>
+                </button>
+                <button v-if="e.status==='Pending'" class="nim-btn" style="padding:3px 7px;background:#E0F7FA;color:#0C8599;border-color:#0C8599" @click.stop="depositEntry(e)" title="Mark Deposited">
+                  <span v-html="icon('check',13)"/>
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
+        <tfoot v-if="filteredEntries.length">
+          <tr style="background:#E0F7FA;font-weight:700;border-top:2px solid var(--border)">
+            <td colspan="5" style="padding:9px 12px">Total ({{filteredEntries.length}} entries)</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono)">&#8377;{{fmt(filteredEntries.reduce((s,e)=>s+flt(e.amount),0))}}</td>
+            <td/>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#0C8599">&#8377;{{fmt(filteredEntries.reduce((s,e)=>s+flt(e.tds_total),0))}}</td>
+            <td colspan="3"/>
+          </tr>
+        </tfoot>
       </table>
     </div>
-    <div class="cust-row-count" v-if="filtered.length">{{filtered.length}} items need restocking</div>
+  </div>
+
+  <!-- TAB: Challans -->
+  <div v-if="activeTab==='challans'" style="padding:0 20px 24px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:13px;color:var(--muted)">Challan 281 — Payment of TDS/TCS to Income Tax Department via NSDL/TIN portal.</div>
+      <button class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="showChallanModal=true">+ New Challan</button>
+    </div>
+    <div class="cust-table-card" style="overflow-x:auto">
+      <table class="cust-table" style="min-width:750px">
+        <thead><tr>
+          <th>BSR Code</th><th>Date</th><th>Challan No.</th><th>Quarter</th>
+          <th class="num">TDS</th><th class="num">Surcharge</th><th class="num">Total</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="!challans.length">
+            <td colspan="8" style="text-align:center;padding:32px;color:var(--muted)">No challans yet — pay TDS using Challan 281</td>
+          </tr>
+          <tr v-for="c in challans" :key="c.bsr+c.serial">
+            <td style="font-family:var(--mono);font-size:12px">{{c.bsr}}</td>
+            <td style="font-size:12px;color:var(--muted)">{{fmtDate(c.date)}}</td>
+            <td style="font-family:var(--mono);font-size:12px">{{c.serial}}</td>
+            <td><span style="background:#EEF2FF;color:#3B5BDB;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{c.quarter}}</span></td>
+            <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(c.tds)}}</td>
+            <td class="num" style="font-family:var(--mono)">{{c.surcharge?'₹'+fmt(c.surcharge):'—'}}</td>
+            <td class="num" style="font-family:var(--mono);font-weight:700;color:#0C8599">&#8377;{{fmt(c.total)}}</td>
+            <td><span style="background:#EBFBEE;color:#2F9E44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{c.status}}</span></td>
+          </tr>
+        </tbody>
+        <tfoot v-if="challans.length">
+          <tr style="background:#E0F7FA;font-weight:700;border-top:2px solid var(--border)">
+            <td colspan="4" style="padding:9px 12px">Total</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono)">&#8377;{{fmt(challans.reduce((s,c)=>s+flt(c.tds),0))}}</td>
+            <td/>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#0C8599">&#8377;{{fmt(challans.reduce((s,c)=>s+flt(c.total),0))}}</td>
+            <td/>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: Receivable -->
+  <div v-if="activeTab==='receivable'" style="padding:0 20px 24px">
+    <div style="background:#EEF2FF;border:1px solid rgba(59,91,219,.15);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:#2f4ec4">
+      TDS deducted by your customers on payments made to you. Reflected in Form 26AS — claim as credit against income tax liability.
+    </div>
+    <div class="cust-table-card" style="overflow-x:auto">
+      <table class="cust-table" style="min-width:900px">
+        <thead><tr>
+          <th>Deductor</th><th>TAN</th><th>Section</th><th>Quarter</th>
+          <th class="num">Gross Payment</th><th class="num">TDS Deducted</th><th>Booking Date</th><th>26AS Status</th>
+        </tr></thead>
+        <tbody>
+          <tr v-for="r in RECEIVABLE" :key="r.tan+r.quarter">
+            <td style="font-weight:500">{{r.deductor}}</td>
+            <td style="font-family:var(--mono);font-size:12px">{{r.tan}}</td>
+            <td><span style="background:#E0F7FA;color:#0C8599;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{r.section}}</span></td>
+            <td style="font-size:12px;color:var(--muted)">{{r.quarter}}</td>
+            <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(r.gross)}}</td>
+            <td class="num" style="font-family:var(--mono);font-weight:700;color:#3B5BDB">&#8377;{{fmt(r.tds)}}</td>
+            <td style="font-size:12px;color:var(--muted)">{{fmtDate(r.booking_date)}}</td>
+            <td><span :style="{background:r.status==='Matched'?'#EBFBEE':'#FFF3BF',color:r.status==='Matched'?'#2F9E44':'#854F0B',padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:600}">{{r.status}}</span></td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr style="background:#E0F7FA;font-weight:700;border-top:2px solid var(--border)">
+            <td colspan="4" style="padding:9px 12px">Total TDS Receivable</td>
+            <td/>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#3B5BDB">&#8377;{{fmt(receivableTDS)}}</td>
+            <td colspan="2"/>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </div>
+
+  <!-- TAB: Rate Chart -->
+  <div v-if="activeTab==='rates'" style="padding:0 20px 24px">
+    <div style="background:var(--surf2,#F8F9FC);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;font-size:12.5px;color:var(--muted)">
+      Standard TDS rates for FY 2025-26. Higher rate (20%) applies if PAN is not furnished. Surcharge and cess as applicable.
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px">
+      <div v-for="r in RATE_CHART" :key="r.sec+r.title"
+        style="background:white;border:1px solid var(--border);border-radius:10px;padding:14px 16px;cursor:default">
+        <div style="font-size:10.5px;font-weight:700;color:#0C8599;font-family:var(--mono);margin-bottom:4px">{{r.sec}}</div>
+        <div style="font-size:13px;font-weight:600;margin-bottom:3px;line-height:1.3">{{r.title}}</div>
+        <div style="font-size:20px;font-weight:700;font-family:var(--mono);margin-bottom:3px">{{r.rate}}</div>
+        <div style="font-size:11.5px;color:var(--muted)">Threshold: {{r.limit}}</div>
+        <div style="font-size:11px;color:#C92A2A;margin-top:3px">No PAN: {{r.higher}}</div>
+      </div>
+    </div>
+    <div style="background:#FFF3BF;border:1px solid rgba(230,119,0,.2);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#7F3E00">
+      ⚠ No TDS if PAN is submitted and payment is below threshold. Threshold limits reset every financial year on 1 April.
+    </div>
+  </div>
+
+  <!-- TAB: Returns -->
+  <div v-if="activeTab==='returns'" style="padding:0 20px 24px">
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:14px">
+      <div v-for="f in RETURN_FORMS" :key="f.form"
+        style="background:white;border:1px solid var(--border);border-radius:10px;padding:16px 18px;display:flex;align-items:center;gap:14px">
+        <div style="width:48px;height:48px;border-radius:10px;background:#E0F7FA;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#0C8599;flex-shrink:0;line-height:1.3">
+          <span>Form</span><span>{{f.form}}</span>
+        </div>
+        <div style="flex:1">
+          <div style="font-weight:600;margin-bottom:2px">{{f.desc}}</div>
+          <div style="font-size:12px;color:var(--muted)">{{f.quarter}} &nbsp;·&nbsp; Due: <b>{{f.due}}</b></div>
+        </div>
+        <span :style="{background:f.status==='Filed'?'#EBFBEE':f.status==='N/A'?'#F1F3F5':'#FFF3BF',color:f.status==='Filed'?'#2F9E44':f.status==='N/A'?'#868E96':'#854F0B',padding:'2px 10px',borderRadius:'20px',fontSize:'11.5px',fontWeight:600}">
+          {{f.status}}
+        </span>
+        <button v-if="f.status==='Pending'" class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599;font-size:12px;padding:5px 10px" @click="showFormModal=true">File Now</button>
+      </div>
+    </div>
+    <div style="background:white;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div style="padding:12px 18px;background:var(--surf2,#F8F9FC);border-bottom:1px solid var(--border);font-weight:700;font-size:13px">Filing Calendar FY 2025-26</div>
+      <div v-for="c in CALENDAR" :key="c.period"
+        style="display:grid;grid-template-columns:200px 1fr 1fr 70px;gap:12px;padding:9px 18px;border-bottom:1px solid #F1F3F5;font-size:13px;align-items:center">
+        <span style="font-weight:500">{{c.period}}</span>
+        <span><span style="color:var(--muted);font-size:11px">Deposit: </span>{{c.due_dep}}</span>
+        <span><span style="color:var(--muted);font-size:11px">Return: </span>{{c.due_ret}}</span>
+        <span :style="{background:c.done?'#EBFBEE':'#FFF3BF',color:c.done?'#2F9E44':'#854F0B',padding:'2px 10px',borderRadius:'20px',fontSize:'11.5px',fontWeight:600}">{{c.done?'Done':'Due'}}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- TDS Entry Drawer -->
+  <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+    <div class="nim-dialog" style="width:560px;max-height:92vh;overflow-y:auto">
+
+      <!-- View Mode -->
+      <template v-if="drawerMode==='view' && viewEntry">
+        <div style="background:#0C8599;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="color:white;font-size:15px;font-weight:700">{{viewEntry.id}}</div>
+            <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:2px">{{viewEntry.party}} · {{viewEntry.section}}</div>
+          </div>
+          <button class="nim-btn nim-btn-ghost" @click="showDrawer=false"><span v-html="icon('x',16)"/></button>
+        </div>
+        <div style="padding:20px">
+          <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:14px 18px;text-align:center;margin-bottom:18px">
+            <div style="font-size:11px;color:#0C8599;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">TDS Deducted</div>
+            <div style="font-size:26px;font-weight:700;font-family:var(--mono);color:#0C8599">&#8377;{{fmt(viewEntry.tds_total)}}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">on payment of &#8377;{{fmt(viewEntry.amount)}}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;font-size:13px">
+            <div v-for="[lbl,val] in [
+              ['Party / Payee',viewEntry.party],['PAN',viewEntry.pan],
+              ['Section',viewEntry.section],['Date',fmtDate(viewEntry.date)],
+              ['Nature of Payment',viewEntry.nature||'—'],['Status',viewEntry.status],
+              ...(viewEntry.ref?[['Invoice Ref.',viewEntry.ref]]:[]),
+              ...(viewEntry.challan?[['Challan No.',viewEntry.challan]]:[]),
+            ]" :key="lbl" style="background:var(--surf2,#F8F9FC);border-radius:6px;padding:9px 12px">
+              <div style="font-size:10.5px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px">{{lbl}}</div>
+              <div style="font-weight:600;word-break:break-all">{{val}}</div>
+            </div>
+          </div>
+          <div style="border:1px solid var(--border);border-radius:8px;overflow:hidden">
+            <div v-for="[lbl,val,color] in [
+              ['Gross Payment','₹'+fmt(viewEntry.amount),'var(--txt,#1A1D23)'],
+              ['TDS Rate',viewEntry.rate+'%','var(--txt,#1A1D23)'],
+              ['Basic TDS','₹'+fmt(viewEntry.tds),'#0C8599'],
+              ['Surcharge','₹'+fmt(viewEntry.surcharge||0),'#E67700'],
+              ['Cess ('+flt(viewEntry.cess)+'%)','₹'+fmt(Math.round(flt(viewEntry.tds)*flt(viewEntry.cess)/100*100)/100),'#868E96'],
+            ]" :key="lbl" style="display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid #F1F3F5;font-size:13px">
+              <span style="color:var(--muted)">{{lbl}}</span>
+              <span :style="{fontFamily:'var(--mono)',fontWeight:600,color:color}">{{val}}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:10px 14px;background:#E0F7FA;font-size:14px;font-weight:700">
+              <span>Total TDS</span>
+              <span style="font-family:var(--mono);color:#0C8599">&#8377;{{fmt(viewEntry.tds_total)}}</span>
+            </div>
+          </div>
+        </div>
+        <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--surf2,#F8F9FC)">
+          <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Close</button>
+          <button v-if="viewEntry.status==='Pending'" class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="depositEntry(viewEntry);showDrawer=false">Mark as Deposited</button>
+        </div>
+      </template>
+
+      <!-- Add Mode -->
+      <template v-if="drawerMode==='add'">
+        <div style="background:#0C8599;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="color:white;font-size:15px;font-weight:700">New TDS Entry</div>
+            <div style="color:rgba(255,255,255,.7);font-size:12px;margin-top:2px">Record TDS deduction on payment</div>
+          </div>
+          <button class="nim-btn nim-btn-ghost" @click="showDrawer=false"><span v-html="icon('x',16)"/></button>
+        </div>
+        <div style="padding:20px">
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Payment Details</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Payment Date *</label>
+              <input v-model="form.date" type="date" class="nim-input"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Section *</label>
+              <select v-model="form.section" class="nim-input" @change="autoFillSection">
+                <option value="">— Select section —</option>
+                <option value="194C">194C — Contractors &amp; Sub-contractors</option>
+                <option value="194J">194J — Professional &amp; Technical Services</option>
+                <option value="194A">194A — Interest (other than securities)</option>
+                <option value="194H">194H — Commission &amp; Brokerage</option>
+                <option value="194I">194I — Rent</option>
+                <option value="194D">194D — Insurance Commission</option>
+                <option value="194B">194B — Winnings from Lottery</option>
+                <option value="194R">194R — Perquisites</option>
+                <option value="192">192 — Salary</option>
+                <option value="195">195 — Payments to Non-Residents</option>
+              </select>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Party / Payee Name *</label>
+              <input v-model="form.party" class="nim-input" placeholder="Vendor or employee name"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">PAN of Deductee *</label>
+              <input v-model="form.pan" class="nim-input" placeholder="ABCDE1234F" style="font-family:var(--mono);text-transform:uppercase" maxlength="10"/>
+            </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Nature of Payment</label>
+            <input v-model="form.nature" class="nim-input" placeholder="e.g. Consulting fees, Rent for office premises"/>
+          </div>
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-top:14px;border-top:1px solid var(--border)">Amount &amp; TDS Calculation</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Gross Payment (₹) *</label>
+              <input v-model.number="form.amount" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)" @input="calcTDS"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">TDS Rate (%)</label>
+              <input v-model.number="form.rate" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)" @input="calcTDS"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">TDS Amount (₹)</label>
+              <input :value="flt(form.tds_total).toFixed(2)" class="nim-input" style="font-family:var(--mono);background:#F8F9FC" readonly/>
+            </div>
+          </div>
+          <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;font-size:13px;margin-bottom:12px">
+            <span>Net Amount Payable to Party</span>
+            <span style="font-family:var(--mono);font-weight:700;color:#0C8599">&#8377;{{fmt(netPayable)}}</span>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Surcharge (%)</label>
+              <input v-model.number="form.surcharge" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)" @input="calcTDS"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Health &amp; Ed. Cess (%)</label>
+              <input v-model.number="form.cess" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)" @input="calcTDS"/>
+            </div>
+          </div>
+          <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-top:14px;border-top:1px solid var(--border)">Reference</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Invoice / Bill Reference</label>
+              <input v-model="form.ref" class="nim-input" placeholder="PINV-2026-0042"/>
+            </div>
+            <div>
+              <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Challan No. (if deposited)</label>
+              <input v-model="form.challan" class="nim-input" placeholder="OLTAS challan no." style="font-family:var(--mono)"/>
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Remarks</label>
+            <textarea v-model="form.remarks" class="nim-input" rows="2" style="resize:vertical" placeholder="Additional notes..."></textarea>
+          </div>
+        </div>
+        <div style="padding:14px 22px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;gap:10px;background:var(--surf2,#F8F9FC);flex-shrink:0">
+          <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599;min-width:140px" @click="saveEntry">Save TDS Entry</button>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- Challan 281 Modal -->
+  <div v-if="showChallanModal" class="nim-overlay" @click.self="showChallanModal=false">
+    <div class="nim-dialog" style="width:520px">
+      <div class="nim-header">
+        <span style="font-weight:700">Pay TDS — Challan 281</span>
+        <button class="nim-btn nim-btn-ghost" @click="showChallanModal=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+          Generate Challan 281 on the NSDL/TIN portal and pay TDS via net banking. Enter the details after successful payment.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">BSR Code (Bank)</label>
+            <input v-model="challanForm.bsr" class="nim-input" placeholder="0001520" style="font-family:var(--mono)" maxlength="7"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Challan Serial No.</label>
+            <input v-model="challanForm.serial" class="nim-input" placeholder="00001" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Date of Deposit</label>
+            <input v-model="challanForm.date" type="date" class="nim-input"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Quarter</label>
+            <select v-model="challanForm.quarter" class="nim-input">
+              <option value="Q1">Q1 (Apr–Jun)</option><option value="Q2">Q2 (Jul–Sep)</option>
+              <option value="Q3">Q3 (Oct–Dec)</option><option value="Q4">Q4 (Jan–Mar)</option>
+            </select></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">TDS Amount (₹)</label>
+            <input v-model.number="challanForm.tds" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Surcharge (₹)</label>
+            <input v-model.number="challanForm.surcharge" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Interest (₹)</label>
+            <input v-model.number="challanForm.interest" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)"/></div>
+          <div><label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Penalty (₹)</label>
+            <input v-model.number="challanForm.penalty" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)"/></div>
+        </div>
+        <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:11px 16px;display:flex;justify-content:space-between;font-size:13px">
+          <span style="font-weight:600">Total Challan Amount</span>
+          <span style="font-family:var(--mono);font-weight:700;font-size:16px;color:#0C8599">&#8377;{{fmt(challanTotal)}}</span>
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showChallanModal=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="saveChallan">Save Challan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Form Download Modal -->
+  <div v-if="showFormModal" class="nim-overlay" @click.self="showFormModal=false">
+    <div class="nim-dialog" style="width:500px">
+      <div class="nim-header">
+        <span style="font-weight:700">Download / File TDS Returns</span>
+        <button class="nim-btn nim-btn-ghost" @click="showFormModal=false"><span v-html="icon('x',16)"/></button>
+      </div>
+      <div class="nim-body">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:16px;line-height:1.6">
+          Generate and download TDS return forms, or file directly via TRACES / TIN-NSDL portal.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div v-for="f in [
+            {name:'Form 26Q',desc:'TDS return for non-salary payments (Q4 2025-26)',ready:true},
+            {name:'Form 24Q',desc:'TDS return for salary payments (Q4 2025-26)',ready:true},
+            {name:'Form 16', desc:'TDS certificate issued to employees (Annual)',ready:false},
+            {name:'Form 16A',desc:'TDS certificate for non-salary deductions',ready:true},
+            {name:'TRACES 26AS',desc:'Annual tax statement (download from TRACES)',ready:false},
+          ]" :key="f.name"
+            style="display:flex;align-items:center;gap:12px;padding:10px 14px;border:1px solid var(--border);border-radius:8px">
+            <div style="width:36px;height:36px;border-radius:8px;background:#E0F7FA;color:#0C8599;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0;text-align:center;line-height:1.4">
+              {{f.name.split(' ').slice(-1)[0]}}
+            </div>
+            <div style="flex:1">
+              <div style="font-weight:600;font-size:13px">{{f.name}}</div>
+              <div style="font-size:11.5px;color:var(--muted)">{{f.desc}}</div>
+            </div>
+            <button :class="['nim-btn', f.ready?'nim-btn-primary':'nim-btn-ghost']"
+              :style="f.ready?{background:'#0C8599',borderColor:'#0C8599',fontSize:'12px',padding:'5px 10px'}:{fontSize:'12px',padding:'5px 10px'}"
+              @click="f.ready?toast('Generating '+f.name+' — check downloads shortly'):toast('Download from TRACES portal','info')">
+              {{f.ready?'Download':'External'}}
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="showFormModal=false">Close</button>
+      </div>
+    </div>
   </div>
 </div>`
   });
@@ -14804,11 +17019,19 @@
         { to: "/inventory/reorder-alerts",lbl: "Reorder Alerts",    icon: "bell"     },
       ]
     },
+    {
+      section: "GST RETURNS", items: [
+        { to: "/gst/gstr1",    lbl: "GSTR-1",          icon: "gstfile"  },
+        { to: "/gst/gstr3b",   lbl: "GSTR-3B",         icon: "gstfile"  },
+        { to: "/gst/einvoice", lbl: "e-Invoice",        icon: "qr"       },
+        { to: "/gst/tds",      lbl: "TDS Management",   icon: "percent"  },
+      ]
+    },
   ];
   // Pre-built Set of every exact nav path — used to prevent parent routes from
   // stealing the "active" highlight when a child route has its own nav entry.
   const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -16885,6 +19108,11 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/inventory/stock-ledger",     component: InventoryStockLedger,    name: "inventory-stock-ledger"   },
       { path: "/inventory/valuation",        component: InventoryValuation,      name: "inventory-valuation"      },
       { path: "/inventory/reorder-alerts",   component: InventoryReorderAlerts,  name: "inventory-reorder-alerts" },
+      { path: "/gst",          redirect: "/gst/gstr1"                                         },
+      { path: "/gst/gstr1",    component: GSTReturnsGSTR1,    name: "gst-gstr1"    },
+      { path: "/gst/gstr3b",   component: GSTReturnsGSTR3B,   name: "gst-gstr3b"   },
+      { path: "/gst/einvoice", component: GSTReturnsEInvoice,  name: "gst-einvoice" },
+      { path: "/gst/tds",      component: GSTReturnsTDS,       name: "gst-tds"      },
     ]
   });
 

@@ -4,7 +4,7 @@ All business logic lives here; controllers are kept thin.
 """
 
 import frappe
-from frappe.utils import flt, getdate, today, cstr
+from frappe.utils import flt, getdate, today
 
 
 # ── Stock Balance ─────────────────────────────────────────────────────────────
@@ -148,6 +148,81 @@ def get_stock_ledger(
         ORDER BY posting_date DESC, creation DESC
         LIMIT %(limit)s
     """, params, as_dict=True)
+
+
+# ── Bin Recalculation (Audit-5) ───────────────────────────────────────────────
+
+def recalculate_bin(item_code: str, warehouse: str) -> dict:
+    """
+    Audit-5: Recompute the Bin balance from the authoritative Stock Ledger Entries
+    and write it back to the Bin table.
+
+    Use this when you suspect Bin drift (e.g., after direct DB edits, cancelled
+    entries, or a concurrency incident).  Returns a dict describing what changed.
+
+    This function is idempotent — calling it multiple times is safe.
+    """
+    # Sum all active SLEs for this item+warehouse
+    result = frappe.db.sql("""
+        SELECT
+            COALESCE(SUM(actual_qty),            0) AS total_qty,
+            COALESCE(SUM(stock_value_difference), 0) AS total_value
+        FROM `tabStock Ledger Entry`
+        WHERE item_code    = %(item_code)s
+          AND warehouse    = %(warehouse)s
+          AND is_cancelled = 0
+    """, {"item_code": item_code, "warehouse": warehouse}, as_dict=True)
+
+    correct_qty   = flt(result[0].total_qty)   if result else 0.0
+    correct_value = flt(result[0].total_value) if result else 0.0
+    correct_rate  = (correct_value / correct_qty) if correct_qty else 0.0
+
+    bin_name = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse})
+
+    if not bin_name:
+        # Nothing to recalculate if no Bin exists yet
+        return {
+            "item_code": item_code,
+            "warehouse": warehouse,
+            "status":    "no_bin",
+            "message":   "Bin does not exist — nothing to recalculate.",
+        }
+
+    old_qty   = flt(frappe.db.get_value("Bin", bin_name, "actual_qty"))
+    old_value = flt(frappe.db.get_value("Bin", bin_name, "stock_value"))
+
+    frappe.db.set_value("Bin", bin_name, {
+        "actual_qty":     correct_qty,
+        "stock_value":    correct_value,
+        "valuation_rate": correct_rate,
+        "projected_qty":  correct_qty + flt(frappe.db.get_value("Bin", bin_name, "ordered_qty"))
+                          - flt(frappe.db.get_value("Bin", bin_name, "reserved_qty")),
+    }, update_modified=True)
+
+    return {
+        "item_code":    item_code,
+        "warehouse":    warehouse,
+        "status":       "recalculated",
+        "old_qty":      old_qty,
+        "new_qty":      correct_qty,
+        "qty_drift":    correct_qty - old_qty,
+        "old_value":    old_value,
+        "new_value":    correct_value,
+        "value_drift":  correct_value - old_value,
+    }
+
+
+def recalculate_all_bins(warehouse: str | None = None) -> list[dict]:
+    """
+    Recalculate every Bin, optionally scoped to a single warehouse.
+    Returns a list of recalculation result dicts (one per Bin).
+    """
+    filters = {}
+    if warehouse:
+        filters["warehouse"] = warehouse
+
+    bins = frappe.get_all("Bin", filters=filters, fields=["item_code", "warehouse"])
+    return [recalculate_bin(b.item_code, b.warehouse) for b in bins]
 
 
 # ── Bin Upsert (helper for controllers) ──────────────────────────────────────
