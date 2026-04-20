@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\([f['fieldname'] for f in d.get\\('fields',[]\\)]\\)\")",
+      "Bash(awk '/const aging = ref\\\\\\(null\\\\\\)/,/const plBreakdown/' /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(find /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/*/doctype -maxdepth 1 -type d -name \"[a-z_]*\")",
+      "Bash(xargs -I {} find {} -maxdepth 1 -type d -not -name doctype)",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/invoicing/doctype/purchase_invoice/purchase_invoice.json'\\)\\); print\\([f['fieldname'] for f in d.get\\('fields',[]\\) if 'return' in f.get\\('fieldname',''\\).lower\\(\\) or 'return' in f.get\\('label',''\\).lower\\(\\)]\\)\")",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/invoicing/doctype/purchase_invoice/purchase_invoice.json'\\)\\); print\\([f['fieldname'] for f in d.get\\('fields',[]\\)]\\)\")",
+      "Bash(bench --site books.localhost migrate)",
+      "Bash(bench --site site1.local migrate --skip-failing)",
+      "Bash(python3 -c ' *)",
+      "Bash(pkill -f \"gunicorn.*frappe\")",
+      "Bash(pkill -f \"frappe.app\")"
+    ],
+    "additionalDirectories": [
+      "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/api",
+      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/api",
+      "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/accounts",
+      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/accounts",
+      "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/invoicing/doctype/purchase_invoice",
+      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/invoicing/doctype/purchase_invoice"
+    ]
+  }
+}

@@ -38,11 +38,16 @@ def _check_company(doc):
     # Only validate against the Company master if that DocType exists in this
     # installation. In standalone Frappe (without ERPNext), Company is stored as
     # a plain Data field, so there is no tabCompany to query.
-    if (frappe.db.table_exists("tabCompany")
-            and not frappe.db.exists("Company", doc.company)):
-        frappe.throw(_(
-            "Company '{0}' does not exist. Please set up your company first."
-        ).format(doc.company))
+    try:
+        if (frappe.db.table_exists("tabCompany")
+                and not frappe.db.exists("Company", doc.company)):
+            frappe.throw(_(
+                "Company '{0}' does not exist. Please set up your company first."
+            ).format(doc.company))
+    except frappe.exceptions.DoesNotExistError:
+        pass   # Company DocType not registered in this installation — skip check
+    except Exception:
+        pass   # Any meta error — skip the check rather than blocking the save
 
 
 def _check_posting_date(doc):

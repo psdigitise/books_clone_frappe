@@ -31,14 +31,35 @@ from frappe.utils import flt, today
 def confirm_sales_order(sales_order: str) -> dict:
     """
     Transition a Sales Order from Draft → Confirmed.
-    Validates stock availability before confirming.
+    Validates stock availability and reserves inventory for the order.
     Returns the updated document.
     """
     doc = _get_doc("Sales Order", sales_order, required_status="Draft")
     _check_stock_for_order(doc)
     frappe.db.set_value("Sales Order", sales_order, "status", "Confirmed", update_modified=True)
     doc.status = "Confirmed"
+    # Reserve inventory: increment reserved_qty for each stock item
+    wh = _default_warehouse(doc.company)
+    if wh:
+        for row in (doc.items or []):
+            if _is_stock_item(row.item_code):
+                _update_bin_reserved_qty(row.item_code, wh, flt(row.qty))
     return _order_summary(doc)
+
+
+@frappe.whitelist(allow_guest=False)
+def cancel_sales_order(sales_order: str) -> dict:
+    """Cancel a Sales Order and release any reserved inventory."""
+    doc = _get_doc("Sales Order", sales_order)
+    if doc.status == "Cancelled":
+        frappe.throw(_("Sales Order {0} is already cancelled.").format(sales_order))
+    wh = _default_warehouse(doc.company)
+    if wh and doc.status == "Confirmed":
+        for row in (doc.items or []):
+            if _is_stock_item(row.item_code):
+                _update_bin_reserved_qty(row.item_code, wh, -flt(row.qty))
+    frappe.db.set_value("Sales Order", sales_order, "status", "Cancelled", update_modified=True)
+    return {"sales_order": sales_order, "status": "Cancelled"}
 
 
 @frappe.whitelist(allow_guest=False)
@@ -126,7 +147,10 @@ def create_delivery_from_order(
         "reference_name":    sales_order,
         "items":             items,
     })
+    se.name = "SEC-" + frappe.generate_hash(txt=f"so{sales_order}{frappe.utils.now()}", length=8).upper()
     se.flags.ignore_permissions = True
+    se.flags.ignore_links = True
+    se.flags.ignore_mandatory = True
     se.insert()
     se.submit()
 
@@ -134,6 +158,10 @@ def create_delivery_from_order(
     fully_delivered = _is_fully_delivered("Sales Order", sales_order, doc)
     new_status = "Delivered" if fully_delivered else "Partly Delivered"
     frappe.db.set_value("Sales Order", sales_order, "status", new_status, update_modified=True)
+
+    # Release reservation for delivered items
+    for row in items:
+        _update_bin_reserved_qty(row["item_code"], wh, -flt(row["qty"]))
 
     return {
         "stock_entry":      se.name,
@@ -182,9 +210,15 @@ def create_invoice_from_order(sales_order: str) -> dict:
 
 @frappe.whitelist(allow_guest=False)
 def confirm_purchase_order(purchase_order: str) -> dict:
-    """Confirm a Purchase Order (Draft → Confirmed)."""
+    """Confirm a Purchase Order (Draft → Confirmed) and track ordered qty."""
     doc = _get_doc("Purchase Order", purchase_order, required_status="Draft")
     frappe.db.set_value("Purchase Order", purchase_order, "status", "Confirmed", update_modified=True)
+    # Track ordered qty so projected_qty reflects incoming stock
+    wh = _default_warehouse(doc.company)
+    if wh:
+        for row in (doc.items or []):
+            if _is_stock_item(row.item_code):
+                _update_bin_ordered_qty(row.item_code, wh, flt(row.qty))
     return {"purchase_order": doc.name, "status": "Confirmed"}
 
 
@@ -263,13 +297,20 @@ def receive_goods_from_order(
         "reference_name":    purchase_order,
         "items":             items,
     })
+    se.name = "SEC-" + frappe.generate_hash(txt=f"po{purchase_order}{frappe.utils.now()}", length=8).upper()
     se.flags.ignore_permissions = True
+    se.flags.ignore_links = True
+    se.flags.ignore_mandatory = True
     se.insert()
     se.submit()
 
     fully_received = _is_fully_received("Purchase Order", purchase_order, doc)
     new_status = "Received" if fully_received else "Partly Received"
     frappe.db.set_value("Purchase Order", purchase_order, "status", new_status, update_modified=True)
+
+    # Release ordered qty for received items
+    for row in items:
+        _update_bin_ordered_qty(row["item_code"], wh, -flt(row["qty"]))
 
     return {
         "stock_entry":     se.name,
@@ -478,7 +519,7 @@ def _is_stock_item(item_code: str) -> bool:
     return bool(frappe.db.get_value("Item", item_code, "is_stock_item"))
 
 
-def _default_warehouse(company: str = None) -> str | None:  # noqa: ARG001
+def _default_warehouse(_company: str = None) -> str | None:
     try:
         return frappe.db.get_single_value("Books Settings", "default_warehouse") or None
     except Exception:
@@ -568,3 +609,35 @@ def _is_fully_received(ref_doctype: str, ref_name: str, doc) -> bool:
         if flt(received.get(row.item_code, 0)) < flt(row.qty):
             return False
     return True
+
+
+def _update_bin_reserved_qty(item_code: str, warehouse: str, delta: float) -> None:
+    """Increment or decrement reserved_qty on the Bin (clamped to 0)."""
+    bin_name = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse})
+    if not bin_name:
+        return
+    current = flt(frappe.db.get_value("Bin", bin_name, "reserved_qty"))
+    actual  = flt(frappe.db.get_value("Bin", bin_name, "actual_qty"))
+    ordered = flt(frappe.db.get_value("Bin", bin_name, "ordered_qty"))
+    new_reserved = max(0, current + delta)
+    frappe.db.set_value("Bin", bin_name, {
+        "reserved_qty":  new_reserved,
+        "projected_qty": actual + ordered - new_reserved,
+    }, update_modified=True)
+
+
+def _update_bin_ordered_qty(item_code: str, warehouse: str, delta: float) -> None:
+    """Increment or decrement ordered_qty on the Bin (clamped to 0).
+    Creates the Bin if it doesn't exist yet (PO confirmed before first receipt)."""
+    bin_name = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse})
+    if not bin_name:
+        from zoho_books_clone.inventory.utils import get_or_create_bin
+        bin_name = get_or_create_bin(item_code, warehouse)
+    current  = flt(frappe.db.get_value("Bin", bin_name, "ordered_qty"))
+    actual   = flt(frappe.db.get_value("Bin", bin_name, "actual_qty"))
+    reserved = flt(frappe.db.get_value("Bin", bin_name, "reserved_qty"))
+    new_ordered = max(0, current + delta)
+    frappe.db.set_value("Bin", bin_name, {
+        "ordered_qty":   new_ordered,
+        "projected_qty": actual + new_ordered - reserved,
+    }, update_modified=True)

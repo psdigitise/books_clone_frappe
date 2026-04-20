@@ -39,6 +39,14 @@
  "title_field": "",
  "fields": [
   {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "SLE-.YYYY.-.#####",
+   "reqd": 0,
+   "hidden": 1
+  },
+  {
    "creation": "2026-04-11 00:00:00.000000",
    "modified": "2026-04-11 00:00:00.000000",
    "modified_by": "Administrator",

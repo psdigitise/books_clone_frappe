@@ -333,24 +333,56 @@
        disabled    — disables interaction
      Emits: update:modelValue
   ═══════════════════════════════════════════════════════════════ */
+  /* ── Quick-create field configs per doctype ── */
+  const SS_CREATE_FIELDS = {
+    "Item": [
+      { f:"item_name",    l:"Item Name",   req:true,  type:"text"   },
+      { f:"item_group",   l:"Item Group",  req:false, type:"text"   },
+      { f:"standard_rate",l:"Rate (₹)",    req:false, type:"number" },
+      { f:"stock_uom",    l:"UOM",         req:false, type:"text", placeholder:"Nos" },
+    ],
+    "Customer": [
+      { f:"customer_name", l:"Customer Name", req:true, type:"text" },
+      { f:"customer_group",l:"Group",          req:false,type:"text", placeholder:"All Customer Groups" },
+      { f:"mobile_no",     l:"Mobile",         req:false,type:"text" },
+    ],
+    "Supplier": [
+      { f:"supplier_name", l:"Supplier Name", req:true,  type:"text" },
+      { f:"supplier_group",l:"Group",         req:false, type:"text", placeholder:"All Supplier Groups" },
+    ],
+    "Warehouse": [
+      { f:"warehouse_name", l:"Warehouse Name", req:true, type:"text" },
+      { f:"warehouse_type", l:"Type",           req:false,type:"text", placeholder:"Stores" },
+    ],
+  };
+
   const SearchableSelect = defineComponent({
     name: "SearchableSelect",
     props: {
-      modelValue: { default: "" },
-      options:    { type: Array, default: () => [] },
-      valueKey:   { type: String, default: "" },
-      labelKey:   { type: String, default: "" },
-      placeholder:{ type: String, default: "— Select —" },
-      compact:    { type: Boolean, default: false },
-      disabled:   { type: Boolean, default: false },
+      modelValue:     { default: "" },
+      options:        { type: Array, default: () => [] },
+      valueKey:       { type: String, default: "" },
+      labelKey:       { type: String, default: "" },
+      placeholder:    { type: String, default: "— Select —" },
+      compact:        { type: Boolean, default: false },
+      disabled:       { type: Boolean, default: false },
+      createable:     { type: Boolean, default: false },   // show "+ Create" option
+      createDoctype:  { type: String,  default: "" },      // if set, handle creation internally
+      createLabel:    { type: String,  default: "" },      // e.g. "Item", "Customer"
     },
-    emits: ["update:modelValue"],
+    emits: ["update:modelValue", "create"],
     setup(props, { emit }) {
-      const q        = ref("");
-      const open     = ref(false);
-      const inputEl  = ref(null);
-      const trigEl   = ref(null);           // the visible trigger button
-      const dropStyle= ref({});             // fixed-position style for teleported drop
+      const q         = ref("");
+      const open      = ref(false);
+      const inputEl   = ref(null);
+      const trigEl    = ref(null);
+      const dropStyle = ref({});
+
+      // ── Quick-create state ──
+      const qcOpen    = ref(false);
+      const qcSaving  = ref(false);
+      const qcForm    = reactive({});
+      const qcQuery   = ref("");   // pre-fill name from typed query
 
       // Normalise any option shape → {value, label}
       const normalized = computed(() => {
@@ -370,7 +402,6 @@
         return found ? found.label : props.modelValue;
       });
 
-      // Prefix-priority + contains fallback
       const filtered = computed(() => {
         const qv = q.value.toLowerCase().trim();
         if (!qv) return normalized.value.slice(0, 150);
@@ -383,7 +414,19 @@
         return [...pre, ...con].slice(0, 100);
       });
 
-      // Calculate fixed position from the trigger's bounding rect
+      // Show create option when: createable=true AND search query typed AND no exact full match
+      const showCreate = computed(() => {
+        if (!props.createable) return false;
+        const qv = q.value.trim();
+        if (!qv) return false;
+        const exactMatch = normalized.value.some(o => String(o.label).toLowerCase() === qv.toLowerCase());
+        return !exactMatch;
+      });
+
+      const qcFields = computed(() => SS_CREATE_FIELDS[props.createDoctype] || [
+        { f: "name", l: props.createLabel || props.createDoctype || "Name", req: true, type: "text" },
+      ]);
+
       function calcDropStyle() {
         if (!trigEl.value) return;
         const r = trigEl.value.getBoundingClientRect();
@@ -413,7 +456,43 @@
         q.value = "";
       }
 
-      // Close on outside pointer-down (teleported drop included)
+      function onClickCreate() {
+        const typed = q.value.trim();
+        open.value = false;
+        if (props.createDoctype && SS_CREATE_FIELDS[props.createDoctype]) {
+          // internal quick-create flow
+          qcQuery.value = typed;
+          // pre-fill form with empty fields, set first field to typed value
+          qcFields.value.forEach(fd => { qcForm[fd.f] = ""; });
+          if (qcFields.value.length) qcForm[qcFields.value[0].f] = typed;
+          qcOpen.value = true;
+        } else {
+          // delegate to parent
+          emit("create", typed);
+        }
+      }
+
+      async function qcSubmit() {
+        const firstReq = qcFields.value.find(fd => fd.req);
+        if (firstReq && !qcForm[firstReq.f]) {
+          toast(`${firstReq.l} is required`, "error"); return;
+        }
+        qcSaving.value = true;
+        try {
+          const doctype = props.createDoctype;
+          const payload = { doctype };
+          qcFields.value.forEach(fd => { if (qcForm[fd.f] !== undefined && qcForm[fd.f] !== "") payload[fd.f] = qcForm[fd.f]; });
+          const res = await apiSave(payload);
+          const newName = res?.name || res;
+          // Select the newly created item and close modal
+          pick({ value: newName, label: payload[qcFields.value[0].f] || newName });
+          qcOpen.value = false;
+          toast(`${props.createLabel || doctype} "${newName}" created`, "success");
+        } catch(e) {
+          toast("Create failed: " + (e?.message || e), "error");
+        } finally { qcSaving.value = false; }
+      }
+
       function onDoc(e) {
         if (!open.value) return;
         const trig = trigEl.value;
@@ -426,7 +505,13 @@
       onMounted(() => document.addEventListener("pointerdown", onDoc, true));
       onUnmounted(() => document.removeEventListener("pointerdown", onDoc, true));
 
-      return { q, open, inputEl, trigEl, dropStyle, displayLabel, normalized, filtered, openDD, pick, icon };
+      return {
+        q, open, inputEl, trigEl, dropStyle,
+        displayLabel, normalized, filtered, showCreate,
+        openDD, pick, onClickCreate,
+        qcOpen, qcSaving, qcForm, qcFields, qcQuery, qcSubmit,
+        icon,
+      };
     },
     template: `
 <div class="ss-wrap">
@@ -440,22 +525,58 @@
     </span>
     <span class="ss-caret" v-html="icon('chevD',11)"></span>
   </div>
+
+  <!-- Dropdown -->
   <teleport to="body">
     <div v-if="open" class="ss-drop ss-drop-teleport" :style="dropStyle">
       <div class="ss-search-row">
         <input ref="inputEl" v-model="q" class="ss-search-input"
           placeholder="Type to search…"
           @keydown.escape="open=false"
-          @keydown.enter.prevent="filtered.length && pick(filtered[0])"/>
+          @keydown.enter.prevent="filtered.length ? pick(filtered[0]) : (showCreate && onClickCreate())"/>
       </div>
       <div class="ss-opts">
-        <div v-if="!filtered.length" class="ss-no-match">
+        <div v-if="!filtered.length && !showCreate" class="ss-no-match">
           {{normalized.length ? 'No matches for "'+q+'"' : 'No options available'}}
         </div>
         <div v-for="o in filtered" :key="o.value"
           class="ss-opt" :class="{'ss-opt-sel': String(o.value)===String(modelValue)}"
           @mousedown.prevent="pick(o)">
           {{o.label}}
+        </div>
+        <!-- Create new option -->
+        <div v-if="showCreate" class="ss-opt ss-opt-create" @mousedown.prevent="onClickCreate">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Create <strong style="margin-left:4px">"{{q.trim()}}"</strong>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- Quick-create modal -->
+  <teleport to="body">
+    <div v-if="qcOpen" class="ss-qc-overlay" @mousedown.self="qcOpen=false">
+      <div class="ss-qc-modal">
+        <div class="ss-qc-header">
+          <span>Create New {{createLabel || createDoctype}}</span>
+          <button class="ss-qc-close" @click="qcOpen=false">✕</button>
+        </div>
+        <div class="ss-qc-body">
+          <div v-for="fd in qcFields" :key="fd.f" class="ss-qc-field">
+            <label class="ss-qc-label">{{fd.l}}<span v-if="fd.req" style="color:#ef4444;margin-left:2px">*</span></label>
+            <input
+              :type="fd.type || 'text'"
+              v-model="qcForm[fd.f]"
+              :placeholder="fd.placeholder || fd.l"
+              class="ss-qc-input"
+              :autofocus="fd === qcFields[0]"/>
+          </div>
+        </div>
+        <div class="ss-qc-footer">
+          <button class="nim-btn" @click="qcOpen=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" :disabled="qcSaving" @click="qcSubmit">
+            <span v-if="qcSaving">Saving…</span><span v-else>Create &amp; Select</span>
+          </button>
         </div>
       </div>
     </div>
@@ -520,8 +641,20 @@
             doctype: "Customer", filters: { name: form.customer },
             fieldname: ["default_currency"]
           });
-          form.customer_name = form.customer; // name IS the display name for custom Customer
+          form.customer_name = form.customer;
           if (r?.default_currency) form.currency = r.default_currency;
+        } catch { }
+        // Pre-fill items from this customer's last invoice/order
+        try {
+          const blank = form.items.length === 1 && !form.items[0].item_name && !form.items[0].rate;
+          if (blank) {
+            const res = await apiGET("zoho_books_clone.api.docs.get_party_last_items", { party_type: "Customer", party: form.customer });
+            if (res?.items?.length) {
+              form.items = res.items.map(i => ({ item_name: i.item_name || i.item_code || "", description: i.description || "", qty: flt(i.qty) || 1, rate: flt(i.rate), amount: 0 }));
+              recalc();
+              toast("Items pre-filled from " + res.source, "info");
+            }
+          }
         } catch { }
       }
 
@@ -681,7 +814,7 @@
       <div class="nim-grid-3 nim-mb">
         <div class="nim-field nim-span-1">
           <label class="nim-label">Customer <span class="nim-req">*</span></label>
-          <searchable-select v-model="form.customer" :options="customers" placeholder="Select customer…" @update:modelValue="onCustomer"/>
+          <searchable-select v-model="form.customer" :options="customers" placeholder="Select customer…" :createable="true" create-doctype="Customer" create-label="Customer" @update:modelValue="onCustomer" @create="q => { form.customer=q; onCustomer(); }"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Invoice Date <span class="nim-req">*</span></label>
@@ -724,7 +857,7 @@
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
               <td>
-                <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
               </td>
               <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
               <td style="text-align:center">
@@ -1281,6 +1414,18 @@
           form.supplier_name = form.supplier;
           if (r.default_currency) form.currency = r.default_currency;
         } catch { }
+        // Pre-fill items from this vendor's last purchase invoice/order
+        try {
+          const blank = form.items.length === 1 && !form.items[0].item_name && !form.items[0].rate;
+          if (blank) {
+            const res = await apiGET("zoho_books_clone.api.docs.get_party_last_items", { party_type: "Supplier", party: form.supplier });
+            if (res?.items?.length) {
+              form.items = res.items.map(i => ({ item_name: i.item_name || i.item_code || "", description: i.description || "", qty: flt(i.qty) || 1, rate: flt(i.rate), amount: 0 }));
+              recalc();
+              toast("Items pre-filled from " + res.source, "info");
+            }
+          }
+        } catch { }
       }
 
       async function save(andSubmit) {
@@ -1348,7 +1493,7 @@
       <div class="nim-grid-3 nim-mb">
         <div class="nim-field" style="grid-column:span 2">
           <label class="nim-label">Supplier <span class="nim-req">*</span></label>
-          <searchable-select v-model="form.supplier" :options="suppliers" placeholder="Select supplier…" @update:modelValue="onSupplier"/>
+          <searchable-select v-model="form.supplier" :options="suppliers" placeholder="Select supplier…" :createable="true" create-doctype="Supplier" create-label="Supplier" @update:modelValue="onSupplier" @create="q => { form.supplier=q; onSupplier(); }"/>
         </div>
         <div class="nim-field">
           <label class="nim-label">Supplier Invoice No</label>
@@ -1383,7 +1528,7 @@
           <tbody>
             <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
               <td>
-                <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
               </td>
               <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" class="nim-cell nim-num" @input="recalc"/></td>
               <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" class="nim-cell nim-num" @input="recalc"/></td>
@@ -2904,7 +3049,7 @@
               <tr v-for="(item,i) in form.items" :key="i">
                 <td style="color:#aaa;font-size:11px;text-align:center;width:28px">{{i+1}}</td>
                 <td>
-                  <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                  <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
                 </td>
                 <td><input v-model="item.description" class="zb-cell-input" placeholder="Description"/></td>
                 <td><input v-model.number="item.qty" type="number" min="1" class="zb-cell-input zb-cell-num" @input="recalc"/></td>
@@ -4114,11 +4259,23 @@
         showDrawer.value = true;
       }
 
-      function pickCustomer(c) {
+      async function pickCustomer(c) {
         selCustomer.value = c.name;
         custSearch.value = c.customer_name || c.name;
         form.customer = c.name;
         showCustDrop.value = false;
+        // Pre-fill items from last quote/order for this customer
+        try {
+          const blank = form.items.length === 1 && !form.items[0].item_name && !form.items[0].rate;
+          if (blank) {
+            const res = await apiGET("zoho_books_clone.api.docs.get_party_last_items", { party_type: "Customer", party: c.name });
+            if (res?.items?.length) {
+              form.items = res.items.map(i => ({ item_name: i.item_name || i.item_code || "", description: i.description || "", qty: flt(i.qty) || 1, rate: flt(i.rate), amount: 0 }));
+              recalc();
+              toast("Items pre-filled from " + res.source, "info");
+            }
+          }
+        } catch { }
       }
 
       async function saveQuote(status) {
@@ -4374,7 +4531,7 @@
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
-                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
                       </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -4652,11 +4809,23 @@
         showDrawer.value = true;
       }
 
-      function pickCustomer(c) {
+      async function pickCustomer(c) {
         selCustomer.value = c.name;
         custSearch.value = c.customer_name || c.name;
         form.customer = c.name;
         showCustDrop.value = false;
+        // Pre-fill items from last order/invoice for this customer
+        try {
+          const blank = form.items.length === 1 && !form.items[0].item_name && !form.items[0].rate;
+          if (blank) {
+            const res = await apiGET("zoho_books_clone.api.docs.get_party_last_items", { party_type: "Customer", party: c.name });
+            if (res?.items?.length) {
+              form.items = res.items.map(i => ({ item_name: i.item_name || i.item_code || "", description: i.description || "", qty: flt(i.qty) || 1, rate: flt(i.rate), amount: 0 }));
+              recalc();
+              toast("Items pre-filled from " + res.source, "info");
+            }
+          }
+        } catch { }
       }
 
       async function saveOrder(status) {
@@ -5046,7 +5215,7 @@
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
-                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
                       </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5436,9 +5605,25 @@
       async function doGenerate() {
         try {
           const s = generateTarget.value;
-          const inv = { doctype: "Sales Invoice", company: co(), customer: s.customer, posting_date: todayStr(), title: "Auto-" + (s.schedule_name || s.name), is_recurring: 0, items: (s.items || []).map(r => ({ item_code: r.item_name, item_name: r.item_name, description: r.description || "", qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount) })), grand_total: s.grand_total };
-          await apiSave(inv);
-          toast("Invoice generated for " + s.customer, "info");
+          // Resolve accounts so on_submit GL entries can post
+          const accts = await apiGET("zoho_books_clone.api.docs.get_accounts", { company: co() });
+          const ar     = (accts.ar     || [])[0]?.name || "";
+          const income = (accts.income || [])[0]?.name || "";
+          const inv = {
+            doctype: "Sales Invoice", company: co(), customer: s.customer,
+            posting_date: todayStr(), is_recurring: 0,
+            debit_to: ar, income_account: income,
+            items: (s.items || []).map(r => ({ item_code: r.item_name, item_name: r.item_name, description: r.description || "", qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount) })),
+            grand_total: s.grand_total,
+          };
+          const saved = await apiSave(inv);
+          const invName = saved?.name || saved?.data?.name;
+          if (invName) {
+            await apiPOST("zoho_books_clone.api.docs.submit_doc", { doctype: "Sales Invoice", name: invName });
+            toast("Invoice " + invName + " submitted for " + s.customer);
+          } else {
+            toast("Invoice generated for " + s.customer, "info");
+          }
         } catch(e) { toast("Generate failed: " + e.message, "error"); }
         showGenerate.value = false;
       }
@@ -5735,7 +5920,7 @@
                   <tbody>
                     <tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                       <td>
-                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                        <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
                       </td>
                       <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                       <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -5907,10 +6092,21 @@
   const CreditNotes = defineComponent({
     name: "CreditNotes",
     setup() {
+      const RETURN_REASONS = [
+        { val: "Goods Returned",    lbl: "Goods Returned by Customer" },
+        { val: "Price Adjustment",  lbl: "Price Adjustment / Overcharge" },
+        { val: "Billing Error",     lbl: "Billing Error" },
+        { val: "Duplicate Invoice", lbl: "Duplicate Invoice" },
+        { val: "Quality Issues",    lbl: "Quality Issues" },
+        { val: "Discount",          lbl: "Post-Sale Discount" },
+        { val: "Other",             lbl: "Other" },
+      ];
+
       const list = ref([]);
       const allInvoices = ref([]);
       const customers = ref([]);
       const allItems = ref([]);
+      const warehouses = ref([]);
       const loading = ref(true);
       const search = ref("");
       const activeFilter = ref("all");
@@ -5970,7 +6166,7 @@
 
       const form = reactive({
         name: "", customer: "", against_invoice: "", date: "", reason: "",
-        status: "Draft", notes: "",
+        warehouse: "", status: "Draft", notes: "",
         items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
         taxes: [],
       });
@@ -5997,7 +6193,7 @@
 
       function resetForm(from) {
         const s = from || {};
-        Object.assign(form, { name: s.name || "", customer: s.customer || "", against_invoice: s.against_invoice || "", date: s.date || todayStr(), reason: s.reason || "", status: s.status || "Draft", notes: s.notes || "", items: s.items?.length ? s.items.map(r => ({ ...r })) : [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }], taxes: (s.taxes || []).map(t => ({ ...t })) });
+        Object.assign(form, { name: s.name || "", customer: s.customer || "", against_invoice: s.against_invoice || "", date: s.date || todayStr(), reason: s.reason || "", warehouse: s.warehouse || "", status: s.status || "Draft", notes: s.notes || "", items: s.items?.length ? s.items.map(r => ({ ...r })) : [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }], taxes: (s.taxes || []).map(t => ({ ...t })) });
         selCustomer.value = s.customer || ""; custSearch.value = s.customer || ""; selInvoice.value = null; invSearch.value = s.against_invoice || ""; showCustDrop.value = false; showInvDrop.value = false;
       }
 
@@ -6011,29 +6207,50 @@
         const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
         if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
         if (!form.items.length) { toast("Please add at least one item", "error"); return; }
+        if (status === "Submitted" && form.reason === "Goods Returned" && !form.warehouse) {
+          toast("Select the return warehouse for restocking", "error"); return;
+        }
         saving.value = true;
         try {
-          const doc = {
-            doctype: "Sales Invoice",
-            is_return: 1,
-            company: co(),
-            customer: cust,
-            return_against: invSearch.value.trim() || null,
-            posting_date: form.date || todayStr(),
-            remark: form.reason,
-            status,
-            items: form.items.filter(r => r.item_name || r.rate).map(r => ({
-              item_code: r.item_name, item_name: r.item_name, description: r.description || "",
-              qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
-            })),
-            taxes: form.taxes.map(t => ({ charge_type: "On Net Total", description: t.description, account_head: t.tax_type, rate: t.rate })),
-            net_total: Math.round(netTotal.value * 100) / 100,
-            grand_total: grandTotal.value,
-          };
-          if (drawerMode.value === "edit") doc.name = form.name;
-          await apiSave(doc);
+          if (status === "Submitted") {
+            const result = await apiPOST("zoho_books_clone.api.docs.create_credit_note", {
+              customer:        cust,
+              against_invoice: invSearch.value.trim() || "",
+              date:            form.date || todayStr(),
+              reason:          form.reason,
+              notes:           form.notes,
+              warehouse:       form.warehouse || "",
+              items:           JSON.stringify(form.items.filter(r => r.item_name).map(r => ({
+                item_name: r.item_name, description: r.description || "",
+                qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+              }))),
+              taxes: JSON.stringify(form.taxes),
+            });
+            const msg = result.stock_entry
+              ? `Credit note ${result.credit_note} issued. Stock receipt ${result.stock_entry} created.`
+              : `Credit note ${result.credit_note} issued.`;
+            toast(msg);
+          } else {
+            const doc = {
+              doctype: "Credit Note",
+              company: co(),
+              customer: cust,
+              return_against: invSearch.value.trim() || null,
+              posting_date: form.date || todayStr(),
+              remarks: form.reason,
+              items: form.items.filter(r => r.item_name || r.rate).map(r => ({
+                item_code: r.item_name, item_name: r.item_name, description: r.description || "",
+                qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+              })),
+              taxes: form.taxes.map(t => ({ charge_type: "On Net Total", description: t.description, account_head: t.tax_type, rate: t.rate })),
+              net_total: Math.round(netTotal.value * 100) / 100,
+              grand_total: grandTotal.value,
+            };
+            if (drawerMode.value === "edit") doc.name = form.name;
+            await apiSave(doc);
+            toast("Credit note saved as Draft");
+          }
           await load();
-          toast(status === "Submitted" ? "Credit note submitted!" : "Credit note saved as Draft");
           showDrawer.value = false;
         } catch(e) { toast("Save failed: " + e.message, "error"); }
         finally { saving.value = false; }
@@ -6047,7 +6264,7 @@
       async function doDelete() {
         deleting.value = true;
         try {
-          await apiDelete("Sales Invoice", deleteTarget.value.name);
+          await apiDelete("Credit Note", deleteTarget.value.name);
           list.value = list.value.filter(s => s.name !== deleteTarget.value.name);
           toast("Credit note deleted");
         } catch(e) { toast("Delete failed: " + e.message, "error"); }
@@ -6057,14 +6274,14 @@
       async function load() {
         loading.value = true;
         try {
-          const rows = await apiList("Sales Invoice", {
-            fields: ["name","customer","customer_name","posting_date","due_date","status","grand_total","net_total","outstanding_amount","notes"],
-            filters: [["status","!=","Cancelled"]],
+          const rows = await apiList("Credit Note", {
+            fields: ["name","customer","customer_name","posting_date","status","grand_total","net_total","return_against","reason"],
+            filters: [["docstatus","!=",2]],
             order: "modified desc", limit: 500
           });
           list.value = (rows || []).map(r => ({
             name: r.name, customer: r.customer, date: r.posting_date,
-            against_invoice: "", reason: r.notes || "",
+            against_invoice: r.return_against || "", reason: r.reason || "",
             status: r.status || "Draft",
             grand_total: flt(r.grand_total), net_total: flt(r.net_total),
             items: [], taxes: []
@@ -6072,8 +6289,9 @@
         } catch(e) { toast("Could not load credit notes: " + e.message, "error"); }
         loading.value = false;
         try { customers.value = await apiList("Customer", { fields: ["name","customer_name"], filters: [["disabled","=",0]], order: "customer_name asc", limit: 300 }); } catch { }
-        try { allInvoices.value = await apiList("Sales Invoice", { fields: ["name","customer","customer_name","posting_date","grand_total","outstanding_amount"], filters: [["docstatus","=",1]], order: "posting_date desc", limit: 300 }); } catch { }
+        try { allInvoices.value = await apiList("Sales Invoice", { fields: ["name","customer","customer_name","posting_date","grand_total","outstanding_amount"], filters: [["docstatus","=",1],["is_return","=",0]], order: "posting_date desc", limit: 300 }); } catch { }
         try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], order: "item_name asc", limit: 300 }); } catch { }
+        try { warehouses.value = await apiList("Warehouse", { fields: ["name","warehouse_name"], filters: [["disabled","=",0],["is_group","=",0]], limit: 200 }); } catch { }
       }
       onMounted(load);
 
@@ -6086,7 +6304,7 @@
         }
       }
 
-      return { list, loading, search, allItems, onItemPick, activeFilter, filtered, counts, summary, STATUS_CFG, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
+      return { list, loading, search, allItems, warehouses, onItemPick, activeFilter, filtered, counts, summary, STATUS_CFG, RETURN_REASONS, showDrawer, drawerMode, saving, viewNote, form, selCustomer, custSearch, showCustDrop, custDropItems, selInvoice, invSearch, showInvDrop, invDropItems, netTotal, taxTotal, grandTotal, recalc, addItem, removeItem, addTax, removeTax, pickCustomer, pickInvoice, saveNote, openAdd, openEdit, openView, showDelete, deleteTarget, deleting, confirmDelete, doDelete, load, icon, fmt, fmtDate, flt };
     },
     template: `
 <div class="b-page">
@@ -6231,7 +6449,9 @@
                 </div>
                 <div class="nim-field"><label class="nim-label">Credit Note Date</label><input v-model="form.date" type="date" class="nim-input"/></div>
                 <div class="nim-field"><label class="nim-label">Status</label><select v-model="form.status" class="nim-select"><option>Draft</option><option>Submitted</option><option>Applied</option></select></div>
-                <div class="nim-field" style="grid-column:span 2"><label class="nim-label">Reason</label><input v-model="form.reason" class="nim-input" placeholder="Reason for credit note (returns, overcharge, etc.)"/></div>
+                <div class="nim-field"><label class="nim-label">Reason <span class="nim-req">*</span></label><select v-model="form.reason" class="nim-select"><option value="">— Select reason —</option><option v-for="r in RETURN_REASONS" :key="r.val" :value="r.val">{{r.lbl}}</option></select></div>
+                <div v-if="form.reason==='Goods Returned'" class="nim-field"><label class="nim-label">Return Warehouse <span class="nim-req">*</span> <span style="font-size:11px;color:#9ca3af;font-weight:400">(restock here)</span></label><select v-model="form.warehouse" class="nim-select"><option value="">— Select Warehouse —</option><option v-for="w in warehouses" :key="w.name" :value="w.name">{{w.warehouse_name||w.name}}</option></select></div>
+                <div v-else class="nim-field"><label class="nim-label">Notes</label><input v-model="form.notes" class="nim-input" placeholder="Optional notes…"/></div>
               </div>
               <div class="nim-section-header" style="margin-bottom:8px"><div class="cust-sec-label" style="margin:0">Items</div></div>
               <div class="nim-table-wrap nim-mb">
@@ -6245,7 +6465,7 @@
                 </tr></thead>
                 <tbody><tr v-for="(item,i) in form.items" :key="i" class="nim-tr">
                   <td>
-                    <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" @update:modelValue="onItemPick(item)"/>
+                    <searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select Item —" :compact="true" class="ss-cell-wrap" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)" @create="q => { item.item_name=q; onItemPick(item); }"/>
                   </td>
                   <td><input v-model="item.description" class="nim-cell" placeholder="Description"/></td>
                   <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="nim-cell nim-num" @input="recalc"/></td>
@@ -7089,11 +7309,23 @@
           (v.supplier_name || "").toLowerCase().includes(q) || v.name.toLowerCase().includes(q)
         ).slice(0, 40);
       });
-      function pickVendor(v) {
+      async function pickVendor(v) {
         selVendor.value = v.name;
         vendSearch.value = v.supplier_name || v.name;
         form.vendor = v.name;
         showVendDrop.value = false;
+        // Pre-fill items from this vendor's last purchase order/invoice
+        try {
+          const blank = form.items.length === 1 && !form.items[0].item_name && !form.items[0].rate;
+          if (blank) {
+            const res = await apiGET("zoho_books_clone.api.docs.get_party_last_items", { party_type: "Supplier", party: v.name });
+            if (res?.items?.length) {
+              form.items = res.items.map(i => ({ item_name: i.item_name || i.item_code || "", description: i.description || "", qty: flt(i.qty) || 1, rate: flt(i.rate), amount: 0 }));
+              recalc();
+              toast("Items pre-filled from " + res.source, "info");
+            }
+          }
+        } catch { }
       }
 
       /* ── Item dropdown helpers ── */
@@ -8142,7 +8374,7 @@
         { val: "Other", lbl: "Other" }
       ];
 
-      const list = ref([]), vendors = ref([]), allBills = ref([]), allItems = ref([]), loading = ref(true);
+      const list = ref([]), vendors = ref([]), allBills = ref([]), allItems = ref([]), warehouses = ref([]), loading = ref(true);
       const search = ref(""), activeFilter = ref("all");
       const showDrawer = ref(false), drawerMode = ref("add"), saving = ref(false);
       const viewNote = ref(null), editingName = ref(null);
@@ -8150,7 +8382,7 @@
       // Drawer Form
       const form = reactive({
         name: "", vendor: "", against_bill: "", date: "", reason: "",
-        debit_type: "Partial", notes: "", items: [], debit_amount: 0
+        debit_type: "Partial", notes: "", items: [], debit_amount: 0, warehouse: ""
       });
 
       const showDelete = ref(false), deleteTarget = ref(null);
@@ -8186,19 +8418,20 @@
         loading.value = true;
         try {
           const rows = await apiList("Purchase Invoice", {
-            fields: ["name","supplier","supplier_name","posting_date","due_date","status","grand_total","net_total","outstanding_amount"],
-            filters: [["status","!=","Cancelled"]],
+            fields: ["name","supplier","supplier_name","posting_date","due_date","status","grand_total","net_total","outstanding_amount","is_return","return_against","remark"],
+            filters: [["is_return","=",1],["docstatus","!=",2]],
             order: "modified desc", limit: 500
           });
           list.value = (rows || []).map(r => ({
-            name: r.name, vendor: r.supplier, against_bill: "",
-            date: r.posting_date, reason: "", status: r.status || "Draft",
+            name: r.name, vendor: r.supplier, against_bill: r.return_against || "",
+            date: r.posting_date, reason: r.remark || "", status: r.status || "Draft",
             debit_type: "Partial", notes: "",
             debit_amount: flt(r.grand_total), items: []
           }));
           vendors.value = await apiList("Supplier", { fields: ["name","supplier_name"], filters: [["disabled","=",0]], order: "supplier_name asc", limit: 300 });
-          allBills.value = await apiList("Purchase Invoice", { fields: ["name","supplier","posting_date","grand_total","outstanding_amount"], filters: [["docstatus","=",1]], order: "posting_date desc", limit: 300 });
+          allBills.value = await apiList("Purchase Invoice", { fields: ["name","supplier","posting_date","grand_total","outstanding_amount"], filters: [["docstatus","=",1],["is_return","=",0]], order: "posting_date desc", limit: 300 });
           try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], order: "item_name asc", limit: 300 }); } catch { }
+          try { warehouses.value = await apiList("Warehouse", { fields: ["name","warehouse_name"], filters: [["disabled","=",0],["is_group","=",0]], limit: 200 }); } catch { }
         } catch(e) { toast("Could not load debit notes: " + e.message, "error"); }
         finally { loading.value = false; }
       }
@@ -8209,7 +8442,7 @@
           name: "", vendor: "", against_bill: "", date: new Date().toISOString().slice(0, 10),
           reason: "", debit_type: "Partial", notes: "",
           items: [{ item_name: "", description: "", qty: 1, rate: 0, amount: 0 }],
-          debit_amount: 0
+          debit_amount: 0, warehouse: ""
         });
         drawerMode.value = "add"; showDrawer.value = true;
       }
@@ -8243,27 +8476,48 @@
         const emptyItem = form.items.find(r => !r.item_name || !r.item_name.trim());
         if (emptyItem) { toast("Please select an item for every row in the Items table", "error"); return; }
         if (form.debit_amount <= 0) { toast("Amount must be > 0", "error"); return; }
+        if (status === "Submitted" && form.reason === "Goods Returned" && !form.warehouse) {
+          toast("Select the source warehouse for the returned goods", "error"); return;
+        }
         saving.value = true;
         try {
-          const doc = {
-            doctype: "Purchase Invoice",
-            is_return: 1,
-            company: co(),
-            supplier: form.vendor,
-            return_against: form.against_bill || null,
-            posting_date: form.date || new Date().toISOString().slice(0, 10),
-            remark: form.reason,
-            status,
-            items: form.items.filter(r => r.item_name).map(r => ({
-              item_code: r.item_name, item_name: r.item_name, description: r.description || "",
-              qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
-            })),
-            grand_total: form.debit_amount,
-          };
-          if (editingName.value) doc.name = editingName.value;
-          await apiSave(doc);
+          if (status === "Submitted") {
+            const result = await apiPOST("zoho_books_clone.api.docs.create_debit_note", {
+              vendor:        form.vendor,
+              against_bill:  form.against_bill || "",
+              date:          form.date || new Date().toISOString().slice(0, 10),
+              reason:        form.reason,
+              notes:         form.notes,
+              warehouse:     form.warehouse || "",
+              items:         JSON.stringify(form.items.filter(r => r.item_name).map(r => ({
+                item_name: r.item_name, description: r.description || "",
+                qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+              }))),
+            });
+            const msg = result.stock_entry
+              ? `Debit note ${result.debit_note} issued. Stock entry ${result.stock_entry} created.`
+              : `Debit note ${result.debit_note} issued.`;
+            toast(msg);
+          } else {
+            const doc = {
+              doctype: "Purchase Invoice",
+              is_return: 1,
+              company: co(),
+              supplier: form.vendor,
+              return_against: form.against_bill || null,
+              posting_date: form.date || new Date().toISOString().slice(0, 10),
+              remark: form.reason,
+              items: form.items.filter(r => r.item_name).map(r => ({
+                item_code: r.item_name, item_name: r.item_name, description: r.description || "",
+                qty: flt(r.qty), rate: flt(r.rate), amount: flt(r.amount)
+              })),
+              grand_total: form.debit_amount,
+            };
+            if (editingName.value) doc.name = editingName.value;
+            await apiSave(doc);
+            toast("Saved as draft");
+          }
           await load();
-          toast(status === "Draft" ? "Saved as draft" : "Debit note issued");
           showDrawer.value = false;
         } catch(e) { toast("Save failed: " + e.message, "error"); }
         finally { saving.value = false; }
@@ -8290,7 +8544,7 @@
 
       onMounted(load);
       return {
-        list, vendors, allBills, allItems, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
+        list, vendors, allBills, allItems, warehouses, loading, search, activeFilter, summary, counts, filtered, selectedBillDetails,
         showDrawer, drawerMode, form, saving, viewNote, REASONS,
         openAdd, openView, openEdit, addRow, removeRow, recalc, onDnItemPick, saveNote,
         showDelete, deleteTarget, confirmDelete, doDelete, applyDebit,
@@ -8411,6 +8665,14 @@
                   </div>
                   <div><label class="fl">Debit Type</label>
                     <select v-model="form.debit_type" class="dn-fi"><option value="Full">Full Reversal</option><option value="Partial">Partial Debit</option></select>
+                  </div>
+                </div>
+                <div v-if="form.reason === 'Goods Returned'" class="dn-fg" style="grid-template-columns:1fr;margin-top:-4px">
+                  <div><label class="fl">Source Warehouse <span class="req">*</span> <span style="font-size:11px;color:#868e96;font-weight:400">(goods will be issued out of this warehouse)</span></label>
+                    <select v-model="form.warehouse" class="dn-fi">
+                      <option value="">— Select Warehouse —</option>
+                      <option v-for="w in warehouses" :key="w.name" :value="w.name">{{w.warehouse_name || w.name}}</option>
+                    </select>
                   </div>
                 </div>
                 <div class="dn-fg" style="grid-template-columns:1fr"><label class="fl">Notes</label><textarea v-model="form.notes" class="dn-fi" rows="2" placeholder="Details about return..."></textarea></div>
@@ -8562,19 +8824,6 @@
     { id:"other",      label:"Other",             icon:"💵", color:"#868E96", bg:"#F1F3F5" },
   ];
   const CAT_MAP_BANK = Object.fromEntries(TXN_CATEGORIES.map(c => [c.id, c]));
-  const DEFAULT_BANK_ACCOUNTS = [
-    { name:"HDFC Current Account", type:"Current", bank:"HDFC Bank", acct_no:"50100XXXXXXXX", ifsc:"HDFC0000001", branch:"Koramangala", holder:"My Company", currency:"INR", opening:500000, balance:1234567.50, od_limit:0, gl_account:"", is_default:1, status:"Active", rm:"Rajesh Kumar", rm_phone:"+91 98765 43210", reconcile_pct:95, source:"local" },
-    { name:"ICICI Savings Account", type:"Savings", bank:"ICICI Bank", acct_no:"002XXXXXXXXX", ifsc:"ICIC0000002", branch:"MG Road", holder:"My Company", currency:"INR", opening:200000, balance:456789.00, od_limit:0, gl_account:"", is_default:0, status:"Active", rm:"Priya Sharma", rm_phone:"+91 87654 32109", reconcile_pct:88, source:"local" },
-    { name:"Petty Cash", type:"Cash", bank:"", acct_no:"", ifsc:"", branch:"", holder:"", currency:"INR", opening:50000, balance:23450.00, od_limit:0, gl_account:"", is_default:0, status:"Active", rm:"", rm_phone:"", reconcile_pct:100, source:"local" },
-  ];
-  const DEFAULT_BANK_TXNS = [
-    { id:"TXN-0001", date: new Date().toISOString().slice(0,10), account:"HDFC Current Account", description:"NEFT CR - INVOICE INV-2026-0142", type:"Credit", amount:125000, balance:1234567.50, category:"customer", reconciled:true, notes:"" },
-    { id:"TXN-0002", date: new Date(Date.now()-86400000).toISOString().slice(0,10), account:"HDFC Current Account", description:"SALARY PAYROLL MARCH 2026", type:"Debit", amount:320000, balance:1109567.50, category:"salary", reconciled:true, notes:"" },
-    { id:"TXN-0003", date: new Date(Date.now()-2*86400000).toISOString().slice(0,10), account:"ICICI Savings Account", description:"AWS INVOICE MAR 2026", type:"Debit", amount:18670, balance:456789.00, category:"software", reconciled:false, notes:"" },
-    { id:"TXN-0004", date: new Date(Date.now()-3*86400000).toISOString().slice(0,10), account:"HDFC Current Account", description:"RENT - BRIGADE PROPERTIES", type:"Debit", amount:50000, balance:1059567.50, category:"rent", reconciled:true, notes:"" },
-    { id:"TXN-0005", date: new Date(Date.now()-4*86400000).toISOString().slice(0,10), account:"HDFC Current Account", description:"GST PAYMENT MARCH", type:"Debit", amount:45000, balance:1014567.50, category:"tax", reconciled:false, notes:"" },
-    { id:"TXN-0006", date: new Date(Date.now()-5*86400000).toISOString().slice(0,10), account:"Petty Cash", description:"OFFICE SUPPLIES", type:"Debit", amount:2340, balance:23450.00, category:"other", reconciled:true, notes:"" },
-  ];
   function fmtINR(v) { const n = Math.abs(Number(v || 0)); return "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2 }); }
   function fmtINRc(v) { const n = Number(v || 0); if (Math.abs(n) >= 10000000) return "₹" + (n / 10000000).toFixed(2) + "Cr"; if (Math.abs(n) >= 100000) return "₹" + (n / 100000).toFixed(1) + "L"; if (Math.abs(n) >= 1000) return "₹" + (n / 1000).toFixed(1) + "K"; return "₹" + Math.abs(n).toFixed(0); }
   function maskAcct(n) { if (!n || n.length < 4) return n || "—"; return "••••" + n.slice(-4); }
@@ -8608,16 +8857,32 @@
 
       async function load() {
         loading.value = true;
-        let ok = false;
         try {
-          const r = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name","account_name","bank_name","account_number","ifsc_code","gl_account","currency","is_default","account_type"]), order_by:"creation desc", limit_page_length:50 });
-          if (r && r.length) {
-            allAccounts.value = r.map(a => ({ name:a.name, type:a.account_type||"Current", bank:a.bank_name||"", acct_no:a.account_number||"", ifsc:a.ifsc_code||"", branch:"", holder:"", currency:a.currency||"INR", opening:0, balance:0, od_limit:0, gl_account:a.gl_account||"", is_default:a.is_default?1:0, status:"Active", rm:"", rm_phone:"", reconcile_pct:0, source:"frappe" }));
-            ok = true;
-          }
-        } catch {}
-        if (!ok) {
-          allAccounts.value = DEFAULT_BANK_ACCOUNTS;
+          const r = await apiGET("zoho_books_clone.api.banking.get_bank_accounts_with_balances", {});
+          allAccounts.value = (r || []).map(a => ({
+            name:          a.name,
+            type:          a.account_type || "Current",
+            bank:          a.bank_name || "",
+            acct_no:       a.account_number || "",
+            ifsc:          a.ifsc_code || "",
+            branch:        a.branch || "",
+            holder:        a.account_holder_name || "",
+            currency:      a.currency || "INR",
+            opening:       0,
+            balance:       flt(a.balance),
+            od_limit:      0,
+            gl_account:    a.gl_account || "",
+            is_default:    a.is_default ? 1 : 0,
+            status:        "Active",
+            rm:            "",
+            rm_phone:      "",
+            reconcile_pct: a.reconcile_pct || 0,
+            txn_count:     a.txn_count || 0,
+            source:        "frappe",
+          }));
+        } catch(e) {
+          allAccounts.value = [];
+          toast("Could not load bank accounts: " + e.message, "error");
         }
         try {
           const gl = await apiGET("frappe.client.get_list", { doctype:"Account", fields:JSON.stringify(["name"]), filters:JSON.stringify([["account_type","in",["Bank","Cash"]],["is_group","=",0]]), limit_page_length:100 });
@@ -8889,13 +9154,13 @@
           }
         } catch {}
         if (!ok) {
-          allTxns.value = DEFAULT_BANK_TXNS;
+          allTxns.value = [];
         }
         try {
           const ba = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name","account_name"]), order_by:"creation desc", limit_page_length:50 });
-          bankAccounts.value = (ba && ba.length) ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+          bankAccounts.value = (ba || []).map(a => a.name);
         } catch {
-          bankAccounts.value = DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+          bankAccounts.value = [];
         }
         loading.value = false;
       }
@@ -9119,7 +9384,7 @@
           });
           bankTxns.value = (r || []).map(t => ({ id:t.name, date:t.date, desc:t.description||"", type:flt(t.credit)>0?"Credit":"Debit", amount:flt(t.credit)||flt(t.debit) }));
         } catch {
-          bankTxns.value = DEFAULT_BANK_TXNS.filter(t => t.account === selAccount.value && !t.reconciled).map(t => ({ id:t.id, date:t.date, desc:t.description, type:t.type, amount:flt(t.amount) }));
+          bankTxns.value = [];
         }
         try {
           const gl = await apiGET("frappe.client.get_list", {
@@ -9155,6 +9420,52 @@
         toast("Items matched and reconciled");
       }
 
+      // Create GL entry for unmatched bank transactions (charges, interest, etc.)
+      const showCreateJE = ref(false);
+      const createJETxn = ref(null);
+      const jeAccounts = ref([]);
+      const jeForm = reactive({ gl_account: "", description: "" });
+      const jeCreating = ref(false);
+
+      async function openCreateJE(t) {
+        createJETxn.value = t;
+        jeForm.gl_account = ""; jeForm.description = t.desc || "";
+        showCreateJE.value = true;
+        if (!jeAccounts.value.length) {
+          try {
+            const accts = await apiGET("frappe.client.get_list", {
+              doctype: "Account",
+              fields: JSON.stringify(["name","account_type"]),
+              filters: JSON.stringify([["is_group","=",0],["account_type","in","Expense,Income,Bank,Cash"]]),
+              limit_page_length: 200,
+            });
+            jeAccounts.value = (accts || []).map(a => a.name);
+          } catch { jeAccounts.value = []; }
+        }
+      }
+
+      async function doCreateJE() {
+        if (!jeForm.gl_account) { toast("Select a GL account", "error"); return; }
+        const t = createJETxn.value;
+        if (!t) return;
+        jeCreating.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.banking.create_bank_gl_entry", {
+            bank_account: selAccount.value,
+            bank_transaction: t.id,
+            gl_account: jeForm.gl_account,
+            amount: t.amount,
+            txn_type: t.type,
+            date: t.date,
+            description: jeForm.description,
+          });
+          bankTxns.value = bankTxns.value.filter(x => x.id !== t.id);
+          showCreateJE.value = false;
+          toast("GL entry posted — transaction reconciled");
+        } catch(e) { toast("Error: " + e.message, "error"); }
+        jeCreating.value = false;
+      }
+
       async function finaliseReconciliation() {
         try {
           await apiPOST("zoho_books_clone.db.queries.reconcile_bank_account", { bank_account: selAccount.value, statement_date: stmtDate.value, statement_balance: stmtBalance.value });
@@ -9167,15 +9478,15 @@
       async function loadAccounts() {
         try {
           const ba = await apiGET("frappe.client.get_list", { doctype: "Bank Account", fields: JSON.stringify(["name"]), order_by: "creation desc", limit_page_length: 50 });
-          bankAccounts.value = (ba && ba.length) ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+          bankAccounts.value = (ba || []).map(a => a.name);
         } catch {
-          bankAccounts.value = DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+          bankAccounts.value = [];
         }
         if (bankAccounts.value.length) { selAccount.value = bankAccounts.value[0]; await load(); }
       }
 
       onMounted(loadAccounts);
-      return { bankAccounts, selAccount, stmtDate, stmtBalance, loading, bookTxns, bankTxns, selectedBook, selectedBank, bookBal, diff, isBalanced, selectedBankTotal, selectedBookTotal, load, toggleBank, toggleBook, matchSelected, finaliseReconciliation, fmtINR, fmtDate, icon, flt, voucherPath };
+      return { bankAccounts, selAccount, stmtDate, stmtBalance, loading, bookTxns, bankTxns, selectedBook, selectedBank, bookBal, diff, isBalanced, selectedBankTotal, selectedBookTotal, load, toggleBank, toggleBook, matchSelected, finaliseReconciliation, showCreateJE, createJETxn, jeAccounts, jeForm, jeCreating, openCreateJE, doCreateJE, fmtINR, fmtDate, icon, flt, voucherPath };
     },
     template: `
 <div class="b-page">
@@ -9253,6 +9564,7 @@
           <div style="text-align:right;flex-shrink:0">
             <div class="mono fw-600" :class="t.type==='Credit'?'c-green':'c-red'" style="font-size:13px">{{t.type==='Credit'?'+':'-'}}{{fmtINR(t.amount)}}</div>
             <div class="b-badge" :class="t.type==='Credit'?'b-badge-green':'b-badge-red'" style="font-size:10px">{{t.type}}</div>
+            <button @click.stop="openCreateJE(t)" style="margin-top:4px;background:none;border:1px solid #CDD5E0;border-radius:4px;padding:1px 6px;font-size:10px;cursor:pointer;color:#868E96;font-family:inherit" title="Create GL entry for this transaction">+ JE</button>
           </div>
         </div>
       </div>
@@ -9288,7 +9600,184 @@
       </div>
     </div>
   </div>
+
+  <!-- Create JE Modal for unmatched bank transactions -->
+  <teleport to="body">
+    <div v-if="showCreateJE" style="position:fixed;inset:0;z-index:9200;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(3px)" @click.self="showCreateJE=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:440px;width:100%">
+        <div style="font-size:16px;font-weight:700;margin-bottom:4px">Create GL Entry</div>
+        <div style="font-size:12.5px;color:#868E96;margin-bottom:18px">Post a journal entry for this unmatched bank transaction and mark it reconciled.</div>
+        <div v-if="createJETxn" style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px">
+          <div style="font-weight:600;margin-bottom:2px">{{createJETxn.desc}}</div>
+          <div style="color:#868E96;font-size:12px">{{fmtDate(createJETxn.date)}} · <span :class="createJETxn.type==='Credit'?'c-green':'c-red'" style="font-weight:600">{{createJETxn.type==='Credit'?'+':'-'}}{{fmtINR(createJETxn.amount)}}</span></div>
+          <div style="font-size:11.5px;color:#868E96;margin-top:6px">
+            {{createJETxn.type==='Debit'?'Will post: DR selected account / CR Bank GL':'Will post: DR Bank GL / CR selected account'}}
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">GL Account <span style="color:#C92A2A">*</span></label>
+          <select class="b-input" v-model="jeForm.gl_account">
+            <option value="">— Select account —</option>
+            <option v-for="a in jeAccounts" :key="a" :value="a">{{a}}</option>
+          </select>
+        </div>
+        <div style="margin-bottom:20px">
+          <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Description</label>
+          <input class="b-input" v-model="jeForm.description" placeholder="e.g. Bank charges Q1"/>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showCreateJE=false">Cancel</button>
+          <button class="b-btn b-btn-primary" @click="doCreateJE" :disabled="jeCreating">{{jeCreating?'Posting...':'Post GL Entry'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </div>`});
+
+  /* ══════════════════════════════════════════════════
+     BANK TRANSFERS
+  ══════════════════════════════════════════════════ */
+  const BankTransfers = defineComponent({
+    name: "BankTransfers",
+    setup() {
+      const bankAccounts = ref([]);
+      const transfers = ref([]);
+      const loading = ref(false);
+      const showForm = ref(false);
+      const saving = ref(false);
+      const form = reactive({ from_account:"", to_account:"", amount:0, date: new Date().toISOString().slice(0,10), description:"" });
+
+      async function load() {
+        loading.value = true;
+        try {
+          const ba = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name"]), order_by:"creation desc", limit_page_length:50 });
+          bankAccounts.value = (ba || []).map(a => a.name);
+          if (!form.from_account && bankAccounts.value.length > 0) form.from_account = bankAccounts.value[0];
+          if (!form.to_account && bankAccounts.value.length > 1) form.to_account = bankAccounts.value[1];
+        } catch {
+          bankAccounts.value = [];
+        }
+        try {
+          const bt = await apiGET("frappe.client.get_list", {
+            doctype:"Bank Transaction",
+            fields: JSON.stringify(["name","date","description","debit","credit","bank_account","transaction_type"]),
+            filters: JSON.stringify([["transaction_type","=","Transfer"],["docstatus","!=",2]]),
+            order_by:"date desc", limit_page_length:100,
+          });
+          transfers.value = (bt || []).map(t => ({ id:t.name, date:t.date, from:flt(t.debit)>0?t.bank_account:"", to:flt(t.credit)>0?t.bank_account:"", amount:flt(t.debit)||flt(t.credit), description:t.description||"Transfer" }));
+        } catch { transfers.value = []; }
+        loading.value = false;
+      }
+
+      async function doTransfer() {
+        if (!form.from_account || !form.to_account) { toast("Select both accounts", "error"); return; }
+        if (form.from_account === form.to_account) { toast("Source and destination must differ", "error"); return; }
+        if (flt(form.amount) <= 0) { toast("Enter a positive amount", "error"); return; }
+        saving.value = true;
+        try {
+          const res = await apiPOST("zoho_books_clone.api.banking.post_bank_transfer", {
+            from_account: form.from_account,
+            to_account: form.to_account,
+            amount: form.amount,
+            date: form.date,
+            description: form.description,
+          });
+          transfers.value.unshift({ id: res.from_transaction, date: form.date, from: form.from_account, to: form.to_account, amount: flt(form.amount), description: form.description || "Transfer" });
+          showForm.value = false;
+          toast("Transfer posted — " + res.from_transaction);
+        } catch(e) { toast("Transfer failed: " + e.message, "error"); }
+        saving.value = false;
+      }
+
+      const totals = computed(() => ({
+        count: transfers.value.length,
+        amount: transfers.value.reduce((s, t) => s + flt(t.amount), 0),
+      }));
+
+      onMounted(load);
+      return { bankAccounts, transfers, loading, showForm, saving, form, totals, doTransfer, fmtINR, fmtDate, icon, flt };
+    },
+    template: `
+<div class="b-page">
+  <!-- Summary strip -->
+  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
+    <div class="b-card" style="padding:14px 18px"><div style="font-size:11px;color:#868E96;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total Transfers</div><div style="font-size:20px;font-weight:700;font-family:var(--mono)">{{totals.count}}</div></div>
+    <div class="b-card" style="padding:14px 18px"><div style="font-size:11px;color:#1971C2;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Total Amount</div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:#1971C2">{{fmtINR(totals.amount)}}</div></div>
+  </div>
+
+  <!-- Toolbar -->
+  <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+    <button class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="showForm=true"><span v-html="icon('plus',13)"></span> New Transfer</button>
+  </div>
+
+  <!-- Table -->
+  <div class="b-card" style="padding:0;overflow:hidden">
+    <div v-if="loading" style="padding:30px;text-align:center;color:#868E96">Loading transfers...</div>
+    <div v-else-if="!transfers.length" class="b-empty">No transfers recorded yet</div>
+    <table v-else class="b-table">
+      <thead><tr><th>Reference</th><th>Date</th><th>From Account</th><th>To Account</th><th class="ta-r">Amount</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr v-for="t in transfers" :key="t.id">
+          <td class="mono fw-600 c-accent" style="font-size:12.5px">{{t.id}}</td>
+          <td class="c-muted" style="font-size:12.5px">{{fmtDate(t.date)}}</td>
+          <td><span style="background:#FFF5F5;color:#C92A2A;padding:2px 8px;border-radius:20px;font-size:12px">{{t.from||'—'}}</span></td>
+          <td><span style="background:#EBFBEE;color:#2F9E44;padding:2px 8px;border-radius:20px;font-size:12px">{{t.to||'—'}}</span></td>
+          <td class="ta-r mono fw-700">{{fmtINR(t.amount)}}</td>
+          <td class="c-muted" style="font-size:12.5px">{{t.description}}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- New Transfer Modal -->
+  <teleport to="body">
+    <div v-if="showForm" style="position:fixed;inset:0;z-index:9200;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(3px)" @click.self="showForm=false">
+      <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:460px;width:100%">
+        <div style="font-size:16px;font-weight:700;margin-bottom:16px">New Bank Transfer</div>
+        <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:10px 14px;font-size:12.5px;color:#006D77;margin-bottom:18px">
+          Transfers move funds between accounts. <strong>No income or expense is recorded</strong> — only bank and GL balances change.
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">From Account <span style="color:#C92A2A">*</span></label>
+            <select class="b-input" v-model="form.from_account">
+              <option v-for="a in bankAccounts" :key="a" :value="a">{{a}}</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">To Account <span style="color:#C92A2A">*</span></label>
+            <select class="b-input" v-model="form.to_account">
+              <option v-for="a in bankAccounts" :key="a" :value="a">{{a}}</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Amount (₹) <span style="color:#C92A2A">*</span></label>
+            <input type="number" class="b-input" v-model="form.amount" placeholder="0.00" style="font-family:var(--mono)"/>
+          </div>
+          <div>
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Date</label>
+            <input type="date" class="b-input" v-model="form.date"/>
+          </div>
+        </div>
+        <div style="margin-bottom:20px">
+          <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Description</label>
+          <input class="b-input" v-model="form.description" placeholder="e.g. Petty cash replenishment"/>
+        </div>
+        <!-- GL preview -->
+        <div style="background:#F8F9FC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 14px;font-size:12px;margin-bottom:20px">
+          <div style="font-weight:600;margin-bottom:6px;color:#495057">GL Impact Preview</div>
+          <div style="display:flex;justify-content:space-between;color:#2F9E44"><span>DR {{form.to_account||'To Account'}} (GL)</span><span class="mono">{{fmtINR(form.amount)}}</span></div>
+          <div style="display:flex;justify-content:space-between;color:#C92A2A;margin-top:4px"><span>CR {{form.from_account||'From Account'}} (GL)</span><span class="mono">{{fmtINR(form.amount)}}</span></div>
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button class="b-btn b-btn-ghost" @click="showForm=false">Cancel</button>
+          <button class="b-btn b-btn-primary" style="background:#0C8599;border-color:#0C8599" @click="doTransfer" :disabled="saving">{{saving?'Posting...':'Post Transfer'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
 
   /* ══════════════════════════════════════════════════
      CHEQUE MANAGEMENT
@@ -9349,9 +9838,9 @@
         }
         try {
           const ba = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name"]), order_by:"creation desc", limit_page_length:50 });
-          bankAccounts.value = (ba && ba.length) ? ba.map(a => a.name) : DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+          bankAccounts.value = (ba || []).map(a => a.name);
         } catch {
-          bankAccounts.value = DEFAULT_BANK_ACCOUNTS.map(a => a.name);
+          bankAccounts.value = [];
         }
       }
 
@@ -9409,8 +9898,15 @@
       async function changeStatus(c, status) {
         const idx = cheques.value.findIndex(x => x.name === c.name);
         if (idx >= 0) { cheques.value[idx].status = status; }
-        try { await apiSave({ doctype:"Payment Entry", name: c.name, status }); } catch {}
-        toast("Status updated to " + status);
+        if (status === "Bounced" && c.name && !c.name.startsWith("CHQ-")) {
+          try {
+            await apiPOST("zoho_books_clone.api.banking.bounce_cheque", { payment_entry: c.name });
+            toast("Cheque bounced — GL entries reversed");
+          } catch(e) { toast("Status updated; GL reversal skipped: " + e.message, "info"); }
+        } else {
+          try { await apiSave({ doctype:"Payment Entry", name: c.name, status }); } catch {}
+          toast("Status updated to " + status);
+        }
       }
 
       onMounted(load);
@@ -11716,8 +12212,12 @@
         const name=closeModalYear.value;if(!name)return;
         const y=allYears.value.find(x=>x.name===name);if(!y)return;
         if(fromFrappe.value){
-          try{await apiPOST("frappe.client.set_value",{doctype:"Fiscal Year",name,fieldname:"is_closed",value:1});await load();toast("Fiscal year closed");}
-          catch(e){toast("Frappe error: "+e.message,"error");}
+          try{
+            const res=await apiPOST("zoho_books_clone.accounts.fiscal_close.close_fiscal_year",{fiscal_year:name});
+            await load();
+            const je=res?.journal_entry;
+            toast(je?"Year closed — Closing JE "+je+" posted":res?.message||"Fiscal year closed");
+          }catch(e){toast("Close error: "+e.message,"error");}
         } else {
           y.is_closed=1;y.periods.forEach(p=>{p.locked=true;});saveLocal();toast("Fiscal year closed");
         }
@@ -11994,6 +12494,10 @@
       const pl = ref(null), bs = ref(null), cf = ref(null), gst = ref(null), tb = ref(null), aging = ref(null);
       const plBreakdown = ref([]);
       const showBreakdown = ref(false);
+      const agingCustomers = ref([]);
+      const acctLedger = ref(null);
+      const acctLedgerAcct = ref("");
+      const showAcctLedger = ref(false);
       const tabs = [
         { k: "pl", lbl: "P & L" },
         { k: "bs", lbl: "Balance Sheet" },
@@ -12054,7 +12558,17 @@
           else if (tab.value === "bs") bs.value = await apiGET("zoho_books_clone.db.queries.get_balance_sheet_totals", { company: c, as_of_date: to.value });
           else if (tab.value === "cf") cf.value = await apiGET("zoho_books_clone.db.queries.get_cash_flow", args);
           else if (tab.value === "tb") tb.value = await apiGET("zoho_books_clone.db.queries.get_trial_balance", args);
-          else if (tab.value === "aging") aging.value = await apiGET("zoho_books_clone.db.queries.get_ar_aging", { company: c, as_of_date: to.value });
+          else if (tab.value === "aging") {
+            const raw = await apiGET("zoho_books_clone.db.queries.get_ar_aging", { company: c, as_of_date: to.value });
+            agingCustomers.value = raw || [];
+            const bkts = [0, 0, 0, 0, 0]; const cnts = [0, 0, 0, 0, 0];
+            const KEYS = ["current","days_1_30","days_31_60","days_61_90","days_90_plus"];
+            (raw || []).forEach(r => KEYS.forEach((k, i) => { const v = flt(r[k]); if (v > 0) { bkts[i] += v; cnts[i]++; } }));
+            const tot = bkts.reduce((s, v) => s + v, 0);
+            aging.value = ["Current","1-30 days","31-60 days","61-90 days","91+ days"].map((range, i) => ({
+              range, total: Math.round(bkts[i]*100)/100, count: cnts[i], pct: tot > 0 ? Math.round(bkts[i]/tot*100) : 0,
+            }));
+          }
           else if (tab.value === "gst") gst.value = await apiGET("zoho_books_clone.api.books_data.get_gstr_summary", args);
           else if (tab.value === "itc") gst.value = await apiGET("zoho_books_clone.api.books_data.get_gstr_summary", args);
         } catch (e) { toast(e.message, "error"); }
@@ -12084,10 +12598,22 @@
         return Math.max(...plBreakdown.value.map(p => Math.max(p.income, p.expense)), 1);
       });
 
+      async function openAcctLedger(account) {
+        acctLedgerAcct.value = account;
+        acctLedger.value = null;
+        showAcctLedger.value = true;
+        try {
+          acctLedger.value = await apiGET("zoho_books_clone.db.queries.get_account_ledger", {
+            account, company: co(), from_date: from.value, to_date: to.value,
+          });
+        } catch(e) { toast("Ledger load failed: " + e.message, "error"); showAcctLedger.value = false; }
+      }
+
       onMounted(loadFY);
 
-      return { from, to, tab, tabs, pl, bs, cf, gst, tb, aging, plBreakdown, showBreakdown, running, run,
-               fyMode, selectedFY, fiscalYears, applyFY, onFYChange, fyBadge, tbTotals, agingTotal, bdMax, fmt, icon, flt };
+      return { from, to, tab, tabs, pl, bs, cf, gst, tb, aging, agingCustomers, plBreakdown, showBreakdown, running, run,
+               fyMode, selectedFY, fiscalYears, applyFY, onFYChange, fyBadge, tbTotals, agingTotal, bdMax,
+               acctLedger, acctLedgerAcct, showAcctLedger, openAcctLedger, fmt, icon, flt, fmtDate, voucherPath };
     },
     template: `
 <div class="b-page">
@@ -12156,7 +12682,9 @@
       <div v-if="running" class="b-shimmer" style="height:80px"></div>
       <template v-else-if="pl">
         <div class="b-pl-row"><span>Total Income</span><span class="mono fw-700 c-green">{{fmt(pl.total_income)}}</span></div>
-        <div class="b-pl-row"><span>Total Expense</span><span class="mono fw-700 c-red">{{fmt(pl.total_expense)}}</span></div>
+        <div class="b-pl-row" style="padding-left:16px;color:#868E96"><span>Cost of Goods Sold (COGS)</span><span class="mono fw-600" style="color:#868E96">{{fmt(pl.cogs||0)}}</span></div>
+        <div class="b-pl-row" style="border-top:1px dashed #E2E8F0"><span style="font-weight:600">Gross Profit</span><span class="mono fw-700" :class="flt(pl.gross_profit||pl.total_income)>=0?'c-green':'c-red'">{{fmt(pl.gross_profit||pl.total_income)}}</span></div>
+        <div class="b-pl-row"><span>Operating Expenses</span><span class="mono fw-700 c-red">{{fmt(pl.total_expense)}}</span></div>
         <div class="b-pl-row b-pl-net"><span>Net Profit / (Loss)</span><span class="mono fw-700" :class="flt(pl.net_profit)>=0?'c-green':'c-red'">{{fmt(pl.net_profit)}}</span></div>
         <!-- profit margin badge -->
         <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
@@ -12225,12 +12753,46 @@
   <div v-if="tab==='bs'" class="b-card b-card-body">
     <div style="font-size:16px;font-weight:700;margin-bottom:4px">Balance Sheet</div>
     <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-bottom:16px">As of {{to}}&nbsp;·&nbsp;FY {{fyBadge.name}}</div>
-    <div v-if="running" class="b-shimmer" style="height:80px"></div>
-    <div v-else-if="bs" class="b-bs-grid">
-      <div class="b-bs-block"><div class="b-bs-lbl">Assets</div><div class="b-bs-amt c-accent">{{fmt(bs.total_assets)}}</div></div>
-      <div class="b-bs-block"><div class="b-bs-lbl">Liabilities</div><div class="b-bs-amt c-red">{{fmt(bs.total_liabilities)}}</div></div>
-      <div class="b-bs-block"><div class="b-bs-lbl">Equity</div><div class="b-bs-amt c-amber">{{fmt(bs.total_equity)}}</div></div>
-    </div>
+    <div v-if="running" class="b-shimmer" style="height:160px"></div>
+    <template v-else-if="bs">
+      <!-- Equation check -->
+      <div :style="{background:Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity)))<1?'#EBFBEE':'#FFF5F5',borderRadius:'8px',padding:'10px 16px',fontSize:'13px',fontWeight:600,marginBottom:'16px',color:Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity)))<1?'#2F9E44':'#C92A2A'}">
+        <span v-if="Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity)))<1">✓ Balanced — Assets = Liabilities + Equity = {{fmt(bs.total_assets)}}</span>
+        <span v-else>✗ Out of balance by {{fmt(Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity))))}}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
+        <!-- ASSETS column -->
+        <div style="border:1px solid #E4E8F0;border-radius:10px;overflow:hidden">
+          <div style="background:#0C8599;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Assets</div>
+          <div style="padding:12px 14px">
+            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Cash &amp; Bank</span><span class="mono fw-600">{{fmt(bs.cash_and_bank||0)}}</span></div>
+            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Accounts Receivable</span><span class="mono fw-600">{{fmt(bs.receivables||0)}}</span></div>
+            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Inventory</span><span class="mono fw-600">{{fmt(bs.inventory_value||0)}}</span></div>
+            <div v-if="flt(bs.itc_receivable)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">ITC Receivable</span><span class="mono fw-600">{{fmt(bs.itc_receivable)}}</span></div>
+            <div v-if="flt(bs.other_assets)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Other Assets</span><span class="mono fw-600">{{fmt(bs.other_assets)}}</span></div>
+            <div style="border-top:2px solid #0C8599;margin-top:8px;padding-top:8px" class="b-pl-row"><span style="font-weight:700">Total Assets</span><span class="mono fw-700 c-accent">{{fmt(bs.total_assets)}}</span></div>
+          </div>
+        </div>
+        <!-- LIABILITIES column -->
+        <div style="border:1px solid #E4E8F0;border-radius:10px;overflow:hidden">
+          <div style="background:#C92A2A;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Liabilities</div>
+          <div style="padding:12px 14px">
+            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Accounts Payable</span><span class="mono fw-600">{{fmt(bs.payables||0)}}</span></div>
+            <div v-if="flt(bs.gst_liability)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">GST Payable</span><span class="mono fw-600">{{fmt(bs.gst_liability)}}</span></div>
+            <div v-if="flt(bs.other_liabilities)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Other Liabilities</span><span class="mono fw-600">{{fmt(bs.other_liabilities)}}</span></div>
+            <div style="border-top:2px solid #C92A2A;margin-top:8px;padding-top:8px" class="b-pl-row"><span style="font-weight:700">Total Liabilities</span><span class="mono fw-700 c-red">{{fmt(bs.total_liabilities)}}</span></div>
+          </div>
+        </div>
+        <!-- EQUITY column -->
+        <div style="border:1px solid #E4E8F0;border-radius:10px;overflow:hidden">
+          <div style="background:#7048E8;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Equity</div>
+          <div style="padding:12px 14px">
+            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Retained Earnings</span><span class="mono fw-600">{{fmt(bs.total_equity)}}</span></div>
+            <div style="border-top:2px solid #7048E8;margin-top:8px;padding-top:8px" class="b-pl-row"><span style="font-weight:700">Total Equity</span><span class="mono fw-700" style="color:#7048E8">{{fmt(bs.total_equity)}}</span></div>
+          </div>
+        </div>
+      </div>
+    </template>
     <div v-else class="b-empty">Select a period and click Run Report.</div>
   </div>
 
@@ -12267,7 +12829,7 @@
         </thead>
         <tbody>
           <tr v-for="r in tb" :key="r.account">
-            <td style="font-weight:500">{{r.account}}</td>
+            <td style="font-weight:500;cursor:pointer;color:#3B5BDB;text-decoration:underline dotted" @click="openAcctLedger(r.account)" :title="'View GL entries for '+r.account">{{r.account}}</td>
             <td class="ta-r mono">{{r.debit>0?fmt(r.debit):'—'}}</td>
             <td class="ta-r mono">{{r.credit>0?fmt(r.credit):'—'}}</td>
             <td class="ta-r mono fw-700" :class="r.debit-r.credit>=0?'c-accent':'c-red'">{{fmt(Math.abs(r.debit-r.credit))}} {{r.debit-r.credit>=0?'Dr':'Cr'}}</td>
@@ -12324,6 +12886,27 @@
       </template>
       <div v-else class="b-empty">Click Run Report to compute AR aging from invoices.</div>
     </div>
+
+    <!-- Customer-level aging table -->
+    <div v-if="agingCustomers.length" class="b-card" style="padding:0;overflow:hidden;margin-top:0">
+      <div class="b-card-head"><span class="b-card-title">Customer-wise Aging</span><span class="b-badge b-badge-amber">{{agingCustomers.length}}</span></div>
+      <div style="overflow-x:auto">
+        <table class="b-table">
+          <thead><tr><th>Customer</th><th class="ta-r">Current</th><th class="ta-r">1-30 days</th><th class="ta-r">31-60 days</th><th class="ta-r">61-90 days</th><th class="ta-r">91+ days</th><th class="ta-r">Total</th></tr></thead>
+          <tbody>
+            <tr v-for="r in agingCustomers" :key="r.customer">
+              <td style="font-weight:500">{{r.customer_name||r.customer}}</td>
+              <td class="ta-r mono">{{r.current>0?fmt(r.current):'—'}}</td>
+              <td class="ta-r mono" :class="r.days_1_30>0?'':'c-muted'">{{r.days_1_30>0?fmt(r.days_1_30):'—'}}</td>
+              <td class="ta-r mono" :class="r.days_31_60>0?'c-amber':''">{{r.days_31_60>0?fmt(r.days_31_60):'—'}}</td>
+              <td class="ta-r mono" :class="r.days_61_90>0?'c-red':''">{{r.days_61_90>0?fmt(r.days_61_90):'—'}}</td>
+              <td class="ta-r mono fw-700" :class="r.days_90_plus>0?'c-red':''">{{r.days_90_plus>0?fmt(r.days_90_plus):'—'}}</td>
+              <td class="ta-r mono fw-700 c-red">{{fmt(r.total)}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
   <!-- ── GSTR Summary (Output Tax + ITC + Net Liability) ── -->
@@ -12372,6 +12955,57 @@
     </template>
     <div v-else class="b-card b-card-body b-empty">Select a period and click Run Report.</div>
   </div>
+
+  <!-- Account Ledger Drawer (drill-down from Trial Balance) -->
+  <teleport to="body">
+    <div v-if="showAcctLedger" style="position:fixed;inset:0;z-index:9300;background:rgba(15,23,42,.45);display:flex;justify-content:flex-end;backdrop-filter:blur(2px)" @click.self="showAcctLedger=false">
+      <div style="width:680px;max-width:96vw;height:100%;background:#fff;display:flex;flex-direction:column;box-shadow:-20px 0 60px rgba(0,0,0,.15)">
+        <div style="background:linear-gradient(135deg,#1864AB,#1971C2);padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
+          <div>
+            <div style="color:#fff;font-size:15px;font-weight:700">Account Ledger</div>
+            <div style="color:rgba(255,255,255,.75);font-size:12px;margin-top:2px">{{acctLedgerAcct}} · {{from}} to {{to}}</div>
+          </div>
+          <button @click="showAcctLedger=false" style="background:rgba(255,255,255,.15);border:none;cursor:pointer;width:28px;height:28px;border-radius:7px;color:#fff;display:grid;place-items:center"><span v-html="icon('x',15)"></span></button>
+        </div>
+        <div style="flex:1;overflow-y:auto">
+          <div v-if="!acctLedger" style="padding:40px;text-align:center;color:#868E96">Loading ledger...</div>
+          <template v-else>
+            <!-- Summary row -->
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:0;border-bottom:1px solid #E2E8F0">
+              <div style="padding:14px 18px;border-right:1px solid #E2E8F0"><div style="font-size:10.5px;color:#868E96;font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:3px">Opening Balance</div><div style="font-size:15px;font-weight:700;font-family:var(--mono)">{{fmt(acctLedger.opening)}}</div></div>
+              <div style="padding:14px 18px;border-right:1px solid #E2E8F0"><div style="font-size:10.5px;color:#2F9E44;font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:3px">Total Debit</div><div style="font-size:15px;font-weight:700;font-family:var(--mono);color:#2F9E44">{{fmt(acctLedger.total_debit)}}</div></div>
+              <div style="padding:14px 18px"><div style="font-size:10.5px;color:#C92A2A;font-weight:600;letter-spacing:.4px;text-transform:uppercase;margin-bottom:3px">Total Credit</div><div style="font-size:15px;font-weight:700;font-family:var(--mono);color:#C92A2A">{{fmt(acctLedger.total_credit)}}</div></div>
+            </div>
+            <div v-if="!acctLedger.entries.length" style="padding:32px;text-align:center;color:#868E96">No entries for this period.</div>
+            <table v-else class="b-table" style="font-size:12.5px">
+              <thead><tr><th>Date</th><th>Voucher</th><th>Remarks</th><th class="ta-r">Debit</th><th class="ta-r">Credit</th><th class="ta-r">Balance</th></tr></thead>
+              <tbody>
+                <tr v-for="e in acctLedger.entries" :key="e.name">
+                  <td class="c-muted" style="white-space:nowrap">{{fmtDate(e.posting_date)}}</td>
+                  <td style="white-space:nowrap">
+                    <a v-if="e.voucher_no" :href="voucherPath(e.voucher_type,e.voucher_no)" style="color:#3B5BDB;font-weight:600;text-decoration:none;font-family:var(--mono)" :title="e.voucher_type">{{e.voucher_no}}</a>
+                    <span v-else class="c-muted">—</span>
+                  </td>
+                  <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#495057" :title="e.remarks">{{e.remarks||'—'}}</td>
+                  <td class="ta-r mono c-green">{{flt(e.debit)>0?fmt(e.debit):'—'}}</td>
+                  <td class="ta-r mono c-red">{{flt(e.credit)>0?fmt(e.credit):'—'}}</td>
+                  <td class="ta-r mono fw-700" :class="flt(e.running_balance)>=0?'c-accent':'c-red'">{{fmt(Math.abs(flt(e.running_balance)))}}</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr style="background:#F8F9FC;font-weight:700;border-top:2px solid #E2E8F0">
+                  <td colspan="3">Closing Balance</td>
+                  <td class="ta-r mono">{{fmt(acctLedger.total_debit)}}</td>
+                  <td class="ta-r mono">{{fmt(acctLedger.total_credit)}}</td>
+                  <td class="ta-r mono fw-700" :class="flt(acctLedger.closing)>=0?'c-accent':'c-red'">{{fmt(Math.abs(acctLedger.closing))}} {{flt(acctLedger.closing)>=0?'Dr':'Cr'}}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </template>
+        </div>
+      </div>
+    </div>
+  </teleport>
 </div>`});
 
   /* ═══════════════════════════════════════════════════════════════
@@ -13536,35 +14170,77 @@
           reorder_level:0, reorder_qty:0, opening_stock:0 });
         showDrawer.value = true;
       }
-      function openEdit(row) {
+      async function openEdit(row) {
         drawerMode.value = "edit"; drawerTab.value = "basic";
-        Object.assign(form, { ...row,
-          hsn_code: row.hsn_code||"", description: row.description||"",
-          standard_buying_rate: row.standard_buying_rate||0, tax_code: row.tax_code||"",
-          income_account:  row.income_account  || defaultAccounts.value.income,
-          expense_account: row.expense_account || defaultAccounts.value.expense,
-          valuation_method: row.valuation_method||"FIFO", default_warehouse: row.default_warehouse||"",
-          reorder_level: row.reorder_level||0, reorder_qty: row.reorder_qty||0, opening_stock: row.opening_stock||0,
-        });
+        // Show drawer immediately with list-row data, then overwrite with full doc
+        Object.assign(form, { ...row, hsn_code:"", description:"", standard_buying_rate:0,
+          tax_code:"", income_account:"", expense_account:"",
+          valuation_method:"FIFO", default_warehouse:"",
+          reorder_level:0, reorder_qty:0, opening_stock:0 });
         showDrawer.value = true;
+        try {
+          const full = await apiGET("frappe.client.get", { doctype:"Item", name: row.name });
+          Object.assign(form, {
+            hsn_code:            full.hsn_code            || "",
+            description:         full.description         || "",
+            standard_rate:       flt(full.standard_rate),
+            standard_buying_rate:flt(full.standard_buying_rate),
+            gst_rate:            flt(full.gst_rate) || 18,
+            tax_code:            full.tax_code            || "",
+            income_account:      full.income_account      || defaultAccounts.value.income,
+            expense_account:     full.expense_account     || defaultAccounts.value.expense,
+            is_stock_item:       full.is_stock_item ? 1 : 0,
+            valuation_method:    full.valuation_method    || "FIFO",
+            default_warehouse:   full.default_warehouse   || "",
+            reorder_level:       flt(full.reorder_level),
+            reorder_qty:         flt(full.reorder_qty),
+            opening_stock:       flt(full.opening_stock),
+            disabled:            full.disabled ? 1 : 0,
+          });
+        } catch(e) { toast("Could not load full item details: " + e.message, "error"); }
       }
 
       async function saveItem() {
         if (!form.item_name.trim()) { toast("Item name is required","error"); return; }
         saving.value = true;
         try {
-          const doc = { doctype:"Item", item_name:form.item_name, item_code:form.item_code||form.item_name,
+          const isEdit = drawerMode.value === "edit";
+          const itemCode = form.item_code || form.item_name;
+          const openingQty = flt(form.opening_stock);
+          const openingRate = flt(form.standard_buying_rate) || flt(form.standard_rate) || 0;
+
+          const doc = { doctype:"Item", item_name:form.item_name, item_code: itemCode,
             item_group:form.item_group||"Products", item_type:form.item_type, stock_uom:form.stock_uom,
             hsn_code:form.hsn_code, description:form.description, disabled:form.disabled?1:0,
-            standard_rate:flt(form.standard_rate), gst_rate:flt(form.gst_rate),
+            standard_rate:flt(form.standard_rate), standard_buying_rate:flt(form.standard_buying_rate),
+            gst_rate:flt(form.gst_rate), tax_code:form.tax_code,
+            income_account:form.income_account, expense_account:form.expense_account,
             is_stock_item:form.is_stock_item?1:0, valuation_method:form.valuation_method,
             default_warehouse:form.default_warehouse, reorder_level:flt(form.reorder_level),
-            reorder_qty:flt(form.reorder_qty),
+            reorder_qty:flt(form.reorder_qty), opening_stock:openingQty,
           };
-          if (drawerMode.value === "edit") doc.name = form.name;
-          await apiSave(doc);
+          if (isEdit) doc.name = form.name;
+          const saved = await apiSave(doc);
+          const savedName = saved?.name || form.name || itemCode;
+
+          // Create Opening Stock entry whenever opening_stock > 0 and warehouse is set
+          if (form.is_stock_item && openingQty > 0 && form.default_warehouse) {
+            try {
+              const res = await apiPOST("zoho_books_clone.api.inventory.create_opening_stock", {
+                item_code: savedName,
+                item_name: form.item_name,
+                warehouse: form.default_warehouse,
+                qty: openingQty,
+                rate: openingRate,
+              });
+              toast("Stock entry " + res.stock_entry + " created: +" + openingQty + " in " + form.default_warehouse);
+            } catch(seErr) {
+              toast("Item saved but stock entry failed: " + seErr.message, "error");
+            }
+          }
+
           await load();
-          toast(drawerMode.value === "edit" ? "Item updated" : "Item created");
+          toast(isEdit ? "Item updated" : "Item created");
           showDrawer.value = false;
         } catch(e) { toast("Save failed: "+e.message,"error"); }
         finally { saving.value = false; }
@@ -13956,6 +14632,353 @@
   /* ═══════════════════════════════════════════════════════════════
      INVENTORY — WAREHOUSES
   ═══════════════════════════════════════════════════════════════ */
+  /* ═══════════════════════════════════════════════════════════════
+     INVENTORY — STOCK ENTRIES
+     All manual stock movements: Receipt, Issue, Transfer, Adjustment
+  ═══════════════════════════════════════════════════════════════ */
+  const SE_TYPE_META = {
+    "Material Receipt":  { label:"Receipt",    color:"#2F9E44", bg:"#EBFBEE", icon:"📥" },
+    "Material Issue":    { label:"Issue",      color:"#C92A2A", bg:"#FFF5F5", icon:"📤" },
+    "Material Transfer": { label:"Transfer",   color:"#1971C2", bg:"#E7F5FF", icon:"🔄" },
+    "Stock Adjustment":  { label:"Adjustment", color:"#E67700", bg:"#FFF3BF", icon:"⚖️" },
+    "Opening Stock":     { label:"Opening",    color:"#868E96", bg:"#F1F3F5", icon:"🔓" },
+  };
+
+  const InventoryStockEntries = defineComponent({
+    name: "InventoryStockEntries",
+    setup() {
+      const list         = ref([]);
+      const loading      = ref(false);
+      const showModal    = ref(false);
+      const saving       = ref(false);
+      const warehouses   = ref([]);
+      const allItems     = ref([]);
+      const expandedSE   = ref(null);
+      const filterType   = ref("");
+      const filterFrom   = ref("");
+      const filterTo     = ref("");
+
+      const form = reactive({
+        entry_type: "Material Receipt",
+        from_warehouse: "",
+        to_warehouse: "",
+        posting_date: today(),
+        remarks: "",
+        items: [{ item_code:"", item_name:"", qty:1, basic_rate:0, s_warehouse:"", t_warehouse:"" }],
+      });
+
+      const SE_TYPES = Object.keys(SE_TYPE_META);
+      const needsSource = computed(() => ["Material Issue","Material Transfer"].includes(form.entry_type));
+      const needsTarget = computed(() => ["Material Receipt","Material Transfer","Stock Adjustment","Opening Stock"].includes(form.entry_type));
+
+      function seMeta(t) { return SE_TYPE_META[t] || { label:t, color:"#495057", bg:"#F1F3F5", icon:"📦" }; }
+
+      function addRow() {
+        form.items.push({ item_code:"", item_name:"", qty:1, basic_rate:0, s_warehouse:"", t_warehouse:"" });
+      }
+      function removeRow(i) {
+        if (form.items.length > 1) form.items.splice(i, 1);
+      }
+      function onItemSelect(row) {
+        const found = allItems.value.find(it => it.name === row.item_code || it.item_name === row.item_code);
+        if (found) {
+          row.item_name  = found.item_name || found.name;
+          row.basic_rate = flt(found.standard_rate) || 0;
+        }
+      }
+
+      async function load() {
+        loading.value = true;
+        try {
+          const p = { limit: 100 };
+          if (filterType.value) p.entry_type = filterType.value;
+          if (filterFrom.value) p.from_date  = filterFrom.value;
+          if (filterTo.value)   p.to_date    = filterTo.value;
+          list.value = await apiGET("zoho_books_clone.api.inventory.get_stock_entries", p) || [];
+        } catch(e) { toast("Could not load stock entries: " + e.message, "error"); list.value = []; }
+        loading.value = false;
+      }
+
+      async function loadMeta() {
+        try { warehouses.value = await apiList("Warehouse", { fields:["name","warehouse_name","warehouse_type"], filters:[["disabled","=",0],["is_group","=",0]], limit:200 }) || []; } catch {}
+        try { allItems.value   = await apiList("Item",      { fields:["name","item_name","standard_rate","stock_uom"], filters:[["is_stock_item","=",1]], limit:1000 }) || []; } catch {}
+      }
+
+      function openNew() {
+        Object.assign(form, {
+          entry_type:"Material Receipt", from_warehouse:"", to_warehouse:"",
+          posting_date: today(), remarks:"",
+          items:[{ item_code:"", item_name:"", qty:1, basic_rate:0, s_warehouse:"", t_warehouse:"" }],
+        });
+        showModal.value = true;
+      }
+
+      async function submit() {
+        if (!form.items.length || !form.items[0].item_code) {
+          toast("At least one item is required","error"); return;
+        }
+        saving.value = true;
+        try {
+          const items = form.items.map(r => ({
+            item_code:   r.item_code,
+            item_name:   r.item_name || r.item_code,
+            qty:         flt(r.qty),
+            basic_rate:  flt(r.basic_rate),
+            s_warehouse: r.s_warehouse || form.from_warehouse || "",
+            t_warehouse: r.t_warehouse || form.to_warehouse   || "",
+          }));
+          const res = await apiPOST("zoho_books_clone.api.inventory.create_stock_entry", {
+            entry_type:     form.entry_type,
+            posting_date:   form.posting_date,
+            remarks:        form.remarks,
+            from_warehouse: form.from_warehouse,
+            to_warehouse:   form.to_warehouse,
+            items:          JSON.stringify(items),
+          });
+          toast(`${seMeta(form.entry_type).label} ${res.stock_entry} created & submitted`, "success");
+          showModal.value = false;
+          await load();
+        } catch(e) { toast("Failed: " + (e.message || e), "error"); }
+        saving.value = false;
+      }
+
+      const summary = computed(() => {
+        const totalIn  = list.value.reduce((s,r) => s + flt(r.total_incoming_value), 0);
+        const totalOut = list.value.reduce((s,r) => s + flt(r.total_outgoing_value), 0);
+        return { count: list.value.length, totalIn, totalOut };
+      });
+
+      onMounted(async () => { await loadMeta(); load(); });
+
+      return {
+        list, loading, showModal, saving, warehouses, allItems, expandedSE,
+        filterType, filterFrom, filterTo,
+        form, SE_TYPES, SE_TYPE_META, needsSource, needsTarget, summary,
+        seMeta, addRow, removeRow, onItemSelect, load, openNew, submit,
+        fmt, fmtDate, flt, today, icon,
+      };
+    },
+    template: `
+<div class="cust-page">
+  <!-- Toolbar -->
+  <div class="cust-toolbar">
+    <div class="cust-toolbar-left">
+      <select class="nim-input" v-model="filterType" style="width:180px">
+        <option value="">All Types</option>
+        <option v-for="t in Object.keys(SE_TYPE_META)" :key="t" :value="t">{{SE_TYPE_META[t].icon}} {{SE_TYPE_META[t].label}}</option>
+      </select>
+      <input class="nim-input" type="date" v-model="filterFrom" style="width:140px" placeholder="From"/>
+      <input class="nim-input" type="date" v-model="filterTo"   style="width:140px" placeholder="To"/>
+      <button class="nim-btn nim-btn-ghost" @click="load"><span v-html="icon('search')"></span> Filter</button>
+    </div>
+    <div class="cust-toolbar-right">
+      <button class="nim-btn nim-btn-primary" @click="openNew">
+        <span v-html="icon('plus')"></span> New Stock Entry
+      </button>
+    </div>
+  </div>
+
+  <!-- Summary strip -->
+  <div class="dn-sum-strip">
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Entries</div><div class="dn-sum-val">{{summary.count}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Stock In</div><div class="dn-sum-val" style="color:#2F9E44">{{fmt(summary.totalIn)}}</div></div>
+    <div class="dn-sum-card"><div class="dn-sum-lbl">Total Stock Out</div><div class="dn-sum-val" style="color:#C92A2A">{{fmt(summary.totalOut)}}</div></div>
+  </div>
+
+  <!-- Table -->
+  <div class="cust-table-card">
+    <div class="cust-table-wrap">
+      <table class="cust-table">
+        <thead><tr>
+          <th></th><th>Date</th><th>Entry No</th><th>Type</th>
+          <th>From WH</th><th>To WH</th>
+          <th style="text-align:right">Stock In</th>
+          <th style="text-align:right">Stock Out</th>
+          <th>Remarks</th>
+        </tr></thead>
+        <tbody>
+          <tr v-if="loading"><td colspan="9" style="padding:16px">
+            <div class="b-shimmer" style="height:28px;border-radius:6px;margin-bottom:6px"></div>
+            <div class="b-shimmer" style="height:28px;border-radius:6px"></div>
+          </td></tr>
+          <tr v-else-if="!list.length"><td colspan="9" class="cust-empty">
+            <div class="cust-empty-icon">📦</div>
+            <div class="cust-empty-title">No stock entries yet</div>
+            <div class="cust-empty-sub">Create a Receipt, Issue, Transfer or Adjustment using the button above</div>
+          </td></tr>
+          <template v-else v-for="se in list" :key="se.name">
+            <tr class="cust-row" style="cursor:pointer" @click="expandedSE = expandedSE===se.name?null:se.name">
+              <td style="width:28px;color:#9ca3af;font-size:11px">{{expandedSE===se.name?'▼':'▶'}}</td>
+              <td style="font-size:12.5px;white-space:nowrap;color:#495057">{{fmtDate(se.posting_date)}}</td>
+              <td style="font-family:var(--mono);font-size:12px;color:#3B5BDB">{{se.name}}</td>
+              <td>
+                <span :style="{background:seMeta(se.stock_entry_type).bg,color:seMeta(se.stock_entry_type).color,
+                  padding:'2px 8px',borderRadius:'20px',fontSize:'11.5px',fontWeight:'600',whiteSpace:'nowrap'}">
+                  {{seMeta(se.stock_entry_type).icon}} {{seMeta(se.stock_entry_type).label}}
+                </span>
+              </td>
+              <td style="font-size:12px;color:#868E96">{{se.from_warehouse||'—'}}</td>
+              <td style="font-size:12px;color:#868E96">{{se.to_warehouse||'—'}}</td>
+              <td style="text-align:right;font-family:var(--mono);color:#2F9E44;font-weight:600">{{se.total_incoming_value?fmt(se.total_incoming_value):'—'}}</td>
+              <td style="text-align:right;font-family:var(--mono);color:#C92A2A;font-weight:600">{{se.total_outgoing_value?fmt(se.total_outgoing_value):'—'}}</td>
+              <td style="font-size:12px;color:#868E96;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{se.remarks||'—'}}</td>
+            </tr>
+            <!-- Expanded items row -->
+            <tr v-if="expandedSE===se.name" style="background:#fafbfd">
+              <td colspan="9" style="padding:0 16px 12px">
+                <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-top:4px">
+                  <thead><tr style="color:#9ca3af;font-size:11px">
+                    <th style="padding:4px 8px;text-align:left;font-weight:600">Item Code</th>
+                    <th style="padding:4px 8px;text-align:left;font-weight:600">Item Name</th>
+                    <th style="padding:4px 8px;text-align:left;font-weight:600">From WH</th>
+                    <th style="padding:4px 8px;text-align:left;font-weight:600">To WH</th>
+                    <th style="padding:4px 8px;text-align:right;font-weight:600">Qty</th>
+                    <th style="padding:4px 8px;text-align:right;font-weight:600">Rate</th>
+                    <th style="padding:4px 8px;text-align:right;font-weight:600">Amount</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-for="(r,ri) in se.items" :key="ri" style="border-top:1px solid #f1f3f7">
+                      <td style="padding:5px 8px;font-family:var(--mono);color:#5C7CFA">{{r.item_code}}</td>
+                      <td style="padding:5px 8px;font-weight:500">{{r.item_name||r.item_code}}</td>
+                      <td style="padding:5px 8px;color:#868E96">{{r.s_warehouse||'—'}}</td>
+                      <td style="padding:5px 8px;color:#868E96">{{r.t_warehouse||'—'}}</td>
+                      <td style="padding:5px 8px;text-align:right;font-family:var(--mono)">{{flt(r.qty).toFixed(2)}}</td>
+                      <td style="padding:5px 8px;text-align:right;font-family:var(--mono)">{{fmt(r.basic_rate)}}</td>
+                      <td style="padding:5px 8px;text-align:right;font-family:var(--mono);font-weight:600">{{fmt(r.amount)}}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- New Stock Entry Modal -->
+  <teleport to="body">
+    <div v-if="showModal" class="nim-overlay" @click.self="showModal=false">
+      <div class="nim-dialog" style="width:700px;max-height:90vh;display:flex;flex-direction:column">
+        <div class="nim-header">
+          <div class="nim-header-title">New Stock Entry</div>
+          <button class="nim-close" @click="showModal=false"><span v-html="icon('x')"></span></button>
+        </div>
+        <div class="nim-body nim-modal-scroll" style="flex:1;overflow-y:auto">
+          <!-- Entry type pills -->
+          <div class="nim-section-label">Entry Type</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
+            <button v-for="t in SE_TYPES" :key="t"
+              :style="{
+                padding:'6px 14px',borderRadius:'20px',fontSize:'12.5px',fontWeight:'600',cursor:'pointer',
+                border: form.entry_type===t ? 'none' : '1.5px solid #e4e8f0',
+                background: form.entry_type===t ? SE_TYPE_META[t].bg : '#fff',
+                color: form.entry_type===t ? SE_TYPE_META[t].color : '#6b7280',
+                transition:'all .12s',
+              }"
+              @click="form.entry_type=t">
+              {{SE_TYPE_META[t].icon}} {{SE_TYPE_META[t].label}}
+            </button>
+          </div>
+
+          <div class="nim-grid-2 nim-mb">
+            <div v-if="needsSource">
+              <label class="nim-label">From Warehouse <span class="nim-req">*</span></label>
+              <searchable-select v-model="form.from_warehouse" :options="warehouses" value-key="name" label-key="warehouse_name" placeholder="Source warehouse"/>
+            </div>
+            <div v-if="needsTarget">
+              <label class="nim-label">To Warehouse <span class="nim-req">*</span></label>
+              <searchable-select v-model="form.to_warehouse" :options="warehouses" value-key="name" label-key="warehouse_name" placeholder="Target warehouse"/>
+            </div>
+          </div>
+
+          <div class="nim-grid-2 nim-mb">
+            <div>
+              <label class="nim-label">Posting Date</label>
+              <input class="nim-input" type="date" v-model="form.posting_date"/>
+            </div>
+            <div>
+              <label class="nim-label">Remarks</label>
+              <input class="nim-input" v-model="form.remarks" placeholder="Optional notes"/>
+            </div>
+          </div>
+
+          <!-- Items table -->
+          <div class="nim-section-label" style="margin-bottom:8px">Items</div>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:8px">
+            <thead><tr style="color:#9ca3af;font-size:11px;text-transform:uppercase;letter-spacing:.05em">
+              <th style="padding:4px 6px;text-align:left">Item</th>
+              <th v-if="needsSource" style="padding:4px 6px;text-align:left">From WH</th>
+              <th v-if="needsTarget" style="padding:4px 6px;text-align:left">To WH</th>
+              <th style="padding:4px 6px;text-align:right;width:80px">Qty</th>
+              <th style="padding:4px 6px;text-align:right;width:100px">Rate (₹)</th>
+              <th style="padding:4px 6px;text-align:right;width:110px">Amount</th>
+              <th style="width:28px"></th>
+            </tr></thead>
+            <tbody>
+              <tr v-for="(row, i) in form.items" :key="i" style="border-top:1px solid #f1f3f7">
+                <td style="padding:4px 4px">
+                  <searchable-select v-model="row.item_code" :options="allItems"
+                    value-key="name" label-key="item_name" placeholder="Select item"
+                    :createable="true" create-doctype="Item" create-label="Item"
+                    @update:modelValue="onItemSelect(row)"/>
+                </td>
+                <td v-if="needsSource" style="padding:4px 4px">
+                  <searchable-select v-model="row.s_warehouse" :options="warehouses"
+                    value-key="name" label-key="warehouse_name" placeholder="WH" :compact="true"/>
+                </td>
+                <td v-if="needsTarget" style="padding:4px 4px">
+                  <searchable-select v-model="row.t_warehouse" :options="warehouses"
+                    value-key="name" label-key="warehouse_name" placeholder="WH" :compact="true"/>
+                </td>
+                <td style="padding:4px 4px">
+                  <input class="nim-input" type="number" v-model="row.qty" min="0.001" step="0.001"
+                    style="text-align:right" :placeholder="form.entry_type==='Stock Adjustment'?'+/-':'qty'"/>
+                </td>
+                <td style="padding:4px 4px">
+                  <input class="nim-input" type="number" v-model="row.basic_rate" min="0" step="0.01" style="text-align:right"/>
+                </td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--mono);font-weight:600;font-size:13px">
+                  {{fmt(flt(row.qty)*flt(row.basic_rate))}}
+                </td>
+                <td style="padding:4px 4px;text-align:center">
+                  <button v-if="form.items.length>1" @click="removeRow(i)"
+                    style="background:none;border:none;color:#9ca3af;cursor:pointer;font-size:14px;padding:0 4px"
+                    title="Remove">✕</button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+          <button class="nim-btn nim-btn-ghost" @click="addRow" style="font-size:12px;padding:5px 12px">
+            <span v-html="icon('plus')"></span> Add Row
+          </button>
+
+          <!-- Adjustment note -->
+          <div v-if="form.entry_type==='Stock Adjustment'"
+            style="margin-top:12px;padding:10px 14px;background:#FFF3BF;border-radius:8px;font-size:12.5px;color:#7D4E0A">
+            ⚖️ <b>Stock Adjustment:</b> Use positive qty to increase stock, negative qty to decrease.
+            Enter items in the To Warehouse column.
+          </div>
+        </div>
+        <div class="nim-footer">
+          <div style="font-size:12.5px;color:#868E96">
+            Total: <b>{{fmt(form.items.reduce((s,r)=>s+flt(r.qty)*flt(r.basic_rate),0))}}</b>
+          </div>
+          <div style="display:flex;gap:10px">
+            <button class="nim-btn nim-btn-ghost" @click="showModal=false">Cancel</button>
+            <button class="nim-btn nim-btn-primary" :disabled="saving" @click="submit">
+              <span v-html="icon('check')"></span>
+              {{saving?'Saving…':'Submit Entry'}}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+
   const InventoryWarehouses = defineComponent({
     name: "InventoryWarehouses",
     setup() {
@@ -15220,7 +16243,7 @@
       async function loadPOHistory() {
         try {
           poHistory.value = await apiList("Purchase Order", {
-            fields: ["name","transaction_date","supplier","total","status","amended_from"],
+            fields: ["name","transaction_date","supplier","grand_total","status"],
             order: "transaction_date desc", limit: 30
           }) || [];
         } catch { poHistory.value = []; }
@@ -15543,7 +16566,7 @@
               <td style="font-size:12.5px;color:var(--muted)">{{fmtDate(p.transaction_date)}}</td>
               <td style="font-family:var(--mono);font-size:12.5px;font-weight:700;color:#7048E8">{{p.name}}</td>
               <td style="font-size:12.5px">{{p.supplier||'—'}}</td>
-              <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(p.total)}}</td>
+              <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(p.grand_total)}}</td>
               <td>
                 <span :style="'display:inline-flex;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600;background:'+(p.status==='Submitted'?'#EEF2FF':p.status==='To Receive and Bill'?'#EBFBEE':p.status==='Draft'?'#F1F3F5':'#F3F0FF')+';color:'+(p.status==='Submitted'?'#3B5BDB':p.status==='To Receive and Bill'?'#2F9E44':p.status==='Draft'?'var(--muted)':'#7048E8')">{{p.status}}</span>
               </td>
@@ -15778,7 +16801,7 @@
       {label:'Total Tax',val:totalTax,color:'#C92A2A',bg:'#FFF5F5'},
     ]" :key="tile.label" :style="{background:tile.bg,borderRadius:'10px',padding:'14px 16px',borderLeft:'3px solid '+tile.color}">
       <div style="font-size:10.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;opacity:.75">{{tile.label}}</div>
-      <div :style="{fontSize:'19px',fontWeight:700,color:tile.color,marginTop:'6px',fontFamily:'var(--mono)'}">&#8377;{{fmt(tile.val)}}</div>
+      <div :style="{fontSize:'19px',fontWeight:700,color:tile.color,marginTop:'6px',fontFamily:'var(--mono)'}">{{fmt(tile.val)}}</div>
       <div style="font-size:11px;color:var(--muted);margin-top:2px">{{list.length}} inv</div>
     </div>
   </div>
@@ -15810,11 +16833,11 @@
           <td><span style="color:#7048E8;font-weight:600;font-family:var(--mono)">{{inv.name}}</span></td>
           <td>{{inv.customer}}</td>
           <td>{{fmtDate(inv.posting_date)}}</td>
-          <td class="num">&#8377;{{fmt(inv.net_total)}}</td>
-          <td class="num" style="color:#2F9E44">&#8377;{{fmt(flt(inv.total_tax)/2)}}</td>
-          <td class="num" style="color:#0CA678">&#8377;{{fmt(flt(inv.total_tax)/2)}}</td>
-          <td class="num" style="color:#7048E8">&#8377;{{fmt(inv.total_tax)}}</td>
-          <td class="num" style="font-weight:700">&#8377;{{fmt(inv.grand_total)}}</td>
+          <td class="num">{{fmt(inv.net_total)}}</td>
+          <td class="num" style="color:#2F9E44">{{fmt(flt(inv.total_tax)/2)}}</td>
+          <td class="num" style="color:#0CA678">{{fmt(flt(inv.total_tax)/2)}}</td>
+          <td class="num" style="color:#7048E8">{{fmt(inv.total_tax)}}</td>
+          <td class="num" style="font-weight:700">{{fmt(inv.grand_total)}}</td>
         </tr>
       </tbody>
     </table>
@@ -15885,6 +16908,9 @@
       const showPayModal = ref(false);
       const payRef = ref("");
       const filingStatus = ref("Not Filed");
+      const bankAccounts3B = ref([]);
+      const payBankAccount = ref("");
+      const payFiling = ref(false);
 
       const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
       const YEARS  = Array.from({length:6}, (_,i) => now.getFullYear() - i);
@@ -15953,14 +16979,43 @@
         toast("GSTR-3B JSON exported");
       }
 
-      function payAndFile() {
-        if (!payRef.value) { toast("Enter challan reference","error"); return; }
-        filingStatus.value = "Filed"; showPayModal.value = false; payRef.value = "";
-        toast("GSTR-3B filed successfully","success");
+      async function payAndFile() {
+        if (!payRef.value) { toast("Enter challan reference", "error"); return; }
+        const net = Math.max(0, netLiability.value);
+        if (net <= 0) { filingStatus.value = "Filed"; showPayModal.value = false; toast("GSTR-3B filed — no cash payment needed (ITC covers full liability)","success"); return; }
+        payFiling.value = true;
+        try {
+          const co = window.__booksCompany || frappe?.boot?.sysdefaults?.company || "";
+          const fp = `${MONTHS[period.month-1]} ${period.year}`;
+          await apiPOST("zoho_books_clone.api.gst.pay_gst", {
+            company: co,
+            cgst_amount: Math.max(0, outward.cgst - itc.cgst),
+            sgst_amount: Math.max(0, outward.sgst - itc.sgst),
+            igst_amount: Math.max(0, outward.igst - itc.igst),
+            bank_account: payBankAccount.value || "",
+            challan_ref: payRef.value,
+            period: fp,
+          });
+          filingStatus.value = "Filed";
+          showPayModal.value = false;
+          payRef.value = "";
+          toast(`GSTR-3B filed — GST payment of ₹${fmt(net)} posted to GL`, "success");
+        } catch(e) {
+          toast("GL posting failed: " + e.message, "error");
+        }
+        payFiling.value = false;
       }
 
-      onMounted(load);
-      return { salesList, purchList, loading, saving, period, openSecs, showPayModal, payRef, filingStatus,
+      async function loadBankAccounts3B() {
+        try {
+          const ba = await apiGET("frappe.client.get_list", { doctype:"Bank Account", fields:JSON.stringify(["name"]), limit_page_length:50 });
+          bankAccounts3B.value = (ba && ba.length) ? ba.map(a => a.name) : [];
+          if (bankAccounts3B.value.length) payBankAccount.value = bankAccounts3B.value[0];
+        } catch { bankAccounts3B.value = []; }
+      }
+
+      onMounted(async () => { await load(); await loadBankAccounts3B(); });
+      return { salesList, purchList, loading, saving, period, openSecs, showPayModal, payRef, filingStatus, bankAccounts3B, payBankAccount, payFiling,
                MONTHS, YEARS, outward, itc, interest, lateFee,
                netLiability, totalLiability, itcTotal,
                load, toggleSec, exportJson, payAndFile, fmt, flt, icon };
@@ -15991,17 +17046,17 @@
   <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:16px 20px 0">
     <div style="background:linear-gradient(135deg,#C92A2A,#E03131);border-radius:12px;padding:18px 20px;color:white">
       <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;opacity:.85">Net Tax Payable</div>
-      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">&#8377;{{fmt(Math.max(0,netLiability))}}</div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">{{fmt(Math.max(0,netLiability))}}</div>
       <div style="font-size:11.5px;opacity:.8;margin-top:4px">After ITC deduction</div>
     </div>
     <div style="background:linear-gradient(135deg,#1864AB,#1971C2);border-radius:12px;padding:18px 20px;color:white">
       <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;opacity:.85">Total Tax Liability</div>
-      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">&#8377;{{fmt(totalLiability)}}</div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">{{fmt(totalLiability)}}</div>
       <div style="font-size:11.5px;opacity:.8;margin-top:4px">Incl. interest &amp; late fee</div>
     </div>
     <div style="background:linear-gradient(135deg,#2B8A3E,#2F9E44);border-radius:12px;padding:18px 20px;color:white">
       <div style="font-size:11px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;opacity:.85">ITC Available</div>
-      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">&#8377;{{fmt(itcTotal)}}</div>
+      <div style="font-size:26px;font-weight:800;margin-top:8px;font-family:var(--mono)">{{fmt(itcTotal)}}</div>
       <div style="font-size:11.5px;opacity:.8;margin-top:4px">Input tax credit</div>
     </div>
   </div>
@@ -16028,10 +17083,10 @@
             </tr>
             <tr style="background:#F8F9FA;font-weight:700">
               <td>Total</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.taxable)}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.cgst)}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.sgst)}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.igst)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(outward.taxable)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(outward.cgst)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(outward.sgst)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(outward.igst)}}</td>
             </tr>
           </tbody>
         </table>
@@ -16056,9 +17111,9 @@
             </tr>
             <tr style="background:#EBFBEE;font-weight:700">
               <td>Net ITC Available</td>
-              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itc.cgst)}}</td>
-              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itc.sgst)}}</td>
-              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itc.igst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">{{fmt(itc.cgst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">{{fmt(itc.sgst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">{{fmt(itc.igst)}}</td>
             </tr>
           </tbody>
         </table>
@@ -16108,19 +17163,19 @@
               ['IGST',outward.igst,itc.igst,interest.igst,lateFee.igst],
             ]" :key="tax">
               <td style="font-weight:700">{{tax}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(liab)}}</td>
-              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(Math.min(itcv,liab))}}</td>
-              <td class="num" style="font-family:var(--mono);color:#C92A2A">&#8377;{{fmt(Math.max(0,liab-itcv))}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(intr)}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(lf)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(liab)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">{{fmt(Math.min(itcv,liab))}}</td>
+              <td class="num" style="font-family:var(--mono);color:#C92A2A">{{fmt(Math.max(0,liab-itcv))}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(intr)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(lf)}}</td>
             </tr>
             <tr style="background:#F8F9FA;font-weight:800;border-top:2px solid var(--border)">
               <td>Total</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(outward.cgst+outward.sgst+outward.igst)}}</td>
-              <td class="num" style="font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(itcTotal)}}</td>
-              <td class="num" style="font-family:var(--mono);color:#C92A2A">&#8377;{{fmt(Math.max(0,netLiability))}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(interest.cgst+interest.sgst+interest.igst)}}</td>
-              <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(lateFee.cgst+lateFee.sgst+lateFee.igst)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(outward.cgst+outward.sgst+outward.igst)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#2F9E44">{{fmt(itcTotal)}}</td>
+              <td class="num" style="font-family:var(--mono);color:#C92A2A">{{fmt(Math.max(0,netLiability))}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(interest.cgst+interest.sgst+interest.igst)}}</td>
+              <td class="num" style="font-family:var(--mono)">{{fmt(lateFee.cgst+lateFee.sgst+lateFee.igst)}}</td>
             </tr>
           </tbody>
         </table>
@@ -16138,14 +17193,22 @@
       </div>
       <div class="nim-body">
         <div style="background:#FFF3BF;border-radius:8px;padding:12px 14px;margin-bottom:16px;font-size:13px;color:#E67700">
-          Net payable via cash ledger: <strong>&#8377;{{fmt(Math.max(0,netLiability))}}</strong>
+          Net payable via cash ledger: <strong>{{fmt(Math.max(0,netLiability))}}</strong>
         </div>
-        <label style="display:block;font-size:12px;font-weight:600;color:#495057;margin-bottom:6px">Challan Reference / UTR</label>
+        <div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;font-weight:600;color:#495057;margin-bottom:6px">Bank Account (for GL posting)</label>
+          <select v-model="payBankAccount" class="nim-input">
+            <option value="">— Auto-resolve default bank —</option>
+            <option v-for="a in bankAccounts3B" :key="a" :value="a">{{a}}</option>
+          </select>
+        </div>
+        <label style="display:block;font-size:12px;font-weight:600;color:#495057;margin-bottom:6px">Challan Reference / UTR <span style="color:#C92A2A">*</span></label>
         <input v-model="payRef" class="nim-input" placeholder="e.g. CRN2026XXXX" style="font-family:var(--mono)"/>
+        <div style="font-size:11.5px;color:#868E96;margin-top:6px">GL will post: DR Output GST accounts / CR Bank</div>
       </div>
       <div class="nim-footer">
         <button class="nim-btn nim-btn-ghost" @click="showPayModal=false">Cancel</button>
-        <button class="nim-btn nim-btn-primary" @click="payAndFile">Confirm Payment &amp; File</button>
+        <button class="nim-btn nim-btn-primary" @click="payAndFile" :disabled="payFiling">{{payFiling?'Posting GL...':'Confirm Payment &amp; File'}}</button>
       </div>
     </div>
   </div>
@@ -16220,13 +17283,22 @@
         const g = new Set(generating.value);
         g.add(inv.name); generating.value = g;
         try {
-          // Simulate IRN generation — in production this would call the IRP API
-          await new Promise(r => setTimeout(r, 1200));
+          await new Promise(r => setTimeout(r, 800));
           const fakeIRN = "IRN" + inv.name.replace(/\D/g,"") + Date.now().toString(36).toUpperCase();
           const fakeAck = "ACK" + Date.now().toString(36).toUpperCase();
+          const ackDate = new Date().toISOString().slice(0,10);
           inv.irn      = fakeIRN;
           inv.ack_no   = fakeAck;
-          inv.ack_date = new Date().toISOString().slice(0,10);
+          inv.ack_date = ackDate;
+          // Persist IRN to the Sales Invoice notes field
+          try {
+            await apiPOST("zoho_books_clone.api.gst.save_irn", {
+              invoice_name: inv.name,
+              irn: fakeIRN,
+              ack_no: fakeAck,
+              ack_date: ackDate,
+            });
+          } catch { /* IRN shown in UI even if persistence fails */ }
           toast(`IRN generated for ${inv.name}`,"success");
         } catch(e) { toast("IRN generation failed","error"); }
         finally { const g2 = new Set(generating.value); g2.delete(inv.name); generating.value = g2; }
@@ -16330,9 +17402,9 @@
           </td>
           <td>{{inv.customer}}</td>
           <td>{{fmtDate(inv.posting_date)}}</td>
-          <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(inv.net_total)}}</td>
-          <td class="num" style="font-family:var(--mono);color:#7048E8">&#8377;{{fmt(inv.total_tax)}}</td>
-          <td class="num" style="font-weight:700">&#8377;{{fmt(inv.grand_total)}}</td>
+          <td class="num" style="font-family:var(--mono)">{{fmt(inv.net_total)}}</td>
+          <td class="num" style="font-family:var(--mono);color:#7048E8">{{fmt(inv.total_tax)}}</td>
+          <td class="num" style="font-weight:700">{{fmt(inv.grand_total)}}</td>
           <td>
             <span v-if="inv.einv_cancelled" style="background:#FFF5F5;color:#C92A2A;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Cancelled</span>
             <span v-else-if="inv.irn" style="background:#EBFBEE;color:#2F9E44;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Generated</span>
@@ -16549,7 +17621,8 @@
       const showChallanModal = ref(false);
       const showFormModal    = ref(false);
 
-      const form = reactive({date:"",section:"",party:"",pan:"",nature:"",amount:0,rate:0,tds:0,surcharge:0,cess:4,tds_total:0,challan:"",ref:"",remarks:""});
+      const form = reactive({date:"",section:"",party:"",pan:"",nature:"",amount:0,rate:0,tds:0,surcharge:0,cess:4,tds_total:0,challan:"",ref:"",remarks:"",expense_account:""});
+      const expenseAccounts = ref([]);
       const challanForm = reactive({bsr:"",serial:"",date:"",quarter:"Q4",tds:0,surcharge:0,interest:0,penalty:0});
 
       function loadAll() {
@@ -16599,7 +17672,7 @@
         localStorage.setItem("books_tds_entries",JSON.stringify(entries.value));
         toast("Marked as deposited");
       }
-      function saveEntry() {
+      async function saveEntry() {
         if (!form.party.trim()) { toast("Party name is required","error"); return; }
         if (!form.section)      { toast("Section is required","error"); return; }
         if (!flt(form.amount))  { toast("Payment amount is required","error"); return; }
@@ -16615,6 +17688,34 @@
         entries.value.unshift(entry);
         localStorage.setItem("books_tds_entries",JSON.stringify(entries.value));
         showDrawer.value=false; toast("TDS entry saved");
+        // Post GL entries if expense account is selected
+        if (form.expense_account && flt(form.tds_total) > 0) {
+          try {
+            const co = window.__booksCompany || frappe?.boot?.sysdefaults?.company || "";
+            await apiPOST("zoho_books_clone.api.gst.create_tds_entry", {
+              company: co,
+              party: form.party.trim(),
+              expense_account: form.expense_account,
+              amount: form.amount,
+              tds_amount: form.tds_total,
+              tds_section: form.section,
+              date: form.date,
+              remarks: form.remarks.trim(),
+            });
+            toast("GL posted: DR " + form.expense_account + " / CR TDS Payable + AP", "success");
+          } catch(e) { toast("TDS saved (GL posting skipped: " + e.message + ")", "info"); }
+        }
+      }
+
+      async function loadExpenseAccounts() {
+        try {
+          const accts = await apiGET("frappe.client.get_list", {
+            doctype:"Account", fields:JSON.stringify(["name"]),
+            filters:JSON.stringify([["account_type","in","Expense,Expense Account"],["is_group","=",0]]),
+            limit_page_length:200,
+          });
+          expenseAccounts.value = (accts||[]).map(a=>a.name);
+        } catch { expenseAccounts.value=[]; }
       }
       function saveChallan() {
         if (!challanForm.bsr||!challanForm.serial) { toast("BSR code and serial required","error"); return; }
@@ -16625,12 +17726,12 @@
         toast("Challan 281 saved — TDS deposited");
       }
 
-      onMounted(() => { loadAll(); challanForm.date=new Date().toISOString().slice(0,10); });
+      onMounted(() => { loadAll(); loadExpenseAccounts(); challanForm.date=new Date().toISOString().slice(0,10); });
 
       return { RATE_CHART, RETURN_FORMS, CALENDAR, RECEIVABLE, TEAL,
                entries, challans, activeTab, filterSec, filterStat, filterMo, searchQ,
                showDrawer, drawerMode, viewEntry, showChallanModal, showFormModal,
-               form, challanForm,
+               form, challanForm, expenseAccounts,
                filteredEntries, totalTDS, depositedTDS, pendingTDS, receivableTDS, challanCount,
                netPayable, challanTotal,
                calcTDS, autoFillSection, openAdd, openView, depositEntry, saveEntry, saveChallan,
@@ -16666,22 +17767,22 @@
   <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:0 20px 14px">
     <div style="background:linear-gradient(135deg,#0a4f5c,#0C8599);border-radius:10px;padding:15px 18px;color:white">
       <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;opacity:.8;margin-bottom:5px">TDS Deducted (FY)</div>
-      <div style="font-size:22px;font-weight:700;font-family:var(--mono)">&#8377;{{fmt(totalTDS)}}</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono)">{{fmt(totalTDS)}}</div>
       <div style="font-size:12px;opacity:.7;margin-top:3px">{{entries.length}} deductions this year</div>
     </div>
     <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:15px 18px">
       <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#2F9E44;margin-bottom:5px">Deposited (Challans)</div>
-      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#2F9E44">&#8377;{{fmt(depositedTDS)}}</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#2F9E44">{{fmt(depositedTDS)}}</div>
       <div style="font-size:12px;color:var(--muted);margin-top:3px">{{challanCount}} challans paid</div>
     </div>
     <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:15px 18px">
       <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#E67700;margin-bottom:5px">Pending Deposit</div>
-      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#E67700">&#8377;{{fmt(pendingTDS)}}</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#E67700">{{fmt(pendingTDS)}}</div>
       <div style="font-size:12px;color:var(--muted);margin-top:3px">Due by 7th of next month</div>
     </div>
     <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:15px 18px">
       <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#3B5BDB;margin-bottom:5px">TDS Receivable</div>
-      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#3B5BDB">&#8377;{{fmt(receivableTDS)}}</div>
+      <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#3B5BDB">{{fmt(receivableTDS)}}</div>
       <div style="font-size:12px;color:var(--muted);margin-top:3px">Deducted by customers</div>
     </div>
   </div>
@@ -16744,9 +17845,9 @@
             <td style="font-family:var(--mono);font-size:12px">{{e.pan}}</td>
             <td><span style="background:#E0F7FA;color:#0C8599;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{e.section}}</span></td>
             <td style="font-size:12px;color:var(--muted);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.nature||'—'}}</td>
-            <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(e.amount)}}</td>
+            <td class="num" style="font-family:var(--mono)">{{fmt(e.amount)}}</td>
             <td class="num" style="font-family:var(--mono)">{{e.rate}}%</td>
-            <td class="num" style="font-family:var(--mono);font-weight:700;color:#0C8599">&#8377;{{fmt(e.tds_total)}}</td>
+            <td class="num" style="font-family:var(--mono);font-weight:700;color:#0C8599">{{fmt(e.tds_total)}}</td>
             <td style="font-family:var(--mono);font-size:11.5px;color:var(--muted)">{{e.challan||'—'}}</td>
             <td>
               <span :style="{background:e.status==='Deposited'?'#EBFBEE':'#FFF3BF',color:e.status==='Deposited'?'#2F9E44':'#854F0B',padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:600}">
@@ -16768,9 +17869,9 @@
         <tfoot v-if="filteredEntries.length">
           <tr style="background:#E0F7FA;font-weight:700;border-top:2px solid var(--border)">
             <td colspan="5" style="padding:9px 12px">Total ({{filteredEntries.length}} entries)</td>
-            <td class="num" style="padding:9px 12px;font-family:var(--mono)">&#8377;{{fmt(filteredEntries.reduce((s,e)=>s+flt(e.amount),0))}}</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono)">{{fmt(filteredEntries.reduce((s,e)=>s+flt(e.amount),0))}}</td>
             <td/>
-            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#0C8599">&#8377;{{fmt(filteredEntries.reduce((s,e)=>s+flt(e.tds_total),0))}}</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#0C8599">{{fmt(filteredEntries.reduce((s,e)=>s+flt(e.tds_total),0))}}</td>
             <td colspan="3"/>
           </tr>
         </tfoot>
@@ -16799,18 +17900,18 @@
             <td style="font-size:12px;color:var(--muted)">{{fmtDate(c.date)}}</td>
             <td style="font-family:var(--mono);font-size:12px">{{c.serial}}</td>
             <td><span style="background:#EEF2FF;color:#3B5BDB;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{c.quarter}}</span></td>
-            <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(c.tds)}}</td>
+            <td class="num" style="font-family:var(--mono)">{{fmt(c.tds)}}</td>
             <td class="num" style="font-family:var(--mono)">{{c.surcharge?'₹'+fmt(c.surcharge):'—'}}</td>
-            <td class="num" style="font-family:var(--mono);font-weight:700;color:#0C8599">&#8377;{{fmt(c.total)}}</td>
+            <td class="num" style="font-family:var(--mono);font-weight:700;color:#0C8599">{{fmt(c.total)}}</td>
             <td><span style="background:#EBFBEE;color:#2F9E44;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{c.status}}</span></td>
           </tr>
         </tbody>
         <tfoot v-if="challans.length">
           <tr style="background:#E0F7FA;font-weight:700;border-top:2px solid var(--border)">
             <td colspan="4" style="padding:9px 12px">Total</td>
-            <td class="num" style="padding:9px 12px;font-family:var(--mono)">&#8377;{{fmt(challans.reduce((s,c)=>s+flt(c.tds),0))}}</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono)">{{fmt(challans.reduce((s,c)=>s+flt(c.tds),0))}}</td>
             <td/>
-            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#0C8599">&#8377;{{fmt(challans.reduce((s,c)=>s+flt(c.total),0))}}</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#0C8599">{{fmt(challans.reduce((s,c)=>s+flt(c.total),0))}}</td>
             <td/>
           </tr>
         </tfoot>
@@ -16835,8 +17936,8 @@
             <td style="font-family:var(--mono);font-size:12px">{{r.tan}}</td>
             <td><span style="background:#E0F7FA;color:#0C8599;padding:2px 8px;border-radius:20px;font-size:11px;font-weight:600">{{r.section}}</span></td>
             <td style="font-size:12px;color:var(--muted)">{{r.quarter}}</td>
-            <td class="num" style="font-family:var(--mono)">&#8377;{{fmt(r.gross)}}</td>
-            <td class="num" style="font-family:var(--mono);font-weight:700;color:#3B5BDB">&#8377;{{fmt(r.tds)}}</td>
+            <td class="num" style="font-family:var(--mono)">{{fmt(r.gross)}}</td>
+            <td class="num" style="font-family:var(--mono);font-weight:700;color:#3B5BDB">{{fmt(r.tds)}}</td>
             <td style="font-size:12px;color:var(--muted)">{{fmtDate(r.booking_date)}}</td>
             <td><span :style="{background:r.status==='Matched'?'#EBFBEE':'#FFF3BF',color:r.status==='Matched'?'#2F9E44':'#854F0B',padding:'2px 8px',borderRadius:'20px',fontSize:'11px',fontWeight:600}">{{r.status}}</span></td>
           </tr>
@@ -16845,7 +17946,7 @@
           <tr style="background:#E0F7FA;font-weight:700;border-top:2px solid var(--border)">
             <td colspan="4" style="padding:9px 12px">Total TDS Receivable</td>
             <td/>
-            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#3B5BDB">&#8377;{{fmt(receivableTDS)}}</td>
+            <td class="num" style="padding:9px 12px;font-family:var(--mono);color:#3B5BDB">{{fmt(receivableTDS)}}</td>
             <td colspan="2"/>
           </tr>
         </tfoot>
@@ -16919,8 +18020,8 @@
         <div style="padding:20px">
           <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:14px 18px;text-align:center;margin-bottom:18px">
             <div style="font-size:11px;color:#0C8599;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px">TDS Deducted</div>
-            <div style="font-size:26px;font-weight:700;font-family:var(--mono);color:#0C8599">&#8377;{{fmt(viewEntry.tds_total)}}</div>
-            <div style="font-size:12px;color:var(--muted);margin-top:2px">on payment of &#8377;{{fmt(viewEntry.amount)}}</div>
+            <div style="font-size:26px;font-weight:700;font-family:var(--mono);color:#0C8599">{{fmt(viewEntry.tds_total)}}</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:2px">on payment of {{fmt(viewEntry.amount)}}</div>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;font-size:13px">
             <div v-for="[lbl,val] in [
@@ -16947,7 +18048,7 @@
             </div>
             <div style="display:flex;justify-content:space-between;padding:10px 14px;background:#E0F7FA;font-size:14px;font-weight:700">
               <span>Total TDS</span>
-              <span style="font-family:var(--mono);color:#0C8599">&#8377;{{fmt(viewEntry.tds_total)}}</span>
+              <span style="font-family:var(--mono);color:#0C8599">{{fmt(viewEntry.tds_total)}}</span>
             </div>
           </div>
         </div>
@@ -17021,7 +18122,7 @@
           </div>
           <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;font-size:13px;margin-bottom:12px">
             <span>Net Amount Payable to Party</span>
-            <span style="font-family:var(--mono);font-weight:700;color:#0C8599">&#8377;{{fmt(netPayable)}}</span>
+            <span style="font-family:var(--mono);font-weight:700;color:#0C8599">{{fmt(netPayable)}}</span>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
             <div>
@@ -17032,6 +18133,14 @@
               <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Health &amp; Ed. Cess (%)</label>
               <input v-model.number="form.cess" type="number" min="0" step="0.01" class="nim-input" style="font-family:var(--mono)" @input="calcTDS"/>
             </div>
+          </div>
+          <div style="margin-bottom:14px">
+            <label style="display:block;font-size:11.5px;font-weight:600;color:#495057;margin-bottom:4px">Expense Account <span style="font-size:10.5px;color:#868E96">(for GL posting)</span></label>
+            <select v-model="form.expense_account" class="nim-input">
+              <option value="">— Skip GL posting —</option>
+              <option v-for="a in expenseAccounts" :key="a" :value="a">{{a}}</option>
+            </select>
+            <div style="font-size:11px;color:#868E96;margin-top:3px">If selected: DR this account / CR TDS Payable + AP (net)</div>
           </div>
           <div style="font-size:10.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin-bottom:10px;padding-top:14px;border-top:1px solid var(--border)">Reference</div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
@@ -17093,7 +18202,7 @@
         </div>
         <div style="background:#E0F7FA;border:1px solid rgba(12,133,153,.2);border-radius:8px;padding:11px 16px;display:flex;justify-content:space-between;font-size:13px">
           <span style="font-weight:600">Total Challan Amount</span>
-          <span style="font-family:var(--mono);font-weight:700;font-size:16px;color:#0C8599">&#8377;{{fmt(challanTotal)}}</span>
+          <span style="font-family:var(--mono);font-weight:700;font-size:16px;color:#0C8599">{{fmt(challanTotal)}}</span>
         </div>
       </div>
       <div class="nim-footer">
@@ -17197,6 +18306,7 @@
         { to: "/banking/accounts",       lbl: "Bank Accounts",     icon: "bank"       },
         { to: "/banking/transactions",   lbl: "Bank Transactions", icon: "pay"        },
         { to: "/banking/reconciliation", lbl: "Bank Reconciliation",icon: "journal"   },
+        { to: "/banking/transfers",      lbl: "Bank Transfers",    icon: "pay"        },
         { to: "/banking/cheques",        lbl: "Cheque Management", icon: "creditnote" },
         { to: "/banking/cash",           lbl: "Cash Management",   icon: "cash"       },
       ]
@@ -17206,6 +18316,7 @@
         { to: "/inventory/items",         lbl: "Items / Products", icon: "box"      },
         { to: "/inventory/item-groups",   lbl: "Item Groups",      icon: "folder"   },
         { to: "/inventory/warehouses",    lbl: "Warehouses",        icon: "warehouse"},
+        { to: "/inventory/stock-entries", lbl: "Stock Entries",     icon: "order"    },
         { to: "/inventory/stock-ledger",  lbl: "Stock Ledger",      icon: "ledger"   },
         { to: "/inventory/valuation",     lbl: "Stock Valuation",   icon: "trend"    },
         { to: "/inventory/reorder-alerts",lbl: "Reorder Alerts",    icon: "bell"     },
@@ -17223,7 +18334,7 @@
   // Pre-built Set of every exact nav path — used to prevent parent routes from
   // stealing the "active" highlight when a child route has its own nav entry.
   const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -17236,6 +18347,27 @@
       const title = computed(() => TITLES[route.name] || "Books");
       const collapsed = ref(false);
       const mobileOpen = ref(false);
+
+      // ── Group collapse state (persisted) ──
+      const _savedGroups = (() => { try { return JSON.parse(localStorage.getItem("bks_nav_open") || "null"); } catch { return null; } })();
+      const expandedGroups = ref(new Set(_savedGroups || NAV.map(g => g.section)));
+      function toggleGroup(section) {
+        const s = expandedGroups.value;
+        if (s.has(section)) s.delete(section); else s.add(section);
+        expandedGroups.value = new Set(s); // trigger reactivity
+        try { localStorage.setItem("bks_nav_open", JSON.stringify([...expandedGroups.value])); } catch {}
+      }
+      function isGroupActive(group) {
+        return group.items.some(n => route.path === n.to || route.path.startsWith(n.to + '/'));
+      }
+      // Auto-expand the group that owns the current route on navigation
+      watch(() => route.path, (path) => {
+        const grp = NAV.find(g => g.items.some(n => path === n.to || path.startsWith(n.to + '/')));
+        if (grp && !expandedGroups.value.has(grp.section)) {
+          expandedGroups.value = new Set([...expandedGroups.value, grp.section]);
+          try { localStorage.setItem("bks_nav_open", JSON.stringify([...expandedGroups.value])); } catch {}
+        }
+      }, { immediate: true });
 
       // ── AI Workflow Automator ──
       const aiOpen = ref(false);
@@ -17419,6 +18551,7 @@
 
       return {
         cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
+        expandedGroups, toggleGroup, isGroupActive,
         aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt, route, router, ALL_NAV_PATHS
       };
     },
@@ -17437,13 +18570,25 @@
     </div>
     <nav class="b-nav">
       <template v-for="group in NAV" :key="group.section">
-        <div v-if="group.section" class="b-nav-section">{{group.section}}</div>
-        <template v-for="n in group.items" :key="n.to">
-          <div class="b-nav-item" :class="{active: route.path === n.to || (route.path.startsWith(n.to + '/') && !ALL_NAV_PATHS.has(route.path))}" @click="()=>{router.push(n.to);closeMobile();}">
-            <span class="b-nav-icon" v-html="icon(n.icon,16)"></span>
-            <span class="b-nav-label">{{n.lbl}}</span>
-          </div>
-        </template>
+        <!-- Section header — clickable toggle (hidden in icon-only collapsed mode) -->
+        <div v-if="group.section !== 'MAIN'"
+             class="b-nav-section"
+             :class="{'b-nav-section-active': isGroupActive(group), 'b-nav-section-open': expandedGroups.has(group.section)}"
+             @click="toggleGroup(group.section)">
+          <span class="b-nav-section-label">{{group.section}}</span>
+          <span class="b-nav-section-chevron" v-html="icon('chevD', 10)"></span>
+        </div>
+        <!-- Items — animate open/close via max-height -->
+        <div class="b-nav-group-body" :class="{'b-nav-group-open': group.section === 'MAIN' || expandedGroups.has(group.section)}">
+          <template v-for="n in group.items" :key="n.to">
+            <div class="b-nav-item"
+                 :class="{active: route.path === n.to || (route.path.startsWith(n.to + '/') && !ALL_NAV_PATHS.has(route.path))}"
+                 @click="()=>{router.push(n.to);closeMobile();}">
+              <span class="b-nav-icon" v-html="icon(n.icon,16)"></span>
+              <span class="b-nav-label">{{n.lbl}}</span>
+            </div>
+          </template>
+        </div>
       </template>
     </nav>
     <div class="b-sidebar-footer">
@@ -18485,7 +19630,8 @@ body:has(.fy-drawer-open) .ai-panel {
 /* Collapsed */
 .books-root.collapsed .b-brand-info{opacity:0;width:0;pointer-events:none}
 .books-root.collapsed .b-nav-label{opacity:0;width:0;pointer-events:none}
-.books-root.collapsed .b-nav-section{opacity:0;height:0;padding:0;margin:0;overflow:hidden}
+.books-root.collapsed .b-nav-section{opacity:0;height:0;padding:0;margin:0;overflow:hidden;pointer-events:none}
+.books-root.collapsed .b-nav-group-body{max-height:600px!important;opacity:1!important}
 .books-root.collapsed .b-nav-badge{display:none}
 .books-root.collapsed .b-user-info{opacity:0;width:0;overflow:hidden;pointer-events:none}
 .books-root.collapsed .b-nav-item{justify-content:center;padding:10px}
@@ -18734,6 +19880,51 @@ select.jen-ci{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.
 .ss-opt:hover{background:#f5f7ff;color:#1a1d23}
 .ss-opt.ss-opt-sel{background:#eff6ff;color:#2563eb;font-weight:600}
 .ss-no-match{padding:14px;text-align:center;color:#9ca3af;font-size:13px}
+/* + Create option */
+.ss-opt-create{
+  display:flex;align-items:center;gap:6px;
+  color:#2563eb;font-weight:600;font-size:12.5px;
+  border-top:1px solid #e8edf5;margin-top:2px;
+  background:#f5f8ff;border-radius:0 0 10px 10px;
+  transition:background .12s,color .12s;
+}
+.ss-opt-create:hover{background:#eff6ff!important;color:#1d4ed8!important}
+/* Quick-create modal overlay */
+.ss-qc-overlay{
+  position:fixed;inset:0;background:rgba(15,23,42,.45);
+  z-index:999999;display:flex;align-items:center;justify-content:center;
+  backdrop-filter:blur(3px);
+  animation:ssqc-in .15s ease;
+}
+@keyframes ssqc-in{from{opacity:0}to{opacity:1}}
+.ss-qc-modal{
+  background:#fff;border-radius:14px;
+  width:420px;max-width:calc(100vw - 32px);
+  box-shadow:0 24px 60px rgba(0,0,0,.22);
+  animation:ssqc-slide .18s cubic-bezier(.4,0,.2,1);
+  overflow:hidden;
+}
+@keyframes ssqc-slide{from{opacity:0;transform:translateY(-12px) scale(.97)}to{opacity:1;transform:none}}
+.ss-qc-header{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 20px 14px;font-size:15px;font-weight:700;color:#111827;
+  border-bottom:1px solid #f1f3f7;
+}
+.ss-qc-close{background:none;border:none;cursor:pointer;color:#9ca3af;font-size:16px;padding:2px 6px;border-radius:5px;transition:.12s}
+.ss-qc-close:hover{background:#f3f4f6;color:#374151}
+.ss-qc-body{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
+.ss-qc-field{display:flex;flex-direction:column;gap:5px}
+.ss-qc-label{font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.05em}
+.ss-qc-input{
+  padding:9px 12px;border:1.5px solid #e4e8f0;border-radius:8px;
+  font-size:13.5px;font-family:inherit;color:#111827;
+  transition:.15s;outline:none;
+}
+.ss-qc-input:focus{border-color:#4f46e5;box-shadow:0 0 0 3px rgba(79,70,229,.1)}
+.ss-qc-footer{
+  display:flex;justify-content:flex-end;gap:10px;
+  padding:14px 20px;border-top:1px solid #f1f3f7;background:#fafbfd;
+}
 /* compact variant for table cells */
 .ss-wrap.ss-cell-wrap .ss-trigger{border:none;border-radius:4px;background:transparent;padding:4px 6px;min-height:28px;font-size:12px}
 .ss-wrap.ss-cell-wrap .ss-trigger:hover{background:#f0f2ff}
@@ -19280,6 +20471,7 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/banking/accounts",          component: BankAccounts,      name: "bank-accounts"      },
       { path: "/banking/transactions",      component: BankTransactions,  name: "bank-transactions"  },
       { path: "/banking/reconciliation",    component: BankReconciliation,name: "bank-reconciliation"},
+      { path: "/banking/transfers",         component: BankTransfers,     name: "bank-transfers"     },
       { path: "/banking/cheques",           component: ChequeManagement,  name: "cheque-management"  },
       { path: "/banking/cash",              component: CashManagement,    name: "cash-management"    },
       { path: "/accounts", component: Accounts, name: "accounts" },
@@ -19297,6 +20489,7 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/inventory/items",            component: InventoryItems,          name: "inventory-items"          },
       { path: "/inventory/item-groups",      component: InventoryItemGroups,     name: "inventory-item-groups"    },
       { path: "/inventory/warehouses",       component: InventoryWarehouses,     name: "inventory-warehouses"     },
+      { path: "/inventory/stock-entries",    component: InventoryStockEntries,   name: "inventory-stock-entries"  },
       { path: "/inventory/stock-ledger",     component: InventoryStockLedger,    name: "inventory-stock-ledger"   },
       { path: "/inventory/valuation",        component: InventoryValuation,      name: "inventory-valuation"      },
       { path: "/inventory/reorder-alerts",   component: InventoryReorderAlerts,  name: "inventory-reorder-alerts" },

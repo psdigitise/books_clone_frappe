@@ -6,6 +6,7 @@ Heavy queries are delegated to inventory.utils or db.queries.
 """
 
 import frappe
+from frappe import _
 from frappe.utils import flt, today, getdate
 
 from zoho_books_clone.inventory.utils import (
@@ -77,6 +78,65 @@ def get_stock_summary(warehouse=None, item_group=None, show_zero_stock=0):
         })
 
     return result
+
+
+@frappe.whitelist(allow_guest=False)
+def create_opening_stock():
+    """
+    Create and submit an Opening Stock (or Material Receipt) entry for an item.
+    replace_existing=1 → always creates a Material Receipt regardless of prior SLEs.
+    Returns the Stock Entry name.
+    """
+    from frappe.utils import today as frappe_today
+    # Read from form_dict directly to avoid Frappe's argument-filtering stripping params
+    fd = frappe.form_dict
+    item_code      = fd.get("item_code") or ""
+    item_name      = fd.get("item_name") or item_code
+    warehouse      = fd.get("warehouse") or ""
+    qty            = flt(fd.get("qty", 0))
+    rate           = flt(fd.get("rate", 0))
+    replace_existing = int(fd.get("replace_existing", 0))
+    if qty <= 0:
+        frappe.throw(_("Opening Stock qty must be greater than 0"))
+    if not warehouse:
+        frappe.throw(_("Warehouse is required for Opening Stock"))
+
+    company = (
+        frappe.db.get_single_value("Books Settings", "default_company")
+        or frappe.defaults.get_default("company") or ""
+    )
+
+    # Determine entry type: Opening Stock if no prior SLEs, else Material Receipt
+    prior = frappe.db.sql(
+        """SELECT name FROM `tabStock Ledger Entry`
+           WHERE item_code=%s AND warehouse=%s AND is_cancelled=0 LIMIT 1""",
+        (item_code, warehouse), as_dict=True
+    )
+    entry_type = "Material Receipt" if (prior or int(replace_existing)) else "Opening Stock"
+
+    se = frappe.get_doc({
+        "doctype":          "Stock Entry",
+        "stock_entry_type": entry_type,
+        "posting_date":     frappe_today(),
+        "company":          company,
+        "remarks":          f"Opening stock for {item_code}",
+        "items": [{
+            "item_code":  item_code,
+            "item_name":  item_name or item_code,
+            "qty":        qty,
+            "basic_rate": rate,
+            "t_warehouse": warehouse,
+        }],
+    })
+    # Pre-set name to bypass naming_series autoname entirely
+    se.name = "SEC-" + frappe.generate_hash(txt=f"{item_code}{frappe.utils.now()}", length=8).upper()
+    se.flags.ignore_permissions = True
+    se.flags.ignore_links = True
+    se.flags.ignore_mandatory = True
+    se.insert()
+    se.submit()
+    frappe.db.commit()
+    return {"stock_entry": se.name, "entry_type": entry_type, "qty": qty}
 
 
 @frappe.whitelist(allow_guest=False)
@@ -311,3 +371,119 @@ def recalculate_all_bins_from_ledger(warehouse=None):
     Returns a list of per-Bin result dicts with drift information.
     """
     return recalculate_all_bins(warehouse=warehouse or None)
+
+
+# ── Manual Stock Entry ────────────────────────────────────────────────────────
+
+@frappe.whitelist(allow_guest=False)
+def create_stock_entry():
+    """
+    Create and submit a manual Stock Entry.
+    Reads all parameters from frappe.form_dict.
+
+    Required fields:
+      entry_type  — "Material Receipt" | "Material Issue" | "Material Transfer"
+                    | "Stock Adjustment" | "Opening Stock"
+      items       — JSON list of {item_code, item_name, qty, basic_rate,
+                                  t_warehouse?, s_warehouse?}
+
+    Optional:
+      posting_date, remarks, from_warehouse, to_warehouse
+    """
+    import json
+    fd = frappe.form_dict
+
+    entry_type   = fd.get("entry_type") or ""
+    items_raw    = fd.get("items") or "[]"
+    posting_date = fd.get("posting_date") or today()
+    remarks      = fd.get("remarks") or ""
+    from_wh      = fd.get("from_warehouse") or ""
+    to_wh        = fd.get("to_warehouse") or ""
+
+    VALID_TYPES = ("Material Receipt", "Material Issue", "Material Transfer",
+                   "Stock Adjustment", "Opening Stock")
+    if entry_type not in VALID_TYPES:
+        frappe.throw(f"Invalid entry_type '{entry_type}'. Must be one of: {', '.join(VALID_TYPES)}")
+
+    if isinstance(items_raw, str):
+        items = json.loads(items_raw)
+    else:
+        items = list(items_raw)
+
+    if not items:
+        frappe.throw("At least one item is required.")
+
+    # Apply header-level warehouses as defaults for each row
+    for row in items:
+        if from_wh and not row.get("s_warehouse"):
+            row["s_warehouse"] = from_wh
+        if to_wh and not row.get("t_warehouse"):
+            row["t_warehouse"] = to_wh
+
+    company = (
+        frappe.db.get_single_value("Books Settings", "default_company")
+        or frappe.defaults.get_default("company") or ""
+    )
+
+    se = frappe.get_doc({
+        "doctype":           "Stock Entry",
+        "stock_entry_type":  entry_type,
+        "posting_date":      posting_date,
+        "company":           company,
+        "from_warehouse":    from_wh,
+        "to_warehouse":      to_wh,
+        "remarks":           remarks,
+        "items":             items,
+    })
+    se.name = "SEC-" + frappe.generate_hash(
+        txt=f"{entry_type}{frappe.utils.now()}", length=8
+    ).upper()
+    se.flags.ignore_permissions = True
+    se.flags.ignore_links = True
+    se.flags.ignore_mandatory = True
+    se.insert()
+    se.submit()
+    frappe.db.commit()
+
+    return {
+        "stock_entry":  se.name,
+        "entry_type":   entry_type,
+        "items_count":  len(items),
+        "posting_date": posting_date,
+    }
+
+
+@frappe.whitelist(allow_guest=False)
+def get_stock_entries(entry_type=None, from_date=None, to_date=None, warehouse=None, limit=100):
+    """Return submitted stock entries with optional filters."""
+    filters = {"docstatus": 1}
+    if entry_type:
+        filters["stock_entry_type"] = entry_type
+    if from_date:
+        filters["posting_date"] = [">=", from_date]
+    if to_date:
+        if "posting_date" in filters:
+            filters["posting_date"] = ["between", [from_date or "2000-01-01", to_date]]
+        else:
+            filters["posting_date"] = ["<=", to_date]
+    if warehouse:
+        filters["from_warehouse"] = warehouse
+
+    entries = frappe.get_all(
+        "Stock Entry",
+        filters=filters,
+        fields=["name", "stock_entry_type", "posting_date", "company",
+                "from_warehouse", "to_warehouse", "remarks",
+                "total_outgoing_value", "total_incoming_value"],
+        order_by="posting_date desc, creation desc",
+        limit=int(limit),
+    )
+    # Attach items to each entry
+    for se in entries:
+        se["items"] = frappe.get_all(
+            "Stock Entry Detail",
+            filters={"parent": se.name},
+            fields=["item_code", "item_name", "qty", "basic_rate", "amount",
+                    "s_warehouse", "t_warehouse"],
+        )
+    return entries

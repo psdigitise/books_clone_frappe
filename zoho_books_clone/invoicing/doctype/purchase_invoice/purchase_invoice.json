@@ -746,6 +746,27 @@
       "precision": "",
       "print_width": "",
       "columns": 0
+    },
+    {
+      "fieldname": "is_return",
+      "fieldtype": "Check",
+      "label": "Is Return",
+      "default": "0",
+      "idx": 50
+    },
+    {
+      "fieldname": "return_against",
+      "fieldtype": "Link",
+      "label": "Return Against",
+      "options": "Purchase Invoice",
+      "depends_on": "eval:doc.is_return",
+      "idx": 51
+    },
+    {
+      "fieldname": "remark",
+      "fieldtype": "Small Text",
+      "label": "Remark",
+      "idx": 52
     }
   ],
   "permissions": [

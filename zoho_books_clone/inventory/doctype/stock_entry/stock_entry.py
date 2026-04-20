@@ -20,6 +20,7 @@ SE_TYPE_DIRECTION = {
     "Material Transfer": {"s": True,  "t": True},
     "Opening Stock":     {"s": False, "t": True},
     "Manufacture":       {"s": True,  "t": True},
+    "Stock Adjustment":  {"s": False, "t": True},  # manual correction; qty can be +/-
 }
 
 
@@ -68,9 +69,13 @@ class StockEntry(Document):
             if direction.get("t") and not row.t_warehouse:
                 frappe.throw(_(f"Row {i}: Target Warehouse is required for {self.stock_entry_type}."))
 
-            # Validate qty
-            if flt(row.qty) <= 0:
-                frappe.throw(_(f"Row {i}: Qty must be greater than 0."))
+            # Validate qty: Stock Adjustment allows negative (stock reduction correction)
+            if self.stock_entry_type == "Stock Adjustment":
+                if flt(row.qty) == 0:
+                    frappe.throw(_(f"Row {i}: Qty cannot be zero for Stock Adjustment."))
+            else:
+                if flt(row.qty) <= 0:
+                    frappe.throw(_(f"Row {i}: Qty must be greater than 0."))
 
             # Audit-1: Block negative stock — check available qty before outgoing movements
             if direction.get("s") and row.s_warehouse:
@@ -85,6 +90,16 @@ class StockEntry(Document):
                         "Available: {3}, Required: {4}."
                     ).format(i, row.item_code, row.s_warehouse,
                              frappe.bold(available), frappe.bold(flt(row.qty))))
+
+            # Use FIFO cost for Material Issue if rate not explicitly set
+            if self.stock_entry_type == "Material Issue" and not flt(row.basic_rate) and row.s_warehouse:
+                try:
+                    from zoho_books_clone.inventory.utils import get_fifo_cost
+                    fifo_rate = get_fifo_cost(row.item_code, row.s_warehouse, flt(row.qty))
+                    if fifo_rate:
+                        row.basic_rate = fifo_rate
+                except Exception:
+                    pass  # fall back to 0
 
             # Calculate row amount
             row.amount = flt(row.qty) * flt(row.basic_rate)
@@ -158,10 +173,14 @@ class StockEntry(Document):
             "stock_value_difference": stock_value_difference,
             "is_cancelled": 0,
         })
+        # Pre-set name so Frappe skips the naming_series autoname lookup entirely
+        sle.name = frappe.generate_hash(txt=f"{item_code}{warehouse}{frappe.utils.now()}", length=10)
+        sle.flags.ignore_links = True
+        sle.flags.ignore_mandatory = True
         sle.insert(ignore_permissions=True)
-        self._sync_bin(item_code, warehouse, qty_after, valuation_rate, stock_value_difference)
+        self._sync_bin(item_code, warehouse, qty_after, valuation_rate)
 
-    def _sync_bin(self, item_code, warehouse, new_qty, valuation_rate, _stock_value_diff=None):
+    def _sync_bin(self, item_code, warehouse, new_qty, valuation_rate, _=None):
         """Create or update the Bin record for item+warehouse after an SLE."""
         bin_name = frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse})
         new_value = flt(new_qty) * flt(valuation_rate)
@@ -175,7 +194,7 @@ class StockEntry(Document):
                 "projected_qty":  new_qty + old_ordered - old_reserved,
             }, update_modified=True)
         else:
-            frappe.get_doc({
+            b = frappe.get_doc({
                 "doctype":        "Bin",
                 "item_code":      item_code,
                 "warehouse":      warehouse,
@@ -185,7 +204,17 @@ class StockEntry(Document):
                 "projected_qty":  new_qty,
                 "valuation_rate": valuation_rate if new_qty else 0,
                 "stock_value":    new_value,
-            }).insert(ignore_permissions=True)
+            })
+            b.flags.ignore_links = True
+            b.flags.ignore_mandatory = True
+            b.insert(ignore_permissions=True)
+
+        # Trigger reorder check after every bin update
+        try:
+            from zoho_books_clone.inventory.utils import check_reorder
+            check_reorder(item_code, warehouse)
+        except Exception:
+            pass
 
     def _post_gl_entries(self):
         """
@@ -194,7 +223,7 @@ class StockEntry(Document):
         Material Receipt:  DR Inventory Asset / CR Stock Adjustment  (stock arrives)
         Material Transfer: no net GL impact (value stays in inventory).
         """
-        if self.stock_entry_type not in ("Material Issue", "Material Receipt"):
+        if self.stock_entry_type not in ("Material Issue", "Material Receipt", "Stock Adjustment"):
             return
 
         inventory_account = self._get_account_by_type("Stock")
@@ -349,6 +378,9 @@ class StockEntry(Document):
                 "stock_value_difference": -flt(sle.stock_value_difference),
                 "is_cancelled": 0,
             })
+            rev.name = frappe.generate_hash(txt=f"{sle.item_code}{sle.warehouse}{frappe.utils.now()}rev", length=10)
+            rev.flags.ignore_links = True
+            rev.flags.ignore_mandatory = True
             rev.insert(ignore_permissions=True)
             self._sync_bin(sle.item_code, sle.warehouse, qty_after, flt(sle.valuation_rate))
 

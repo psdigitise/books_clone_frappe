@@ -61,7 +61,13 @@ class PurchaseInvoice(Document):
     def on_submit(self):
         self.status = "Submitted"
         self.outstanding_amount = self.grand_total
-        post_purchase_invoice(self)
+        if getattr(self, "is_return", 0):
+            from zoho_books_clone.accounts.accounting_engine import post_debit_note
+            remark = (getattr(self, "remark", "") or "").strip()
+            return_type = "inventory" if "Goods Returned" in remark else "expense"
+            post_debit_note(self, return_type=return_type)
+        else:
+            post_purchase_invoice(self)
 
     def on_cancel(self):
         self.status = "Cancelled"

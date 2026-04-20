@@ -7,6 +7,68 @@ import frappe
 from frappe.utils import flt, getdate, today
 
 
+# ── FIFO Valuation ────────────────────────────────────────────────────────────
+
+def get_fifo_cost(item_code: str, warehouse: str, qty: float) -> float:
+    """
+    Return the average cost per unit for issuing `qty` units using FIFO.
+    Consumes incoming SLE layers oldest-first.
+    Returns the weighted average rate (total_cost / qty).
+    """
+    qty = flt(qty)
+    if qty <= 0:
+        return 0.0
+
+    # Incoming layers ordered oldest-first
+    layers = frappe.db.sql("""
+        SELECT actual_qty, incoming_rate
+        FROM `tabStock Ledger Entry`
+        WHERE item_code  = %(ic)s
+          AND warehouse  = %(wh)s
+          AND is_cancelled = 0
+          AND actual_qty > 0
+        ORDER BY posting_date ASC, posting_time ASC, creation ASC
+    """, {"ic": item_code, "wh": warehouse}, as_dict=True)
+
+    remaining  = qty
+    total_cost = 0.0
+    for layer in layers:
+        if remaining <= 0:
+            break
+        layer_qty   = min(flt(layer.actual_qty), remaining)
+        total_cost += layer_qty * flt(layer.incoming_rate)
+        remaining  -= layer_qty
+
+    return total_cost / qty if qty else 0.0
+
+
+# ── Reorder Check ─────────────────────────────────────────────────────────────
+
+def check_reorder(item_code: str, warehouse: str) -> bool:
+    """
+    Return True if actual_qty < reorder_level for item+warehouse.
+    Optionally logs a Frappe notification so users see the alert.
+    """
+    bin_data = frappe.db.get_value(
+        "Bin",
+        {"item_code": item_code, "warehouse": warehouse},
+        ["actual_qty", "reorder_level"],
+        as_dict=True,
+    )
+    if not bin_data or not flt(bin_data.reorder_level):
+        return False
+
+    if flt(bin_data.actual_qty) < flt(bin_data.reorder_level):
+        item_name = frappe.db.get_value("Item", item_code, "item_name") or item_code
+        frappe.log_error(
+            f"Reorder Alert: {item_name} ({item_code}) in {warehouse} — "
+            f"qty {flt(bin_data.actual_qty):.2f} below reorder level {flt(bin_data.reorder_level):.2f}",
+            "Reorder Alert"
+        )
+        return True
+    return False
+
+
 # ── Stock Balance ─────────────────────────────────────────────────────────────
 
 def get_stock_balance(item_code: str, warehouse: str, as_of_date: str | None = None) -> float:
@@ -181,7 +243,7 @@ def recalculate_bin(item_code: str, warehouse: str) -> dict:
 
     if not bin_name:
         # Create the Bin so future queries have a record to read
-        frappe.get_doc({
+        b = frappe.get_doc({
             "doctype":        "Bin",
             "item_code":      item_code,
             "warehouse":      warehouse,
@@ -191,7 +253,10 @@ def recalculate_bin(item_code: str, warehouse: str) -> dict:
             "projected_qty":  correct_qty,
             "valuation_rate": correct_rate,
             "stock_value":    correct_value,
-        }).insert(ignore_permissions=True)
+        })
+        b.flags.ignore_links = True
+        b.flags.ignore_mandatory = True
+        b.insert(ignore_permissions=True)
         return {
             "item_code": item_code,
             "warehouse": warehouse,

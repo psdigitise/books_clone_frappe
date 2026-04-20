@@ -150,6 +150,78 @@ def post_purchase_invoice(doc) -> None:
     make_gl_entries(gl_map)
 
 
+# ─── Debit Note (Purchase Return) ──────────────────────────────────────────────
+
+def post_debit_note(doc, return_type: str = "expense") -> None:
+    """
+    Post GL for a Debit Note (Purchase Invoice with is_return=1).
+      Goods Returned → DR AP / CR Inventory  (stock leaves, liability reduces)
+      Overcharged etc → DR AP / CR Expense   (cost is reversed)
+    """
+    ap_account = getattr(doc, "credit_to", None) or _acct_by_type(doc.company, "Payable")
+    if not ap_account:
+        frappe.log_error(
+            f"Debit Note {doc.name}: no Payable account found. GL skipped.",
+            "Debit Note GL"
+        )
+        return
+
+    if return_type == "inventory":
+        cr_account = _acct_by_type(doc.company, "Stock")
+        cr_label = "Inventory"
+    else:
+        cr_account = (
+            getattr(doc, "expense_account", None)
+            or _acct_by_type(doc.company, "Expense")
+        )
+        cr_label = "Expense"
+
+    if not cr_account:
+        frappe.log_error(
+            f"Debit Note {doc.name}: no {cr_label} account found. GL skipped.",
+            "Debit Note GL"
+        )
+        return
+
+    amount = flt(doc.grand_total)
+    fy = getattr(doc, "fiscal_year", "") or ""
+
+    make_gl_entries([
+        {
+            "account":      ap_account,
+            "debit":        amount,
+            "credit":       0,
+            "voucher_type": doc.doctype,
+            "voucher_no":   doc.name,
+            "posting_date": doc.posting_date,
+            "party_type":   "Supplier",
+            "party":        doc.supplier,
+            "company":      doc.company,
+            "fiscal_year":  fy,
+            "remarks":      f"Debit Note — reduce payable — {doc.name}",
+        },
+        {
+            "account":      cr_account,
+            "debit":        0,
+            "credit":       amount,
+            "voucher_type": doc.doctype,
+            "voucher_no":   doc.name,
+            "posting_date": doc.posting_date,
+            "company":      doc.company,
+            "fiscal_year":  fy,
+            "remarks":      f"Debit Note — {cr_label} reversal — {doc.name}",
+        },
+    ])
+
+
+def _acct_by_type(company: str, account_type: str) -> str | None:
+    return frappe.db.get_value(
+        "Account",
+        {"account_type": account_type, "company": company, "is_group": 0},
+        "name",
+    ) or None
+
+
 # ─── Payment Entry ─────────────────────────────────────────────────────────────
 
 def post_payment_entry(doc) -> None:

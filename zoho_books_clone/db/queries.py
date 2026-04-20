@@ -249,37 +249,59 @@ def get_balance_sheet_totals(company: str, as_of_date: str) -> dict:
     """
     Asset, liability, equity totals as of a date.
 
-    Account types included:
-      Asset           → receivables, bank, cash, fixed assets
-      Stock           → inventory asset value (from Stock Entry GL posting)
-      Liability       → payables, loans
-      Equity          → capital, retained earnings
+    All account types are fetched; classification:
+      Debit-normal assets  → Asset, Cash, Bank, Receivable, Stock
+      Credit-normal liab.  → Liability, Payable
+      Tax                  → net positive = ITC asset; net negative = GST liability
+      Equity               → Equity (credit-normal)
     """
     rows = frappe.db.sql("""
         SELECT a.account_type,
                COALESCE(SUM(g.debit) - SUM(g.credit), 0) AS balance
         FROM `tabGeneral Ledger Entry` g
         JOIN `tabAccount` a ON a.name = g.account
-        WHERE g.company      = %(company)s
-          AND g.is_cancelled  = 0
+        WHERE g.company     = %(company)s
+          AND g.is_cancelled = 0
           AND g.posting_date <= %(as_of_date)s
-          AND a.account_type IN (
-                "Asset",
-                "Stock",               -- inventory asset accounts
-                "Liability",
-                "Equity"
-              )
         GROUP BY a.account_type
     """, {"company": company, "as_of_date": as_of_date}, as_dict=True)
 
-    totals = {r.account_type: flt(r.balance) for r in rows}
-    # "Stock" accounts are debit-normal assets — add to total_assets
-    inventory_value = totals.get("Stock", 0.0)
+    t = {r.account_type: flt(r.balance) for r in rows}
+
+    # Debit-normal: positive balance = asset
+    ASSET_TYPES = ("Asset", "Cash", "Bank", "Receivable", "Stock")
+    raw_assets = sum(t.get(tp, 0.0) for tp in ASSET_TYPES)
+
+    # Tax accounts: ITC accounts carry debit balance (asset);
+    # GST Payable accounts carry credit balance (liability).
+    # The net (debit-credit) tells us which side dominates.
+    tax_net = t.get("Tax", 0.0)
+    itc_asset    = max(tax_net, 0.0)   # positive → ITC on asset side
+    gst_liability = abs(min(tax_net, 0.0))  # negative → GST payable
+
+    # Credit-normal: debit-credit is negative for balances owed
+    LIAB_TYPES = ("Liability", "Payable")
+    raw_liabilities = sum(abs(t.get(tp, 0.0)) for tp in LIAB_TYPES)
+
+    inventory_value = t.get("Stock", 0.0)
+    cash_and_bank   = t.get("Cash", 0.0) + t.get("Bank", 0.0)
+    receivables     = t.get("Receivable", 0.0)
+    other_assets    = t.get("Asset", 0.0)
+    payables        = abs(t.get("Payable", 0.0))
+    other_liab      = abs(t.get("Liability", 0.0))
+
     return {
-        "total_assets":      totals.get("Asset", 0.0) + inventory_value,
+        "total_assets":      raw_assets + itc_asset,
+        "cash_and_bank":     cash_and_bank,
+        "receivables":       receivables,
         "inventory_value":   inventory_value,
-        "total_liabilities": totals.get("Liability", 0.0),
-        "total_equity":      totals.get("Equity", 0.0),
+        "itc_receivable":    itc_asset,
+        "other_assets":      other_assets,
+        "total_liabilities": raw_liabilities + gst_liability,
+        "payables":          payables,
+        "gst_liability":     gst_liability,
+        "other_liabilities": other_liab,
+        "total_equity":      abs(t.get("Equity", 0.0)),
     }
 
 
