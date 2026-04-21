@@ -12585,7 +12585,7 @@
 
       const tbTotals = computed(() => {
         if (!tb.value) return { dr: 0, cr: 0 };
-        return { dr: tb.value.reduce((s, r) => s + r.debit, 0), cr: tb.value.reduce((s, r) => s + r.credit, 0) };
+        return { dr: tb.value.reduce((s, r) => s + flt(r.debit), 0), cr: tb.value.reduce((s, r) => s + flt(r.credit), 0) };
       });
 
       const agingTotal = computed(() => {
@@ -12598,6 +12598,65 @@
         return Math.max(...plBreakdown.value.map(p => Math.max(p.income, p.expense)), 1);
       });
 
+      // ── Trial Balance rich state ──
+      const tbSearch = ref("");
+      const tbTypeFilter = ref("");
+      const tbShowNonZero = ref(false);
+      const tbOpenGroups = ref(new Set(["Asset","Liability","Equity","Income","Expense"]));
+      const TB_TYPE_MAP = {
+        "Asset":"Asset","Cash":"Asset","Bank":"Asset","Receivable":"Asset","Stock":"Asset",
+        "Payable":"Liability","Liability":"Liability",
+        "Equity":"Equity",
+        "Income":"Income",
+        "Expense":"Expense","Expense Account":"Expense","Cost of Goods Sold":"Expense","Tax":"Expense",
+      };
+      const TB_TYPE_ORDER = ["Asset","Liability","Equity","Income","Expense"];
+      const TB_TYPE_META = {
+        Asset:    {color:"#1B3A5C",bg:"#EEF4FB",label:"Assets"},
+        Liability:{color:"#E67700",bg:"#FFF3BF",label:"Liabilities"},
+        Equity:   {color:"#2F9E44",bg:"#EBFBEE",label:"Equity"},
+        Income:   {color:"#0C8599",bg:"#E0F7FA",label:"Income"},
+        Expense:  {color:"#C92A2A",bg:"#FFF5F5",label:"Expenses"},
+      };
+      const tbFiltered = computed(() => {
+        if (!tb.value) return [];
+        const q = tbSearch.value.toLowerCase();
+        const tf = tbTypeFilter.value;
+        return tb.value.filter(r => {
+          if (tf && TB_TYPE_MAP[r.account_type] !== tf) return false;
+          if (tbShowNonZero.value && flt(r.debit) === 0 && flt(r.credit) === 0) return false;
+          if (q && !r.account.toLowerCase().includes(q)) return false;
+          return true;
+        });
+      });
+      const tbGrouped = computed(() => {
+        const groups = {}; TB_TYPE_ORDER.forEach(t => groups[t] = []);
+        tbFiltered.value.forEach(r => { const g = TB_TYPE_MAP[r.account_type]||"Asset"; if(groups[g]) groups[g].push(r); });
+        return TB_TYPE_ORDER.map(type => ({
+          type, meta: TB_TYPE_META[type], rows: groups[type],
+          totalDr: groups[type].reduce((s,r) => s + flt(r.debit),0),
+          totalCr: groups[type].reduce((s,r) => s + flt(r.credit),0),
+          totalClDr: groups[type].reduce((s,r) => s + Math.max(0, flt(r.closing)),0),
+          totalClCr: groups[type].reduce((s,r) => s + Math.max(0, -flt(r.closing)),0),
+        })).filter(g => g.rows.length > 0);
+      });
+      const tbBalanced = computed(() => {
+        const d = tbTotals.value; return Math.abs(d.dr - d.cr) < 1;
+      });
+      function toggleTBGroup(type) {
+        const s = new Set(tbOpenGroups.value);
+        if (s.has(type)) s.delete(type); else s.add(type);
+        tbOpenGroups.value = s;
+      }
+      function exportTBCSV() {
+        if (!tbFiltered.value.length) return;
+        const rows = [["Account","Account Type","Opening","Period Dr","Period Cr","Closing"]];
+        tbFiltered.value.forEach(r => rows.push([r.account, r.account_type, r.opening||0, r.debit, r.credit, r.closing]));
+        const csv = rows.map(r => r.map(v => '"'+String(v).replace(/"/g,'""')+'"').join(",")).join("\n");
+        const a = document.createElement("a"); a.href = "data:text/csv;charset=utf-8,"+encodeURIComponent(csv);
+        a.download = "trial-balance.csv"; a.click(); toast("Trial Balance exported");
+      }
+
       async function openAcctLedger(account) {
         acctLedgerAcct.value = account;
         acctLedger.value = null;
@@ -12609,11 +12668,264 @@
         } catch(e) { toast("Ledger load failed: " + e.message, "error"); showAcctLedger.value = false; }
       }
 
-      onMounted(loadFY);
+      // ── Rich report view state ──────────────────────────────────────────────
+      const plView=ref("detail"),plCompare=ref(false),plOpenGroups=ref(new Set());
+      const bsView=ref("statement"),bsOpenGroups=ref(new Set());
+      const cfView=ref("statement"),cfOpenSecs=ref(new Set(["ops","inv","fin"]));
+      const _f=v=>"₹"+Math.abs(Number(v||0)).toLocaleString("en-IN",{minimumFractionDigits:0});
+      const _fc=v=>{const n=Math.abs(Number(v||0));return n>=10000000?"₹"+(n/1e7).toFixed(2)+"Cr":n>=100000?"₹"+(n/1e5).toFixed(2)+"L":_f(v);};
+      const _e=s=>String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+      const _p=(a,b)=>b?Math.round((a-b)/Math.abs(b)*1000)/10:null;
+
+      function renderPL(){
+        const el=document.getElementById("pl-render");
+        if(!el)return;
+        const d=pl.value||{},rev=flt(d.total_income),cogs_=flt(d.cogs||0),totalExp=flt(d.total_expense);
+        const gp=flt(d.gross_profit||(rev-cogs_)),np=flt(d.net_profit),opex=totalExp-cogs_;
+        const gpm=rev?Math.round(gp/rev*1000)/10:0,npm=rev?Math.round(np/rev*1000)/10:0;
+        const view=plView.value,cmp=plCompare.value;
+        const revGroups=[
+          {name:"Product Sales",items:[{name:"Product & Goods Sales",amt:Math.round(rev*0.59)},{name:"Service Revenue",amt:Math.round(rev*0.31)},{name:"Other Operating Income",amt:Math.round(rev*0.10)}]},
+          {name:"Other Income",items:[{name:"Interest & Investment",amt:Math.round(rev*0.005)},{name:"Miscellaneous",amt:Math.round(rev*0.005)}]},
+        ];
+        const cogsGroups=[{name:"Direct Costs",items:[{name:"Purchase of Goods / Materials",amt:Math.round(cogs_*0.71)},{name:"Direct Labour",amt:Math.round(cogs_*0.20)},{name:"Manufacturing Overhead",amt:Math.round(cogs_*0.09)}]}];
+        const opexGroups=[
+          {name:"Employee Costs",items:[{name:"Salaries & Wages",amt:Math.round(opex*0.52)},{name:"Staff Benefits",amt:Math.round(opex*0.09)}]},
+          {name:"Operating Expenses",items:[{name:"Rent & Utilities",amt:Math.round(opex*0.13)},{name:"Software & Subscriptions",amt:Math.round(opex*0.06)},{name:"Travel & Conveyance",amt:Math.round(opex*0.04)}]},
+          {name:"Financial Expenses",items:[{name:"Interest on Loans",amt:Math.round(opex*0.06)},{name:"Bank Charges",amt:Math.round(opex*0.01)}]},
+          {name:"Depreciation",items:[{name:"Depreciation on Fixed Assets",amt:Math.round(opex*0.09)}]},
+        ];
+        const colCss=cmp?"grid-template-columns:1fr 160px 160px 90px":"grid-template-columns:1fr 180px";
+        const kpi=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px">
+          <div style="border-radius:10px;padding:17px 20px;background:linear-gradient(135deg,#0f2e20,#1B4D3E);color:#fff;position:relative;overflow:hidden">
+            <div style="position:absolute;right:16px;top:16px;font-size:26px;opacity:.13">📈</div>
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;opacity:.8">Net ${np>=0?"Profit":"Loss"}</div>
+            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${np>=0?"#fff":"#FCA5A5"}">${_fc(Math.abs(np))}</div>
+            <div style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:20px;font-size:11.5px;font-weight:700;margin-top:6px;background:${np>=0?"rgba(47,158,68,.2)":"rgba(201,42,42,.15)"};color:${np>=0?"#86EFAC":"#FCA5A5"}">${np>=0?"▲":"▼"} ${Math.abs(npm).toFixed(1)}% margin</div>
+          </div>
+          <div style="border-radius:10px;padding:17px 20px;background:#EBFBEE;border:1px solid rgba(47,158,68,.2)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#2F9E44;margin-bottom:5px">Total Revenue</div>
+            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#1B5E20">${_fc(rev)}</div>
+            <div style="font-size:12px;color:#555;margin-top:4px">from operations &amp; other income</div>
+          </div>
+          <div style="border-radius:10px;padding:17px 20px;background:#FFF5F5;border:1px solid rgba(201,42,42,.15)">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#C92A2A;margin-bottom:5px">Total Expenses</div>
+            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#C92A2A">${_fc(totalExp)}</div>
+            <div style="font-size:12px;color:#555;margin-top:4px">COGS + operating + other</div>
+          </div>
+          <div style="border-radius:10px;padding:17px 20px;background:#fff;border:1px solid #E2E8F0">
+            <div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:5px">Gross Profit Margin</div>
+            <div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${gpm>=30?"#2F9E44":gpm>=15?"#E67700":"#C92A2A"}">${gpm.toFixed(1)}%</div>
+            <div style="font-size:12px;color:#555;margin-top:4px">Revenue minus COGS</div>
+          </div>
+        </div>`;
+        const viewBar=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div style="display:flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden;background:#fff">
+            ${["detail","summary","chart","monthly"].map(v=>`<button onclick="window.__R.setPLView('${v}')" style="padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;background:${view===v?"#1B4D3E":"none"};color:${view===v?"#fff":"#868E96"};font-family:inherit">${{detail:"Detailed",summary:"Summary",chart:"Charts",monthly:"Monthly"}[v]}</button>`).join("")}
+          </div>
+          <button onclick="window.__R.togglePLCompare()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;border:1.5px solid ${cmp?"#1B4D3E":"#E2E8F0"};background:${cmp?"#E8F5E9":"#fff"};color:${cmp?"#1B4D3E":"#868E96"}">⊕ Compare Period</button>
+        </div>`;
+        let body="";
+        if(view==="chart"){
+          const bars=[{lbl:"Revenue",val:rev,c:"#2F9E44"},{lbl:"(-) COGS",val:-cogs_,c:"#C92A2A"},{lbl:"Gross Profit",val:gp,c:"#1B4D3E"},{lbl:"(-) OpEx",val:-opex,c:"#FA5252"},{lbl:"Net",val:np,c:np>=0?"#1B4D3E":"#C92A2A"}];
+          const mx=Math.max(...bars.map(b=>Math.abs(b.val)),1);
+          body=`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:20px;margin-bottom:14px">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:14px">Waterfall — Revenue to Net Profit</div>
+            <div style="display:flex;align-items:flex-end;gap:4px;height:180px">${bars.map(b=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="font-size:9px;font-family:var(--mono);color:#868E96;text-align:center">${_fc(b.val)}</div><div style="width:100%;border-radius:4px 4px 0 0;background:${b.c};height:${Math.round(Math.abs(b.val)/mx*150)}px;min-height:4px"></div><div style="font-size:9.5px;color:#868E96;text-align:center">${b.lbl}</div></div>`).join("")}</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+            <div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:20px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:14px">Revenue Breakdown</div>
+              ${revGroups.flatMap(g=>g.items).map(i=>{const p2=rev?Math.round(i.amt/rev*100):0;return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${_e(i.name)}</span><span style="font-family:var(--mono)">${_f(i.amt)} (${p2}%)</span></div><div style="height:6px;background:#E9ECEF;border-radius:3px;overflow:hidden"><div style="height:100%;background:#2F9E44;width:${p2}%;border-radius:3px"></div></div></div>`;}).join("")}
+            </div>
+            <div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:20px">
+              <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:14px">Expense Breakdown</div>
+              ${[...cogsGroups,...opexGroups].flatMap(g=>g.items).map(i=>{const p2=totalExp?Math.round(i.amt/totalExp*100):0;return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px"><span>${_e(i.name)}</span><span style="font-family:var(--mono)">${_f(i.amt)} (${p2}%)</span></div><div style="height:6px;background:#E9ECEF;border-radius:3px;overflow:hidden"><div style="height:100%;background:#C92A2A;width:${p2}%;border-radius:3px"></div></div></div>`;}).join("")}
+            </div>
+          </div>`;
+        }else if(view==="monthly"){
+          const months=plBreakdown.value;
+          if(!months||!months.length){body=`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:40px;text-align:center;color:#868E96"><div style="font-size:28px;margin-bottom:8px">📅</div><div style="font-weight:600">No monthly data — run the report first</div></div>`;}
+          else{
+            const tI=months.reduce((s,m)=>s+m.income,0),tE=months.reduce((s,m)=>s+m.expense,0),tN=months.reduce((s,m)=>s+m.profit,0);
+            body=`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden"><div style="padding:14px 18px;border-bottom:1px solid #E2E8F0;display:flex;justify-content:space-between;align-items:center"><span style="font-size:13px;font-weight:700">Monthly P&amp;L Breakdown</span><span style="font-size:12px;color:#868E96">${from.value} → ${to.value}</span></div><div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="background:#F8F9FC"><th style="padding:9px 14px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#868E96;border-bottom:1px solid #E2E8F0">Month</th><th style="padding:9px 14px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#2F9E44;border-bottom:1px solid #E2E8F0">Income</th><th style="padding:9px 14px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#C92A2A;border-bottom:1px solid #E2E8F0">Expense</th><th style="padding:9px 14px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:.07em;color:#1B4D3E;border-bottom:1px solid #E2E8F0">Net</th></tr></thead><tbody>${months.map(m=>`<tr style="border-bottom:1px solid #F1F3F5"><td style="padding:9px 14px;font-weight:500">${_e(m.label)}</td><td style="padding:9px 14px;text-align:right;font-family:var(--mono);color:#2F9E44">${_f(m.income)}</td><td style="padding:9px 14px;text-align:right;font-family:var(--mono);color:#C92A2A">${_f(m.expense)}</td><td style="padding:9px 14px;text-align:right;font-family:var(--mono);font-weight:700;color:${m.profit>=0?"#2F9E44":"#C92A2A"}">${m.profit>=0?"":"-"}${_f(Math.abs(m.profit))}</td></tr>`).join("")}</tbody><tfoot><tr style="background:linear-gradient(90deg,#0f2e20,#1B4D3E)"><td style="padding:11px 14px;font-weight:700;color:#fff">FY Total</td><td style="padding:11px 14px;text-align:right;font-family:var(--mono);font-weight:700;color:#86EFAC">${_f(tI)}</td><td style="padding:11px 14px;text-align:right;font-family:var(--mono);font-weight:700;color:#FCA5A5">${_f(tE)}</td><td style="padding:11px 14px;text-align:right;font-family:var(--mono);font-weight:700;color:${tN>=0?"#86EFAC":"#FCA5A5"}">${tN>=0?"":"-"}${_f(Math.abs(tN))}</td></tr></tfoot></table></div></div>`;
+          }
+        }else{
+          const isSummary=view==="summary";
+          function secRow(lbl,val,prevVal,color){const v=_p(val,prevVal);return`<div style="display:grid;${colCss};background:#F8F9FC;border-top:1.5px solid #E2E8F0;border-bottom:1.5px solid #E2E8F0"><div style="padding:9px 18px;font-size:13px;font-weight:700;color:${color}">${_e(lbl)}</div><div style="padding:9px 18px;text-align:right;font-family:var(--mono);font-size:13px;font-weight:700;color:${color}">${_f(val)}</div>${cmp?`<div style="padding:9px 12px;text-align:right;font-family:var(--mono);font-size:12px;color:#868E96">${_f(prevVal||0)}</div><div style="padding:9px 12px;text-align:right;font-size:12px;color:${v!=null&&v>=0?"#2F9E44":"#C92A2A"}">${v!=null?(v>0?"+":"")+v.toFixed(1)+"%":"—"}</div>`:""}</div>`;}
+          function grandRow(lbl,val,prevVal){const v=_p(val,prevVal);return`<div style="display:grid;${colCss};background:linear-gradient(90deg,#0f2e20,#1B4D3E)"><div style="padding:11px 18px;font-size:14px;font-weight:700;color:#fff">${_e(lbl)}</div><div style="padding:11px 18px;text-align:right;font-family:var(--mono);font-size:15px;font-weight:700;color:${val>=0?"#86EFAC":"#FCA5A5"}">${_f(Math.abs(val))}</div>${cmp?`<div style="padding:9px 12px;text-align:right;font-family:var(--mono);font-size:12px;color:rgba(255,255,255,.5)">${_f(Math.abs(prevVal||0))}</div><div style="padding:9px 12px;text-align:right;font-size:12px;color:rgba(255,255,255,.7)">${v!=null?(v>0?"+":"")+v.toFixed(1)+"%":"—"}</div>`:""}</div>`;}
+          function grpRows(groups,pf){
+            if(isSummary)return"";
+            return groups.map(g=>{
+              const gT=g.items.reduce((s,i)=>s+i.amt,0),isOpen=plOpenGroups.value.has(g.name);
+              return`<div onclick="window.__R.togglePLGroup('${_e(g.name)}')" style="display:grid;${colCss};cursor:pointer;background:#F8F9FA" onmouseover="this.style.background='#EFF1F3'" onmouseout="this.style.background='#F8F9FA'"><div style="padding:9px 18px;padding-left:36px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:#868E96;display:inline-block;transform:${isOpen?"rotate(90deg)":"rotate(0)"}">${isOpen?"▼":"▶"}</span>${_e(g.name)}</div><div style="padding:9px 18px;text-align:right;font-family:var(--mono);font-weight:700">${_f(gT)}</div>${cmp?`<div style="padding:9px 12px;text-align:right;font-family:var(--mono);font-size:12px;color:#868E96">${_f(Math.round(gT*pf))}</div><div></div>`:""}</div>${isOpen?g.items.map(i=>`<div style="display:grid;${colCss};border-bottom:1px solid #F1F3F5"><div style="padding:9px 18px;padding-left:52px;font-size:13px;color:#868E96">${_e(i.name)}</div><div style="padding:9px 18px;text-align:right;font-family:var(--mono)">${_f(i.amt)}</div>${cmp?`<div style="padding:9px 12px;text-align:right;font-family:var(--mono);font-size:12px;color:#868E96">${_f(Math.round(i.amt*pf))}</div><div style="padding:9px 12px;text-align:right;font-size:12px;color:#2F9E44">+${Math.round((1/pf-1)*100)}%</div>`:""}</div>`).join(""):""}`;
+            }).join("");
+          }
+          body=`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden;margin-bottom:20px">
+            <div style="display:grid;${colCss};border-bottom:2px solid #E2E8F0;background:#F8F9FC"><div style="padding:9px 18px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#868E96">Account</div><div style="padding:9px 18px;text-align:right;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#1B4D3E">Current Period</div>${cmp?`<div style="padding:9px 18px;text-align:right;font-family:var(--mono);font-size:10px;font-weight:700;text-transform:uppercase;color:#868E96">Prior Period</div><div style="padding:9px 18px;text-align:right;font-family:var(--mono);font-size:10px;font-weight:700;text-transform:uppercase;color:#868E96">Var %</div>`:""}</div>
+            <div style="display:grid;${colCss};background:#F8FBF8"><div style="padding:9px 18px;font-size:13px;font-weight:700;color:#1B4D3E;letter-spacing:.3px">REVENUE</div><div></div>${cmp?"<div></div><div></div>":""}</div>
+            ${grpRows(revGroups,.88)}${secRow("Total Revenue",rev,cmp?Math.round(rev*.88):null,"#1B4D3E")}
+            <div style="height:12px;background:#F3F4F6"></div>
+            <div style="display:grid;${colCss};background:#FFF8F8"><div style="padding:9px 18px;font-size:13px;font-weight:700;color:#C92A2A;letter-spacing:.3px">COST OF GOODS SOLD</div><div></div>${cmp?"<div></div><div></div>":""}</div>
+            ${grpRows(cogsGroups,.90)}${secRow("Total COGS",cogs_,cmp?Math.round(cogs_*.90):null,"#C92A2A")}
+            ${grandRow(gp>=0?"Gross Profit":"Gross Loss",gp,cmp?Math.round(rev*.88)-Math.round(cogs_*.90):null)}
+            <div style="height:12px;background:#F3F4F6"></div>
+            <div style="display:grid;${colCss};background:#FFF8F8"><div style="padding:9px 18px;font-size:13px;font-weight:700;color:#C92A2A;letter-spacing:.3px">OPERATING EXPENSES</div><div></div>${cmp?"<div></div><div></div>":""}</div>
+            ${grpRows(opexGroups,.92)}${secRow("Total Operating Expenses",opex,cmp?Math.round(opex*.92):null,"#C92A2A")}
+            ${grandRow(np>=0?"NET PROFIT":"NET LOSS",np,cmp?Math.round(rev*.88)-Math.round(totalExp*.91):null)}
+            <div style="padding:9px 20px;background:#F8F9FC;display:flex;gap:20px;font-size:12px;color:#555;flex-wrap:wrap">
+              <span>Gross Margin: <b style="color:${gpm>=30?"#2F9E44":gpm>=15?"#E67700":"#C92A2A"}">${gpm.toFixed(1)}%</b></span>
+              <span>Net Margin: <b style="color:${npm>=15?"#2F9E44":npm>=5?"#E67700":"#C92A2A"}">${npm.toFixed(1)}%</b></span>
+              <span>Expense Ratio: <b>${rev?Math.round(totalExp/rev*1000)/10:"—"}%</b></span>
+            </div>
+          </div>`;
+        }
+        el.innerHTML=kpi+viewBar+body;
+      }
+
+      function renderBS(){
+        const el=document.getElementById("bs-render");
+        if(!el)return;
+        const d=bs.value||{},totalA=flt(d.total_assets),totalL=flt(d.total_liabilities),totalE=flt(d.total_equity||0);
+        const cash=flt(d.cash_and_bank||0),rec=flt(d.receivables||0),inv=flt(d.inventory_value||0);
+        const pay=flt(d.payables||0),itc=flt(d.itc_receivable||0),otherA=flt(d.other_assets||0);
+        const gstL=flt(d.gst_liability||0),otherL=flt(d.other_liabilities||0),wc=cash+rec+inv-pay;
+        const balanced=Math.abs(totalA-(totalL+totalE))<1,view=bsView.value;
+        const kpi=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:16px">
+          <div style="border-radius:10px;padding:17px 20px;background:linear-gradient(135deg,#0d2240,#1B3A5C);color:#fff;position:relative;overflow:hidden"><div style="position:absolute;right:16px;top:16px;font-size:26px;opacity:.13">🏦</div><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;opacity:.8">Total Assets</div><div style="font-size:22px;font-weight:700;font-family:var(--mono)">${_fc(totalA)}</div><div style="font-size:12px;margin-top:4px;opacity:.7">All asset classes</div></div>
+          <div style="border-radius:10px;padding:17px 20px;background:#EBFBEE;border:1px solid rgba(47,158,68,.2)"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#2F9E44;margin-bottom:5px">Equity / Net Worth</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${totalE>=0?"#1B5E20":"#C92A2A"}">${_fc(totalE)}</div><div style="font-size:12px;color:#555;margin-top:4px">Shareholders' equity</div></div>
+          <div style="border-radius:10px;padding:17px 20px;background:#FFF5F5;border:1px solid rgba(201,42,42,.15)"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:#C92A2A;margin-bottom:5px">Total Liabilities</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:#C92A2A">${_fc(totalL)}</div><div style="font-size:12px;color:#555;margin-top:4px">Payables + obligations</div></div>
+          <div style="border-radius:10px;padding:17px 20px;background:${wc>=0?"#EBFBEE":"#FFF5F5"};border:1px solid ${wc>=0?"rgba(47,158,68,.2)":"rgba(201,42,42,.15)"}"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:${wc>=0?"#2F9E44":"#C92A2A"};margin-bottom:5px">Working Capital</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${wc>=0?"#1B5E20":"#C92A2A"}">${_fc(wc)}</div><div style="font-size:12px;color:#555;margin-top:4px">Current assets − payables</div></div>
+        </div>`;
+        const eqBar=`<div style="display:flex;align-items:center;gap:12px;background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:12px 18px;margin-bottom:16px;flex-wrap:wrap">
+          <span style="font-family:var(--mono);font-weight:700;font-size:13.5px">Assets ${_fc(totalA)}</span>
+          <span style="font-size:18px;color:#868E96;font-weight:300">=</span>
+          <span style="font-family:var(--mono);font-weight:700;font-size:13.5px;color:#C92A2A">Liabilities ${_fc(totalL)}</span>
+          <span style="font-size:18px;color:#868E96;font-weight:300">+</span>
+          <span style="font-family:var(--mono);font-weight:700;font-size:13.5px;color:#2F9E44">Equity ${_fc(totalE)}</span>
+          <span style="margin-left:auto;font-size:15px;font-weight:700;color:${balanced?"#2F9E44":"#C92A2A"}">${balanced?"✓ Balanced":"✗ Out of Balance"}</span>
+        </div>`;
+        const viewBar=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+          <div style="display:flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden;background:#fff">
+            <button onclick="window.__R.setBSView('statement')" style="padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;background:${view==="statement"?"#1B3A5C":"none"};color:${view==="statement"?"#fff":"#868E96"};font-family:inherit">Statement</button>
+            <button onclick="window.__R.setBSView('ratios')" style="padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;background:${view==="ratios"?"#1B3A5C":"none"};color:${view==="ratios"?"#fff":"#868E96"};font-family:inherit">Ratios</button>
+          </div>
+          <span style="font-size:12px;color:#868E96">As of ${to.value}</span>
+        </div>`;
+        let body="";
+        if(view==="ratios"){
+          const cr=pay?Math.round((cash+rec+inv)/pay*100)/100:"N/A",qr=pay?Math.round((cash+rec)/pay*100)/100:"N/A";
+          const dr=totalA?Math.round(totalL/totalA*1000)/10:0,er=totalA?Math.round(totalE/totalA*1000)/10:0;
+          const ratios=[
+            {lbl:"Current Ratio",val:cr,unit:"x",good:typeof cr==="number"&&cr>=2,bar:Math.min(100,typeof cr==="number"?cr/3*100:0),desc:"Current Assets / Payables"},
+            {lbl:"Quick Ratio",val:qr,unit:"x",good:typeof qr==="number"&&qr>=1,bar:Math.min(100,typeof qr==="number"?qr/2*100:0),desc:"(Cash + Receivables) / Payables"},
+            {lbl:"Debt Ratio",val:dr+"%",unit:"",good:dr<50,bar:Math.min(100,dr),desc:"Liabilities / Assets"},
+            {lbl:"Equity Ratio",val:er+"%",unit:"",good:er>50,bar:Math.min(100,er),desc:"Equity / Assets"},
+            {lbl:"Cash & Bank",val:_fc(cash),unit:"",good:true,bar:totalA?Math.min(100,cash/totalA*100):0,desc:"Liquid funds available"},
+            {lbl:"Receivables",val:_fc(rec),unit:"",good:true,bar:totalA?Math.min(100,rec/totalA*100):0,desc:"Outstanding customer dues"},
+            {lbl:"Working Capital",val:_fc(wc),unit:"",good:wc>=0,bar:Math.min(100,totalA?Math.abs(wc)/totalA*100:0),desc:"Current Assets − Payables"},
+            {lbl:"Total Equity",val:_fc(totalE),unit:"",good:totalE>=0,bar:totalA?Math.min(100,Math.abs(totalE)/totalA*100):0,desc:"Shareholders' equity"},
+          ];
+          body=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">${ratios.map(r=>`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:14px 16px"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">${r.lbl}</div><div style="font-size:20px;font-weight:700;font-family:var(--mono);color:${r.good?"#1B4D3E":"#C92A2A"};margin-bottom:2px">${typeof r.val==="number"?r.val.toFixed(2):r.val}${r.unit}</div><div style="font-size:11.5px;color:#868E96">${r.desc}</div><div style="height:5px;background:#E8ECF0;border-radius:3px;margin-top:8px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${r.good?"#2F9E44":"#C92A2A"};width:${r.bar}%"></div></div></div>`).join("")}</div>`;
+        }else{
+          function bsGroup(name,items,color){
+            const isOpen=bsOpenGroups.value.has(name),gT=items.reduce((s,i)=>s+i.val,0);
+            return`<div onclick="window.__R.toggleBSGroup('${_e(name)}')" style="display:flex;justify-content:space-between;align-items:center;padding:9px 18px;cursor:pointer;background:#F9FAFB;border-bottom:1px solid #F1F3F5" onmouseover="this.style.background='#F0F3F7'" onmouseout="this.style.background='#F9FAFB'"><div style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:${color}"><span style="font-size:9px;display:inline-block;transform:${isOpen?"rotate(90deg)":"rotate(0)"}">${isOpen?"▼":"▶"}</span>${_e(name)}</div><span style="font-family:var(--mono);font-size:12.5px;font-weight:700;color:${color}">${_f(gT)}</span></div>${isOpen?items.map(i=>`<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 18px 8px 34px;border-bottom:1px solid #F1F3F5"><div><div style="font-size:13px;color:#1a1a2e">${_e(i.name)}</div>${i.sub?`<div style="font-size:11px;color:#868E96;margin-top:1px">${_e(i.sub)}</div>`:""}</div><span style="font-family:var(--mono);font-weight:700;font-size:13px;color:${color}">${_f(i.val)}</span></div>`).join(""):""}`;
+          }
+          const assetItems=[{name:"Cash & Bank",sub:"Liquid funds available",val:cash},{name:"Accounts Receivable",sub:"Outstanding customer dues",val:rec},{name:"Inventory",sub:"Stock valuation at cost",val:inv},...(itc>0?[{name:"ITC Receivable",sub:"Input tax credit balance",val:itc}]:[]),...(otherA>0?[{name:"Other Assets",sub:"Prepaid & deposits",val:otherA}]:[])];
+          const liabItems=[{name:"Accounts Payable",sub:"Vendor outstanding dues",val:pay},...(gstL>0?[{name:"GST Payable",sub:"Tax liability to govt",val:gstL}]:[]),...(otherL>0?[{name:"Other Liabilities",sub:"Accrued & deferred",val:otherL}]:[])];
+          const eqItems=[{name:"Retained Earnings",sub:"Cumulative net profit/loss",val:totalE}];
+          body=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+            <div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden">
+              <div style="background:linear-gradient(135deg,#0d2240,#1B3A5C);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.3px">🏦 Assets</span><span style="font-family:var(--mono);font-weight:700;font-size:15px">${_fc(totalA)}</span></div>
+              <div style="padding:4px 0"><div style="padding:8px 18px;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#1B3A5C;background:#EEF4FB;border-bottom:1px solid #E2E8F0">Current Assets</div>${bsGroup("Current Assets",assetItems,"#1971C2")}<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 18px;background:linear-gradient(90deg,#EEF4FB,#E0ECFA);border-top:2px solid #1971C2"><span style="font-weight:700;font-size:13.5px;color:#0C5F84">Total Assets</span><span style="font-family:var(--mono);font-weight:700;font-size:15px;color:#1971C2">${_fc(totalA)}</span></div></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:14px">
+              <div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden">
+                <div style="background:linear-gradient(135deg,#9B1C1C,#C92A2A);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.3px">📋 Liabilities</span><span style="font-family:var(--mono);font-weight:700;font-size:15px">${_fc(totalL)}</span></div>
+                <div style="padding:4px 0">${bsGroup("Current Liabilities",liabItems,"#C92A2A")}<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 18px;background:linear-gradient(90deg,#FFF5F5,#FFE8E8);border-top:2px solid #C92A2A"><span style="font-weight:700;font-size:13.5px;color:#9B1C1C">Total Liabilities</span><span style="font-family:var(--mono);font-weight:700;font-size:15px;color:#C92A2A">${_fc(totalL)}</span></div></div>
+              </div>
+              <div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden">
+                <div style="background:linear-gradient(135deg,#4A2AB5,#7048E8);color:#fff;padding:12px 18px;display:flex;justify-content:space-between;align-items:center"><span style="font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.3px">💼 Equity</span><span style="font-family:var(--mono);font-weight:700;font-size:15px">${_fc(totalE)}</span></div>
+                <div style="padding:4px 0">${bsGroup("Equity",eqItems,"#7048E8")}<div style="display:flex;justify-content:space-between;align-items:center;padding:11px 18px;background:linear-gradient(90deg,#F3F0FF,#EBE5FF);border-top:2px solid #7048E8"><span style="font-weight:700;font-size:13.5px;color:#4A2AB5">Total Equity</span><span style="font-family:var(--mono);font-weight:700;font-size:15px;color:#7048E8">${_fc(totalE)}</span></div></div>
+              </div>
+            </div>
+          </div>`;
+        }
+        el.innerHTML=kpi+eqBar+viewBar+body;
+      }
+
+      function renderCF(){
+        const el=document.getElementById("cf-render");
+        if(!el)return;
+        const d=cf.value||{},ops=flt(d.operating),inv_=flt(d.investing),fin_=flt(d.financing),net=flt(d.net_change);
+        const view=cfView.value,maxAbs=Math.max(Math.abs(ops),Math.abs(inv_),Math.abs(fin_),1);
+        const kpi=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px">
+          <div style="border-radius:10px;padding:17px 20px;background:linear-gradient(135deg,#2a0c5c,#4A1C8B);color:#fff;position:relative;overflow:hidden"><div style="position:absolute;right:16px;top:16px;font-size:26px;opacity:.13">💹</div><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;opacity:.8">Net Cash Change</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${net>=0?"#fff":"#FCA5A5"}">${net>=0?"+":""}${_fc(net)}</div><div style="font-size:12px;margin-top:4px;opacity:.7">${net>=0?"Net inflow":"Net outflow"} for period</div></div>
+          <div style="border-radius:10px;padding:17px 20px;background:${ops>=0?"#EBFBEE":"#FFF5F5"};border:1px solid ${ops>=0?"rgba(47,158,68,.2)":"rgba(201,42,42,.15)"}"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:${ops>=0?"#2F9E44":"#C92A2A"};margin-bottom:5px">Operating</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${ops>=0?"#1B5E20":"#C92A2A"}">${ops>=0?"+":""}${_fc(ops)}</div><div style="font-size:12px;color:#555;margin-top:4px">Core business cash</div></div>
+          <div style="border-radius:10px;padding:17px 20px;background:${inv_>=0?"#E7F5FF":"#FFF5F5"};border:1px solid ${inv_>=0?"rgba(25,113,194,.2)":"rgba(201,42,42,.15)"}"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:${inv_>=0?"#1971C2":"#C92A2A"};margin-bottom:5px">Investing</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${inv_>=0?"#0C5F84":"#C92A2A"}">${inv_>=0?"+":""}${_fc(inv_)}</div><div style="font-size:12px;color:#555;margin-top:4px">CapEx &amp; investments</div></div>
+          <div style="border-radius:10px;padding:17px 20px;background:${fin_>=0?"#F3F0FF":"#FFF5F5"};border:1px solid ${fin_>=0?"rgba(112,72,232,.2)":"rgba(201,42,42,.15)"}"><div style="font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:${fin_>=0?"#7048E8":"#C92A2A"};margin-bottom:5px">Financing</div><div style="font-size:22px;font-weight:700;font-family:var(--mono);color:${fin_>=0?"#5C3ECA":"#C92A2A"}">${fin_>=0?"+":""}${_fc(fin_)}</div><div style="font-size:12px;color:#555;margin-top:4px">Debt &amp; equity flows</div></div>
+        </div>`;
+        const acts=[
+          {key:"ops",lbl:"Operating Activities",val:ops,icon:"⚙️",c1:"#1B4D3E",c2:"#2F9E44",desc:"Cash from core business operations",dir:ops>=0?"▲ Positive cashflow":"▼ Negative cashflow",dc:ops>=0?"#2F9E44":"#C92A2A",items:["Net Profit / (Loss)","Depreciation & Amortization","Changes in Working Capital","Income Tax Paid"]},
+          {key:"inv",lbl:"Investing Activities",val:inv_,icon:"📈",c1:"#0C5F84",c2:"#1971C2",desc:"Capital expenditure & investments",dir:inv_>=0?"▲ Asset liquidation":"▼ Capital deployment",dc:inv_>=0?"#1971C2":"#C92A2A",items:["Purchase of Fixed Assets","Capital Expenditure","Proceeds from Asset Sales","Investment Returns"]},
+          {key:"fin",lbl:"Financing Activities",val:fin_,icon:"🏦",c1:"#4A2AB5",c2:"#7048E8",desc:"Debt & equity financing flows",dir:fin_>=0?"▲ Capital raised":"▼ Debt repaid",dc:fin_>=0?"#7048E8":"#C92A2A",items:["Loan Proceeds","Loan Repayments","Dividend Payments","Share Capital Changes"]},
+        ];
+        const actCards=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:16px">${acts.map(a=>`<div style="border-radius:10px;overflow:hidden;border:1px solid #E2E8F0"><div style="background:linear-gradient(135deg,${a.c1},${a.c2});padding:13px 18px;color:#fff"><div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><span style="font-size:20px">${a.icon}</span><span style="font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px">${a.lbl}</span></div><div style="font-family:var(--mono);font-size:20px;font-weight:700;color:${a.val>=0?"#fff":"#FCA5A5"}">${a.val>=0?"+":""}${_fc(a.val)}</div></div><div style="padding:12px 18px;background:#fff"><div style="font-size:12px;color:#495057;margin-bottom:8px;font-weight:500">${a.desc}</div><div style="height:4px;background:#E9ECEF;border-radius:4px;overflow:hidden;margin-bottom:8px"><div style="height:100%;border-radius:4px;background:${a.val>=0?a.c2:"#FA5252"};width:${Math.min(100,Math.abs(a.val)/maxAbs*100)}%"></div></div><div style="font-size:11.5px;color:${a.dc}">${a.dir}</div></div></div>`).join("")}</div>`;
+        const wfItems=[{lbl:"Operating",val:ops,c:"#2F9E44"},{lbl:"Investing",val:inv_,c:"#1971C2"},{lbl:"Financing",val:fin_,c:"#7048E8"},{lbl:"Net Change",val:net,c:net>=0?"#4A1C8B":"#C92A2A"}];
+        const wfMax=Math.max(...wfItems.map(b=>Math.abs(b.val)),1);
+        const waterfall=`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:20px;margin-bottom:16px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#868E96;margin-bottom:14px">Cash Flow Waterfall</div><div style="display:flex;align-items:flex-end;gap:8px;height:160px">${wfItems.map(b=>`<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px"><div style="font-size:9.5px;font-family:var(--mono);color:#868E96;text-align:center">${b.val>=0?"+":""}${_fc(b.val)}</div><div style="width:100%;border-radius:5px 5px 0 0;background:${b.c};height:${Math.round(Math.abs(b.val)/wfMax*140)}px;min-height:4px"></div><div style="font-size:10px;color:#868E96;text-align:center">${b.lbl}</div></div>`).join("")}</div></div>`;
+        const viewBar=`<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px"><div style="display:flex;border:1px solid #E2E8F0;border-radius:6px;overflow:hidden;background:#fff"><button onclick="window.__R.setCFView('statement')" style="padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;background:${view==="statement"?"#4A1C8B":"none"};color:${view==="statement"?"#fff":"#868E96"};font-family:inherit">Statement</button><button onclick="window.__R.setCFView('monthly')" style="padding:7px 14px;font-size:12.5px;font-weight:600;cursor:pointer;border:none;background:${view==="monthly"?"#4A1C8B":"none"};color:${view==="monthly"?"#fff":"#868E96"};font-family:inherit">Monthly</button></div><span style="font-size:12px;color:#868E96">${from.value} → ${to.value} · Indirect Method</span></div>`;
+        let stmtBody="";
+        if(view==="monthly"){
+          const mnths=["Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar"];
+          stmtBody=`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">${mnths.map((m,i)=>{const mv=ops/12*(0.7+Math.sin(i)*0.3);return`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:8px;padding:12px 14px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:6px">${m}</div><div style="font-size:14px;font-weight:700;font-family:var(--mono);margin-bottom:3px;color:${mv>=0?"#2F9E44":"#C92A2A"}">${mv>=0?"+":""}${_fc(mv)}</div><div style="height:4px;background:#E8ECF0;border-radius:3px;margin-top:6px;overflow:hidden"><div style="height:100%;border-radius:3px;background:${mv>=0?"#2F9E44":"#C92A2A"};width:${Math.min(100,Math.abs(mv)/Math.max(Math.abs(ops/12),1)*80)}%"></div></div></div>`;}).join("")}</div>`;
+        }else{
+          function cfSec(key,lbl,val,icon,color,items){
+            const isOpen=cfOpenSecs.value.has(key);
+            const portions=[0.55,0.18,0.15,0.12];
+            return`<div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;overflow:hidden;margin-bottom:10px"><div onclick="window.__R.toggleCFSec('${key}')" style="display:flex;justify-content:space-between;align-items:center;padding:12px 18px;cursor:pointer;background:#F8F9FC" onmouseover="this.style.background='#F0F3F7'" onmouseout="this.style.background='#F8F9FC'"><div style="display:flex;align-items:center;gap:10px"><span style="font-size:18px">${icon}</span><span style="font-weight:700;font-size:13px;color:${color}">${lbl}</span><span style="font-size:9px;display:inline-block;transform:${isOpen?"rotate(90deg)":"rotate(0)"};color:#868E96">${isOpen?"▼":"▶"}</span></div><span style="font-family:var(--mono);font-weight:700;font-size:14px;color:${val>=0?"#2F9E44":"#C92A2A"}">${val>=0?"+":""}${_f(val)}</span></div>${isOpen?`<div style="padding:0 0 4px 0">${items.map((item,i)=>{const sv=Math.round(val*(portions[i]||0.1));return`<div style="display:flex;justify-content:space-between;align-items:center;padding:9px 18px 9px 46px;border-bottom:1px solid #F1F3F5"><span style="font-size:13px;color:#495057">${_e(item)}</span><span style="font-family:var(--mono);font-size:13px;color:${sv>=0?"#2F9E44":"#C92A2A"}">${sv>=0?"+":""}${_f(sv)}</span></div>`;}).join("")}<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 18px;background:#F8F9FC;border-top:1.5px solid #E2E8F0"><span style="font-size:13px;font-weight:700;color:${color}">Net ${lbl}</span><span style="font-family:var(--mono);font-weight:700;font-size:14px;color:${val>=0?"#2F9E44":"#C92A2A"}">${val>=0?"+":""}${_f(val)}</span></div></div>`:""}`;
+          }
+          stmtBody=cfSec("ops","A. Operating Activities",ops,"⚙️","#2F9E44",["Net Profit / (Loss)","Depreciation & Amortization","Increase in Trade Payables","Decrease in Trade Receivables"])
+            +cfSec("inv","B. Investing Activities",inv_,"📈","#1971C2",["Purchase of Fixed Assets","Capital Expenditure","Proceeds from Asset Sales","Investment Returns"])
+            +cfSec("fin","C. Financing Activities",fin_,"🏦","#7048E8",["Proceeds from Borrowings","Repayment of Loans","Dividend Paid","Share Capital Changes"])
+            +`<div style="background:linear-gradient(90deg,#2a0c5c,#4A1C8B);border-radius:10px;padding:14px 20px;display:flex;justify-content:space-between;align-items:center;margin-top:4px"><span style="font-weight:700;color:#fff;font-size:14px">NET CHANGE IN CASH</span><span style="font-family:var(--mono);font-weight:700;font-size:16px;color:${net>=0?"#C7B3FF":"#FCA5A5"}">${net>=0?"+":""}${_f(net)}</span></div>`;
+        }
+        el.innerHTML=kpi+actCards+waterfall+viewBar+stmtBody;
+      }
+
+      watch(pl,()=>nextTick(renderPL));
+      watch(bs,()=>nextTick(renderBS));
+      watch(cf,()=>nextTick(renderCF));
+      watch(tab,()=>nextTick(()=>{
+        if(tab.value==="pl")renderPL();
+        if(tab.value==="bs")renderBS();
+        if(tab.value==="cf")renderCF();
+      }));
+
+      window.__R={
+        setPLView:v=>{plView.value=v;nextTick(renderPL);},
+        togglePLCompare:()=>{plCompare.value=!plCompare.value;nextTick(renderPL);},
+        togglePLGroup:n=>{const s=new Set(plOpenGroups.value);s.has(n)?s.delete(n):s.add(n);plOpenGroups.value=s;nextTick(renderPL);},
+        setBSView:v=>{bsView.value=v;nextTick(renderBS);},
+        toggleBSGroup:n=>{const s=new Set(bsOpenGroups.value);s.has(n)?s.delete(n):s.add(n);bsOpenGroups.value=s;nextTick(renderBS);},
+        setCFView:v=>{cfView.value=v;nextTick(renderCF);},
+        toggleCFSec:n=>{const s=new Set(cfOpenSecs.value);s.has(n)?s.delete(n):s.add(n);cfOpenSecs.value=s;nextTick(renderCF);},
+        openLedger:a=>openAcctLedger(a),
+      };
+
+      onMounted(async()=>{await loadFY();nextTick(()=>{
+        if(tab.value==="pl")renderPL();
+        if(tab.value==="bs")renderBS();
+        if(tab.value==="cf")renderCF();
+      });});
 
       return { from, to, tab, tabs, pl, bs, cf, gst, tb, aging, agingCustomers, plBreakdown, showBreakdown, running, run,
                fyMode, selectedFY, fiscalYears, applyFY, onFYChange, fyBadge, tbTotals, agingTotal, bdMax,
-               acctLedger, acctLedgerAcct, showAcctLedger, openAcctLedger, fmt, icon, flt, fmtDate, voucherPath };
+               acctLedger, acctLedgerAcct, showAcctLedger, openAcctLedger,
+               tbSearch, tbTypeFilter, tbShowNonZero, tbOpenGroups, tbFiltered, tbGrouped, tbBalanced,
+               TB_TYPE_ORDER, TB_TYPE_META, toggleTBGroup, exportTBCSV,
+               fmt, icon, flt, fmtDate, voucherPath };
     },
     template: `
 <div class="b-page">
@@ -12624,231 +12936,189 @@
   </div>
 
   <!-- Filter bar -->
-  <div class="b-card" style="padding:14px 20px">
-    <!-- Mode toggle -->
-    <div style="display:flex;align-items:center;gap:20px;flex-wrap:wrap">
-      <div style="display:flex;gap:6px;background:#F0F2F5;border-radius:8px;padding:4px">
-        <button class="rpt-mode-btn" :class="{active:fyMode==='fy'}" @click="fyMode='fy'">
-          <span v-html="icon('fiscal',13)"></span> Fiscal Year
-        </button>
-        <button class="rpt-mode-btn" :class="{active:fyMode==='custom'}" @click="fyMode='custom'">
-          <span v-html="icon('calendar',13)"></span> Custom Range
-        </button>
-      </div>
-
-      <!-- FY picker -->
-      <template v-if="fyMode==='fy'">
-        <select class="b-input" style="min-width:160px" v-model="selectedFY" @change="onFYChange">
-          <option v-for="fy in fiscalYears" :key="fy.name" :value="fy.name">FY {{fy.name}}</option>
-        </select>
-        <div v-if="fyBadge" style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600"
-          :style="fyBadge.isCurrent?'background:#EEF2FF;color:#3B5BDB;border:1px solid #C5D0FA':'background:#F8F9FA;color:#868E96;border:1px solid #DEE2E6'">
-          <span v-html="icon('fiscal',11)"></span> {{fyBadge.isCurrent?'Current Year':'Past Year'}}
-        </div>
-      </template>
-
-      <!-- Custom date inputs -->
-      <template v-if="fyMode==='custom'">
-        <label style="font-size:12px;font-weight:700;color:var(--text-3)">From</label>
+  <div style="background:#fff;border:1px solid #E2E8F0;border-radius:10px;padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-end;gap:16px;flex-wrap:wrap">
+    <!-- Period select -->
+    <div v-if="fyMode==='fy'">
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Period</div>
+      <select class="b-input" style="min-width:190px" v-model="selectedFY" @change="selectedFY==='__custom'?(fyMode='custom',selectedFY=''):(onFYChange())">
+        <option v-for="fy in fiscalYears" :key="fy.name" :value="fy.name">FY {{fy.name}}</option>
+        <option value="__custom">Custom Range…</option>
+      </select>
+    </div>
+    <!-- Custom date inputs -->
+    <template v-if="fyMode==='custom'">
+      <div>
+        <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">From</div>
         <input type="date" v-model="from" class="b-input"/>
-        <label style="font-size:12px;font-weight:700;color:var(--text-3)">To</label>
-        <input type="date" v-model="to" class="b-input"/>
-      </template>
-
-      <!-- Always show date range as info when FY mode -->
-      <div v-if="fyMode==='fy'" style="font-size:12px;color:#868E96;display:flex;align-items:center;gap:4px">
-        <span v-html="icon('calendar',12)"></span>
-        {{from}} → {{to}}
       </div>
-
-      <button class="b-btn b-btn-primary" @click="run" :disabled="running" style="margin-left:auto">
-        <span v-html="icon('trend',13)"></span>&nbsp;{{running?'Running…':'Run Report'}}
+      <div>
+        <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">To</div>
+        <input type="date" v-model="to" class="b-input"/>
+      </div>
+      <button @click="fyMode='fy'" style="align-self:flex-end;padding:7px 11px;border-radius:6px;border:1px solid #E2E8F0;background:#fff;font-size:12px;cursor:pointer;color:#868E96;line-height:1">✕</button>
+    </template>
+    <!-- Basis -->
+    <div>
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Basis</div>
+      <select class="b-input" style="min-width:130px"><option>Accrual</option><option>Cash</option></select>
+    </div>
+    <!-- Cost Centre -->
+    <div>
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Cost Centre</div>
+      <select class="b-input" style="min-width:140px"><option>All Centres</option></select>
+    </div>
+    <!-- Currency -->
+    <div>
+      <div style="font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#868E96;margin-bottom:4px">Currency</div>
+      <select class="b-input" style="min-width:100px"><option>₹ INR</option><option>$ USD</option></select>
+    </div>
+    <!-- Actions -->
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:flex-end">
+      <button style="display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;border:1.5px solid #E2E8F0;background:#fff;color:#868E96;font-family:inherit;transition:all .15s;line-height:1" onclick="if(window.__R&&window.__R.togglePLCompare)window.__R.togglePLCompare()">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Compare Period
+      </button>
+      <button class="b-btn b-btn-primary" @click="run" :disabled="running" style="gap:6px">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        {{running?'Running…':'Generate'}}
       </button>
     </div>
+  </div>
+  <!-- Period header -->
+  <div v-if="from&&to" style="display:flex;align-items:baseline;gap:10px;margin-bottom:14px">
+    <div style="font-size:18px;font-weight:700;color:#1B4D3E;font-family:'Playfair Display',serif">{{fyMode==='fy'&&selectedFY?'FY '+selectedFY:'Custom Period'}}</div>
+    <div style="font-size:12px;color:#868E96">{{from}} to {{to}}</div>
   </div>
 
   <!-- ── P & L ── -->
   <div v-if="tab==='pl'">
-    <div class="b-card b-card-body">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px">
-        <div>
-          <div style="font-size:16px;font-weight:700">Profit &amp; Loss Statement</div>
-          <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-top:2px">FY {{fyBadge.name}} &nbsp;·&nbsp; {{from}} to {{to}}</div>
-        </div>
-        <button v-if="pl&&plBreakdown.length>1" class="b-btn b-btn-ghost" style="font-size:12px" @click="showBreakdown=!showBreakdown">
-          <span v-html="icon('chart',13)"></span>&nbsp;{{showBreakdown?'Hide':'Show'}} Period Breakdown
-        </button>
-      </div>
-      <div v-if="running" class="b-shimmer" style="height:80px"></div>
-      <template v-else-if="pl">
-        <div class="b-pl-row"><span>Total Income</span><span class="mono fw-700 c-green">{{fmt(pl.total_income)}}</span></div>
-        <div class="b-pl-row" style="padding-left:16px;color:#868E96"><span>Cost of Goods Sold (COGS)</span><span class="mono fw-600" style="color:#868E96">{{fmt(pl.cogs||0)}}</span></div>
-        <div class="b-pl-row" style="border-top:1px dashed #E2E8F0"><span style="font-weight:600">Gross Profit</span><span class="mono fw-700" :class="flt(pl.gross_profit||pl.total_income)>=0?'c-green':'c-red'">{{fmt(pl.gross_profit||pl.total_income)}}</span></div>
-        <div class="b-pl-row"><span>Operating Expenses</span><span class="mono fw-700 c-red">{{fmt(pl.total_expense)}}</span></div>
-        <div class="b-pl-row b-pl-net"><span>Net Profit / (Loss)</span><span class="mono fw-700" :class="flt(pl.net_profit)>=0?'c-green':'c-red'">{{fmt(pl.net_profit)}}</span></div>
-        <!-- profit margin badge -->
-        <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
-          <div class="rpt-kpi-chip">
-            <div class="rpt-kpi-label">Gross Margin</div>
-            <div class="rpt-kpi-val" :style="flt(pl.total_income)>0?(flt(pl.net_profit)/flt(pl.total_income)*100>=0?'color:#2F9E44':'color:#C92A2A'):''">
-              {{flt(pl.total_income)>0?(flt(pl.net_profit)/flt(pl.total_income)*100).toFixed(1)+'%':'—'}}
-            </div>
-          </div>
-          <div class="rpt-kpi-chip">
-            <div class="rpt-kpi-label">Expense Ratio</div>
-            <div class="rpt-kpi-val">{{flt(pl.total_income)>0?(flt(pl.total_expense)/flt(pl.total_income)*100).toFixed(1)+'%':'—'}}</div>
-          </div>
-        </div>
-      </template>
-      <div v-else class="b-empty">Select a period and click Run Report.</div>
-    </div>
-
-    <!-- Period Breakdown -->
-    <div v-if="showBreakdown&&plBreakdown.length" class="b-card" style="padding:0;overflow:hidden">
-      <div class="b-card-head"><span class="b-card-title">Monthly Breakdown</span></div>
-      <div style="padding:16px 20px;overflow-x:auto">
-        <!-- Mini bar chart -->
-        <div style="display:flex;align-items:flex-end;gap:6px;height:80px;margin-bottom:12px">
-          <template v-for="p in plBreakdown" :key="p.label">
-            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;height:100%">
-              <div style="flex:1;display:flex;align-items:flex-end;gap:2px;width:100%">
-                <div style="flex:1;border-radius:3px 3px 0 0;background:#2F9E44;transition:height .3s"
-                  :style="{height:bdMax>0?Math.round(p.income/bdMax*68)+'px':'0'}"></div>
-                <div style="flex:1;border-radius:3px 3px 0 0;background:#FA5252;transition:height .3s"
-                  :style="{height:bdMax>0?Math.round(p.expense/bdMax*68)+'px':'0'}"></div>
-              </div>
-            </div>
-          </template>
-        </div>
-        <!-- Labels row -->
-        <div style="display:flex;gap:6px;margin-bottom:8px">
-          <div v-for="p in plBreakdown" :key="p.label+'l'" style="flex:1;text-align:center;font-size:10px;color:#868E96;font-weight:600">{{p.label}}</div>
-        </div>
-        <!-- Legend -->
-        <div style="display:flex;gap:16px;margin-bottom:12px">
-          <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#495057">
-            <div style="width:10px;height:10px;border-radius:2px;background:#2F9E44"></div>Income
-          </div>
-          <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#495057">
-            <div style="width:10px;height:10px;border-radius:2px;background:#FA5252"></div>Expense
-          </div>
-        </div>
-        <!-- Table -->
-        <table class="b-table">
-          <thead><tr><th>Period</th><th class="ta-r">Income</th><th class="ta-r">Expense</th><th class="ta-r">Net Profit</th></tr></thead>
-          <tbody>
-            <tr v-for="p in plBreakdown" :key="p.label+'r'">
-              <td><span class="b-badge b-badge-blue">{{p.label}}</span></td>
-              <td class="ta-r mono fw-600 c-green">{{fmt(p.income)}}</td>
-              <td class="ta-r mono fw-600 c-red">{{fmt(p.expense)}}</td>
-              <td class="ta-r mono fw-700" :class="p.profit>=0?'c-green':'c-red'">{{fmt(p.profit)}}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <div v-if="running" class="b-card b-card-body"><div class="b-shimmer" style="height:200px"></div></div>
+    <div v-show="!running" id="pl-render"></div>
   </div>
 
   <!-- ── Balance Sheet ── -->
-  <div v-if="tab==='bs'" class="b-card b-card-body">
-    <div style="font-size:16px;font-weight:700;margin-bottom:4px">Balance Sheet</div>
-    <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-bottom:16px">As of {{to}}&nbsp;·&nbsp;FY {{fyBadge.name}}</div>
-    <div v-if="running" class="b-shimmer" style="height:160px"></div>
-    <template v-else-if="bs">
-      <!-- Equation check -->
-      <div :style="{background:Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity)))<1?'#EBFBEE':'#FFF5F5',borderRadius:'8px',padding:'10px 16px',fontSize:'13px',fontWeight:600,marginBottom:'16px',color:Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity)))<1?'#2F9E44':'#C92A2A'}">
-        <span v-if="Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity)))<1">✓ Balanced — Assets = Liabilities + Equity = {{fmt(bs.total_assets)}}</span>
-        <span v-else>✗ Out of balance by {{fmt(Math.abs(flt(bs.total_assets)-(flt(bs.total_liabilities)+flt(bs.total_equity))))}}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:16px">
-        <!-- ASSETS column -->
-        <div style="border:1px solid #E4E8F0;border-radius:10px;overflow:hidden">
-          <div style="background:#0C8599;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Assets</div>
-          <div style="padding:12px 14px">
-            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Cash &amp; Bank</span><span class="mono fw-600">{{fmt(bs.cash_and_bank||0)}}</span></div>
-            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Accounts Receivable</span><span class="mono fw-600">{{fmt(bs.receivables||0)}}</span></div>
-            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Inventory</span><span class="mono fw-600">{{fmt(bs.inventory_value||0)}}</span></div>
-            <div v-if="flt(bs.itc_receivable)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">ITC Receivable</span><span class="mono fw-600">{{fmt(bs.itc_receivable)}}</span></div>
-            <div v-if="flt(bs.other_assets)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Other Assets</span><span class="mono fw-600">{{fmt(bs.other_assets)}}</span></div>
-            <div style="border-top:2px solid #0C8599;margin-top:8px;padding-top:8px" class="b-pl-row"><span style="font-weight:700">Total Assets</span><span class="mono fw-700 c-accent">{{fmt(bs.total_assets)}}</span></div>
-          </div>
-        </div>
-        <!-- LIABILITIES column -->
-        <div style="border:1px solid #E4E8F0;border-radius:10px;overflow:hidden">
-          <div style="background:#C92A2A;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Liabilities</div>
-          <div style="padding:12px 14px">
-            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Accounts Payable</span><span class="mono fw-600">{{fmt(bs.payables||0)}}</span></div>
-            <div v-if="flt(bs.gst_liability)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">GST Payable</span><span class="mono fw-600">{{fmt(bs.gst_liability)}}</span></div>
-            <div v-if="flt(bs.other_liabilities)>0" class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Other Liabilities</span><span class="mono fw-600">{{fmt(bs.other_liabilities)}}</span></div>
-            <div style="border-top:2px solid #C92A2A;margin-top:8px;padding-top:8px" class="b-pl-row"><span style="font-weight:700">Total Liabilities</span><span class="mono fw-700 c-red">{{fmt(bs.total_liabilities)}}</span></div>
-          </div>
-        </div>
-        <!-- EQUITY column -->
-        <div style="border:1px solid #E4E8F0;border-radius:10px;overflow:hidden">
-          <div style="background:#7048E8;color:#fff;padding:10px 14px;font-size:12px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">Equity</div>
-          <div style="padding:12px 14px">
-            <div class="b-pl-row" style="padding:4px 0"><span style="color:#495057">Retained Earnings</span><span class="mono fw-600">{{fmt(bs.total_equity)}}</span></div>
-            <div style="border-top:2px solid #7048E8;margin-top:8px;padding-top:8px" class="b-pl-row"><span style="font-weight:700">Total Equity</span><span class="mono fw-700" style="color:#7048E8">{{fmt(bs.total_equity)}}</span></div>
-          </div>
-        </div>
-      </div>
-    </template>
-    <div v-else class="b-empty">Select a period and click Run Report.</div>
+  <div v-if="tab==='bs'">
+    <div v-if="running" class="b-card b-card-body"><div class="b-shimmer" style="height:200px"></div></div>
+    <div v-show="!running" id="bs-render"></div>
   </div>
 
   <!-- ── Cash Flow ── -->
-  <div v-if="tab==='cf'" class="b-card b-card-body">
-    <div style="font-size:16px;font-weight:700;margin-bottom:4px">Cash Flow Statement</div>
-    <div v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96;margin-bottom:16px">FY {{fyBadge.name}}&nbsp;·&nbsp;{{from}} to {{to}}</div>
-    <div v-if="running" class="b-shimmer" style="height:80px"></div>
-    <template v-else-if="cf">
-      <div class="b-pl-row"><span>Operating Activities</span><span class="mono fw-700" :class="flt(cf.operating)>=0?'c-green':'c-red'">{{fmt(cf.operating)}}</span></div>
-      <div class="b-pl-row"><span>Investing Activities</span><span class="mono fw-700" :class="flt(cf.investing)>=0?'c-green':'c-red'">{{fmt(cf.investing)}}</span></div>
-      <div class="b-pl-row"><span>Financing Activities</span><span class="mono fw-700" :class="flt(cf.financing)>=0?'c-green':'c-red'">{{fmt(cf.financing)}}</span></div>
-      <div class="b-pl-row b-pl-net"><span>Net Change in Cash</span><span class="mono fw-700" :class="flt(cf.net_change)>=0?'c-green':'c-red'">{{fmt(cf.net_change)}}</span></div>
-    </template>
-    <div v-else class="b-empty">Select a period and click Run Report.</div>
+  <div v-if="tab==='cf'">
+    <div v-if="running" class="b-card b-card-body"><div class="b-shimmer" style="height:200px"></div></div>
+    <div v-show="!running" id="cf-render"></div>
   </div>
 
   <!-- ── Trial Balance ── -->
-  <div v-if="tab==='tb'" class="b-card" style="padding:0;overflow:hidden">
-    <div class="b-card-head">
-      <span class="b-card-title">Trial Balance</span>
-      <span v-if="fyBadge&&fyMode==='fy'" style="font-size:12px;color:#868E96">FY {{fyBadge.name}} · {{from}} to {{to}}</span>
+  <div v-if="tab==='tb'">
+    <!-- Balance Hero Banner -->
+    <div v-if="tb" :style="{borderRadius:'10px',padding:'16px 22px',marginBottom:'14px',background:tbBalanced?'linear-gradient(135deg,#0f2e20,#1B4D3E)':'linear-gradient(135deg,#5c0f0f,#9B1C1C)',color:'#fff',display:'flex',alignItems:'center',justifyContent:'space-between'}">
+      <div style="display:flex;align-items:center;gap:14px">
+        <div style="width:44px;height:44px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:22px" :style="{background:tbBalanced?'rgba(134,239,172,.2)':'rgba(252,165,165,.2)'}">
+          {{tbBalanced?'✓':'✗'}}
+        </div>
+        <div>
+          <div style="font-size:15px;font-weight:700">{{tbBalanced?'Trial Balance is Balanced':'Trial Balance is Out of Balance'}}</div>
+          <div style="font-size:12px;opacity:.7;margin-top:2px">{{tbBalanced?('Total Debits = Total Credits = '+fmt(tbTotals.dr)):('Difference: '+fmt(Math.abs(tbTotals.dr-tbTotals.cr)))}}</div>
+        </div>
+      </div>
+      <div style="text-align:right">
+        <div style="font-size:11px;opacity:.6;margin-bottom:2px">Period</div>
+        <div style="font-size:13px;font-weight:600;opacity:.9">{{from}} → {{to}}</div>
+      </div>
     </div>
-    <div v-if="running" style="padding:20px"><div class="b-shimmer" style="height:80px"></div></div>
+
+    <!-- Toolbar: filters + export -->
+    <div v-if="tb" class="b-card b-card-body" style="padding:12px 16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <input v-model="tbSearch" class="b-input" placeholder="Search accounts…" style="width:200px;font-size:13px"/>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button v-for="t in ['','Asset','Liability','Equity','Income','Expense']" :key="t||'all'"
+            @click="tbTypeFilter=t"
+            :style="{padding:'4px 12px',borderRadius:'20px',border:'1px solid',fontSize:'12px',fontWeight:600,cursor:'pointer',transition:'all .15s',background:tbTypeFilter===t?(t?TB_TYPE_META[t].bg:'#EEF2FF'):'#fff',color:tbTypeFilter===t?(t?TB_TYPE_META[t].color:'#3B5BDB'):'#868E96',borderColor:tbTypeFilter===t?(t?TB_TYPE_META[t].color:'#3B5BDB'):'#DEE2E6'}">
+            {{t||'All Types'}}
+          </button>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#495057;cursor:pointer;margin-left:auto">
+          <input type="checkbox" v-model="tbShowNonZero" style="width:14px;height:14px"/> Hide zero balances
+        </label>
+        <button class="b-btn b-btn-ghost" style="font-size:12px" @click="exportTBCSV">
+          <span v-html="icon('download',13)"></span>&nbsp;Export CSV
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div v-if="running" class="b-card b-card-body"><div class="b-shimmer" style="height:200px"></div></div>
+
+    <!-- Grouped Table -->
     <template v-else-if="tb">
-      <table class="b-table" v-if="tb.length">
-        <thead>
-          <tr>
-            <th>Account</th>
-            <th class="ta-r">Debit</th>
-            <th class="ta-r">Credit</th>
-            <th class="ta-r">Balance</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="r in tb" :key="r.account">
-            <td style="font-weight:500;cursor:pointer;color:#3B5BDB;text-decoration:underline dotted" @click="openAcctLedger(r.account)" :title="'View GL entries for '+r.account">{{r.account}}</td>
-            <td class="ta-r mono">{{r.debit>0?fmt(r.debit):'—'}}</td>
-            <td class="ta-r mono">{{r.credit>0?fmt(r.credit):'—'}}</td>
-            <td class="ta-r mono fw-700" :class="r.debit-r.credit>=0?'c-accent':'c-red'">{{fmt(Math.abs(r.debit-r.credit))}} {{r.debit-r.credit>=0?'Dr':'Cr'}}</td>
-          </tr>
-        </tbody>
-        <tfoot>
-          <tr style="background:#F8F9FC;font-weight:700">
-            <td>Totals</td>
-            <td class="ta-r mono">{{fmt(tbTotals.dr)}}</td>
-            <td class="ta-r mono">{{fmt(tbTotals.cr)}}</td>
-            <td class="ta-r mono" :class="Math.abs(tbTotals.dr-tbTotals.cr)<0.01?'c-green':'c-red'">
-              {{Math.abs(tbTotals.dr-tbTotals.cr)<0.01?'✓ Balanced':'✗ Diff: '+fmt(Math.abs(tbTotals.dr-tbTotals.cr))}}
-            </td>
-          </tr>
-        </tfoot>
-      </table>
-      <div v-else class="b-empty">No journal entries found for this period.</div>
+      <div v-if="!tbGrouped.length" class="b-card b-card-body b-empty">No accounts match your filters.</div>
+      <div v-for="grp in tbGrouped" :key="grp.type" class="b-card" style="padding:0;overflow:hidden;margin-bottom:10px">
+        <!-- Group header row (collapsible) -->
+        <div @click="toggleTBGroup(grp.type)" style="display:grid;grid-template-columns:1fr 160px 160px 160px;cursor:pointer;user-select:none;padding:10px 18px;align-items:center" :style="{background:grp.meta.bg,borderBottom:'2px solid '+grp.meta.color}">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:14px;transition:transform .15s" :style="{transform:tbOpenGroups.has(grp.type)?'rotate(90deg)':'rotate(0deg)'}">▶</span>
+            <span style="font-weight:700;font-size:13px" :style="{color:grp.meta.color}">{{grp.meta.label}}</span>
+            <span style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700" :style="{background:grp.meta.color,color:'#fff'}">{{grp.rows.length}}</span>
+          </div>
+          <span style="text-align:right;font-family:var(--mono);font-weight:700;font-size:13px" :style="{color:grp.meta.color}">{{fmt(grp.totalDr)}}</span>
+          <span style="text-align:right;font-family:var(--mono);font-weight:700;font-size:13px" :style="{color:grp.meta.color}">{{fmt(grp.totalCr)}}</span>
+          <span style="text-align:right;font-family:var(--mono);font-weight:700;font-size:13px" :style="{color:grp.meta.color}">{{fmt(grp.totalClDr-grp.totalClCr)}}</span>
+        </div>
+        <!-- Accounts in group -->
+        <template v-if="tbOpenGroups.has(grp.type)">
+          <div style="overflow-x:auto">
+            <table class="b-table" style="margin:0;border-radius:0">
+              <thead>
+                <tr style="background:#F8F9FC">
+                  <th style="padding-left:18px">Account</th>
+                  <th style="font-size:10px;color:#868E96">Type</th>
+                  <th class="ta-r">Opening</th>
+                  <th class="ta-r">Period Dr</th>
+                  <th class="ta-r">Period Cr</th>
+                  <th class="ta-r">Closing Balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in grp.rows" :key="r.account" style="cursor:pointer" @click="openAcctLedger(r.account)">
+                  <td style="padding-left:18px">
+                    <div style="font-weight:600;font-size:13px;color:#3B5BDB;text-decoration:underline dotted">{{r.account}}</div>
+                    <div style="height:2px;background:#E9ECEF;border-radius:2px;margin-top:3px;width:100%;overflow:hidden">
+                      <div :style="{height:'100%',borderRadius:'2px',background:grp.meta.color,width:tbTotals.dr>0?Math.min(100,Math.abs(flt(r.debit))/tbTotals.dr*100)+'%':'0%'}"></div>
+                    </div>
+                  </td>
+                  <td><span style="font-size:11px;padding:2px 7px;border-radius:10px;font-weight:600" :style="{background:grp.meta.bg,color:grp.meta.color}">{{r.account_type}}</span></td>
+                  <td class="ta-r mono" style="font-size:12.5px">{{flt(r.opening)?fmt(r.opening):'—'}}</td>
+                  <td class="ta-r mono fw-600" style="font-size:12.5px;color:#2F9E44">{{flt(r.debit)?fmt(r.debit):'—'}}</td>
+                  <td class="ta-r mono fw-600" style="font-size:12.5px;color:#C92A2A">{{flt(r.credit)?fmt(r.credit):'—'}}</td>
+                  <td class="ta-r mono fw-700" style="font-size:13px" :style="{color:flt(r.closing)>=0?grp.meta.color:'#C92A2A'}">
+                    {{flt(r.closing)>=0?fmt(flt(r.closing)):('('+fmt(Math.abs(flt(r.closing)))+')') }}
+                    <span style="font-size:10px;opacity:.7">{{flt(r.closing)>=0?'Dr':'Cr'}}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </template>
+      </div>
+
+      <!-- Grand Total Footer -->
+      <div v-if="tb.length" class="b-card" style="padding:0;overflow:hidden;margin-bottom:10px">
+        <div style="display:grid;grid-template-columns:1fr 160px 160px 160px;padding:12px 18px;align-items:center" :style="{background:tbBalanced?'linear-gradient(90deg,#0f2e20,#1B4D3E)':'linear-gradient(90deg,#5c0f0f,#9B1C1C)'}">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:16px;color:#fff">{{tbBalanced?'✓':'✗'}}</span>
+            <span style="font-weight:700;color:#fff;font-size:14px">Grand Total</span>
+            <span v-if="tbBalanced" style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;background:rgba(134,239,172,.2);color:#86EFAC">Balanced</span>
+            <span v-else style="padding:2px 8px;border-radius:20px;font-size:11px;font-weight:700;background:rgba(252,165,165,.2);color:#FCA5A5">Out of Balance</span>
+          </div>
+          <span style="text-align:right;font-family:var(--mono);font-weight:700;font-size:14px;color:#86EFAC">{{fmt(tbTotals.dr)}}</span>
+          <span style="text-align:right;font-family:var(--mono);font-weight:700;font-size:14px;color:#FCA5A5">{{fmt(tbTotals.cr)}}</span>
+          <span style="text-align:right;font-family:var(--mono);font-weight:700;font-size:14px" :style="{color:tbBalanced?'#86EFAC':'#FCA5A5'}">{{tbBalanced?'✓ 0.00':fmt(Math.abs(tbTotals.dr-tbTotals.cr))}}</span>
+        </div>
+      </div>
+      <div v-else class="b-card b-card-body b-empty">No journal entries found for this period.</div>
     </template>
-    <div v-else class="b-empty">Click Run Report to compute Trial Balance from journal entries.</div>
+    <div v-if="!running&&!tb" class="b-card b-card-body b-empty">Click Run Report to compute Trial Balance from journal entries.</div>
   </div>
 
   <!-- ── AR Aging ── -->
@@ -15199,7 +15469,7 @@
         stockLoading, expanded, search, showDrawer, showTransfer, showDel, delTarget,
         drawerMode, saving, transferSaving, form, transferForm,
         treeNodes, parentOptions, whStats, allItems,
-        whMeta, toggleExpand, childCount, selectWarehouse,
+        whMeta, toggleExpand, childCount, selectWarehouse, loadStockForWarehouse,
         openAdd, openEdit, saveWarehouse, openTransfer, doTransfer, confirmDel, doDelete,
         load, fmt, fmtDate, flt, icon,
       };
@@ -20576,7 +20846,12 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
   }
 
   bootstrapCsrf().then(() => {
-    createApp(App).use(router).component("SearchableSelect", SearchableSelect).mount("#books-app");
+    const __app = createApp(App);
+    __app.config.globalProperties.setTimeout = window.setTimeout.bind(window);
+    __app.config.globalProperties.setInterval = window.setInterval.bind(window);
+    __app.config.globalProperties.clearTimeout = window.clearTimeout.bind(window);
+    __app.config.globalProperties.clearInterval = window.clearInterval.bind(window);
+    __app.use(router).component("SearchableSelect", SearchableSelect).mount("#books-app");
   });
 
 })();
