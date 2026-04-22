@@ -16,7 +16,7 @@ def validate_fiscal_year(posting_date: str, company: str) -> str:
     """
     fy = frappe.db.sql("""
         SELECT name, lock_date FROM `tabFiscal Year`
-        WHERE company          = %(company)s
+        WHERE LOWER(company)   = LOWER(%(company)s)
           AND is_closed         = 0
           AND year_start_date  <= %(date)s
           AND year_end_date    >= %(date)s

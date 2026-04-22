@@ -22,7 +22,10 @@ class PurchaseInvoice(Document):
         self.validate_accounts()
         self.set_status()
         if self.posting_date and self.company:
-            self.fiscal_year = validate_fiscal_year(self.posting_date, self.company)
+            try:
+                self.fiscal_year = validate_fiscal_year(self.posting_date, self.company)
+            except Exception:
+                self.fiscal_year = ""
 
     def calculate_totals(self):
         net = sum(flt(i.qty) * flt(i.rate) for i in self.items)

@@ -236,7 +236,7 @@
     const bg = type === "error" ? "#C92A2A" : type === "warning" ? "#E67700" : "#2F9E44";
     el.style.cssText = `position:fixed;top:20px;right:20px;z-index:99999;
     background:${bg};color:#fff;padding:12px 20px;border-radius:8px;
-    font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif;
+    font-size:13px;font-weight:500;font-family:'Inter',system-ui,sans-serif;
     box-shadow:0 4px 20px rgba(0,0,0,.2);max-width:360px;line-height:1.4;
     animation:toastIn .2s ease`;
     el.textContent = msg;
@@ -3158,15 +3158,110 @@
       const deleteTarget = ref(null);
       const deleting = ref(false);
 
+      const drawerTab = ref("overview");
+      const formErrors = reactive({});
+
+      // ── GST Treatment config (rules-driven, no hardcoded conditions in template) ──
+      const GST_RULES = {
+        "Registered Business": {
+          badge: { label:"Registered",  bg:"#EBFBEE", color:"#2F9E44" },
+          showGstin: true,  requireGstin: true,
+          showPan: true,    requirePan: false,
+          showPlaceOfSupply: true, requirePlaceOfSupply: true,
+          requireIndiaCountry: false,
+          taxType: "GST",
+          hint: "GSTIN is mandatory for Registered Businesses.",
+          gstinPlaceholder: "27AAPFU0939F1ZV",
+        },
+        "Unregistered Business": {
+          badge: { label:"Unregistered", bg:"#FFF3BF", color:"#E67700" },
+          showGstin: false, requireGstin: false,
+          showPan: true,    requirePan: false,
+          showPlaceOfSupply: true,  requirePlaceOfSupply: true,
+          requireIndiaCountry: false,
+          taxType: "GST",
+          hint: "No GSTIN required. Tax will be applied based on Place of Supply.",
+        },
+        "Overseas": {
+          badge: { label:"Overseas", bg:"#E7F5FF", color:"#1971C2" },
+          showGstin: false, requireGstin: false,
+          showPan: false,   requirePan: false,
+          showPlaceOfSupply: false, requirePlaceOfSupply: false,
+          requireIndiaCountry: false,
+          taxType: "IGST",
+          hint: "IGST will be applied. Ensure the country is set correctly.",
+          countryNote: "Set country to the customer's country (outside India).",
+        },
+        "SEZ": {
+          badge: { label:"SEZ", bg:"#F3F0FF", color:"#7048E8" },
+          showGstin: true,  requireGstin: true,
+          showPan: true,    requirePan: false,
+          showPlaceOfSupply: true,  requirePlaceOfSupply: true,
+          requireIndiaCountry: false,
+          taxType: "GST 0%",
+          hint: "Supplies to SEZ are zero-rated. GSTIN is mandatory.",
+          gstinPlaceholder: "SEZ unit GSTIN",
+        },
+        "Consumer": {
+          badge: { label:"Consumer", bg:"#F8F9FA", color:"#495057" },
+          showGstin: false, requireGstin: false,
+          showPan: false,   requirePan: false,
+          showPlaceOfSupply: false, requirePlaceOfSupply: false,
+          requireIndiaCountry: false,
+          taxType: "GST",
+          hint: "B2C customer. No GSTIN required.",
+        },
+      };
+      const GST_TREATMENT_OPTIONS = Object.keys(GST_RULES);
+      const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
       const form = reactive({
         name: "",
-        customer_name: "", customer_type: "Company",
+        customer_name: "", customer_type: "Company", salutation: "",
+        first_name: "", last_name: "", company_name: "",
+        gst_treatment: "Registered Business",
         tax_id: "", default_currency: "INR", credit_limit: 0,
         email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
+        // billing address
         address_line1: "", address_line2: "",
         city: "", state: "", pincode: "", country: "India",
-        payment_terms: "", disabled: 0,
+        // shipping address
+        ship_address_line1: "", ship_address_line2: "",
+        ship_city: "", ship_state: "", ship_pincode: "", ship_country: "India",
+        // other details
+        payment_terms: "", place_of_supply: "", source: "",
+        pan_no: "", opening_balance: 0,
+        // bank
+        bank_name: "", bank_account_no: "", bank_ifsc: "",
+        // internal
+        notes: "", disabled: 0,
       });
+
+      const activeRule = computed(() => GST_RULES[form.gst_treatment] || GST_RULES["Registered Business"]);
+
+      // Clear GSTIN/POS errors when treatment changes
+      watch(() => form.gst_treatment, () => {
+        delete formErrors.tax_id;
+        delete formErrors.place_of_supply;
+        if (!activeRule.value.showGstin) form.tax_id = "";
+        if (!activeRule.value.showPlaceOfSupply) form.place_of_supply = "";
+      });
+
+      function validateCustomerForm() {
+        Object.keys(formErrors).forEach(k => delete formErrors[k]);
+        const rule = activeRule.value;
+        if (!form.customer_name.trim()) formErrors.customer_name = "Display name is required";
+        if (form.email_id && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email_id)) formErrors.email_id = "Invalid email address";
+        if (rule.requireGstin && !form.tax_id.trim()) {
+          formErrors.tax_id = "GSTIN is required for " + form.gst_treatment;
+        } else if (rule.showGstin && form.tax_id.trim() && !GSTIN_REGEX.test(form.tax_id.trim())) {
+          formErrors.tax_id = "Invalid GSTIN format (e.g. 27AAPFU0939F1ZV)";
+        }
+        if (rule.requirePlaceOfSupply && !form.place_of_supply) {
+          formErrors.place_of_supply = "Place of Supply is required";
+        }
+        return Object.keys(formErrors).length === 0;
+      }
 
       const counts = computed(() => ({
         all: list.value.length,
@@ -3204,13 +3299,18 @@
       }
 
       function resetForm() {
+        drawerTab.value = "overview";
+        Object.keys(formErrors).forEach(k => delete formErrors[k]);
         Object.assign(form, {
-          name: "", customer_name: "", customer_type: "Company",
+          name: "", customer_name: "", customer_type: "Company", salutation: "",
+          first_name: "", last_name: "", company_name: "",
+          gst_treatment: "Registered Business",
           tax_id: "", default_currency: "INR", credit_limit: 0,
           email_id: "", mobile_code: "+91", mobile_no: "", phone: "", website: "",
-          address_line1: "", address_line2: "",
-          city: "", state: "", pincode: "", country: "India",
-          payment_terms: "", disabled: 0,
+          address_line1: "", address_line2: "", city: "", state: "", pincode: "", country: "India",
+          ship_address_line1: "", ship_address_line2: "", ship_city: "", ship_state: "", ship_pincode: "", ship_country: "India",
+          payment_terms: "", place_of_supply: "", source: "", pan_no: "", opening_balance: 0,
+          bank_name: "", bank_account_no: "", bank_ifsc: "", notes: "", disabled: 0,
         });
       }
 
@@ -3227,16 +3327,22 @@
         showDrawer.value = true;
         try {
           const doc = await apiGET("frappe.client.get", { doctype: "Customer", name });
+          const mno = doc.mobile_no || "";
           Object.assign(form, {
             name: doc.name,
             customer_name: doc.customer_name || "",
             customer_type: doc.customer_type || "Company",
+            salutation: doc.salutation || "",
+            first_name: doc.first_name || "",
+            last_name: doc.last_name || "",
+            company_name: doc.company_name || "",
+            gst_treatment: doc.gst_treatment || "Registered Business",
             tax_id: doc.tax_id || "",
             default_currency: doc.default_currency || "INR",
             credit_limit: doc.credit_limit || 0,
             email_id: doc.email_id || "",
-            mobile_code: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.split(" ")[0] : "+91",
-            mobile_no: (doc.mobile_no || "").includes(" ") && (doc.mobile_no || "").startsWith("+") ? doc.mobile_no.substring(doc.mobile_no.indexOf(" ") + 1) : (doc.mobile_no || ""),
+            mobile_code: mno.startsWith("+") && mno.includes(" ") ? mno.split(" ")[0] : "+91",
+            mobile_no: mno.startsWith("+") && mno.includes(" ") ? mno.substring(mno.indexOf(" ")+1) : mno,
             phone: doc.phone || "",
             website: doc.website || "",
             address_line1: doc.address_line1 || "",
@@ -3245,7 +3351,21 @@
             state: doc.state || "",
             pincode: doc.pincode || "",
             country: doc.country || "India",
+            ship_address_line1: doc.ship_address_line1 || "",
+            ship_address_line2: doc.ship_address_line2 || "",
+            ship_city: doc.ship_city || "",
+            ship_state: doc.ship_state || "",
+            ship_pincode: doc.ship_pincode || "",
+            ship_country: doc.ship_country || "India",
             payment_terms: doc.payment_terms || "",
+            place_of_supply: doc.place_of_supply || "",
+            source: doc.source || "",
+            pan_no: doc.pan_no || "",
+            opening_balance: doc.opening_balance || 0,
+            bank_name: doc.bank_name || "",
+            bank_account_no: doc.bank_account_no || "",
+            bank_ifsc: doc.bank_ifsc || "",
+            notes: doc.notes || "",
             disabled: doc.disabled || 0,
           });
         } catch (e) {
@@ -3255,8 +3375,11 @@
       }
 
       async function saveCustomer() {
-        if (!form.customer_name.trim()) { toast("Customer Name is required", "error"); return; }
-        if (form.email_id && !form.email_id.includes("@")) { toast("Invalid email address", "error"); return; }
+        if (!validateCustomerForm()) {
+          const firstErr = Object.values(formErrors)[0];
+          toast(firstErr, "error");
+          return;
+        }
         saving.value = true;
         try {
           const doc = {
@@ -3264,6 +3387,11 @@
             ...(drawerMode.value === "edit" ? { name: form.name } : { naming_series: "CUST-.YYYY.-.#####" }),
             customer_name: form.customer_name.trim(),
             customer_type: form.customer_type,
+            salutation: form.salutation,
+            first_name: form.first_name.trim(),
+            last_name: form.last_name.trim(),
+            company_name: form.company_name.trim(),
+            gst_treatment: form.gst_treatment,
             tax_id: form.tax_id.trim(),
             default_currency: form.default_currency,
             credit_limit: parseFloat(form.credit_limit) || 0,
@@ -3277,7 +3405,21 @@
             state: form.state.trim(),
             pincode: form.pincode.trim(),
             country: form.country.trim() || "India",
+            ship_address_line1: form.ship_address_line1.trim(),
+            ship_address_line2: form.ship_address_line2.trim(),
+            ship_city: form.ship_city.trim(),
+            ship_state: form.ship_state.trim(),
+            ship_pincode: form.ship_pincode.trim(),
+            ship_country: form.ship_country.trim() || "India",
             payment_terms: form.payment_terms,
+            place_of_supply: form.place_of_supply,
+            source: form.source,
+            pan_no: form.pan_no.trim(),
+            opening_balance: parseFloat(form.opening_balance) || 0,
+            bank_name: form.bank_name.trim(),
+            bank_account_no: form.bank_account_no.trim(),
+            bank_ifsc: form.bank_ifsc.trim(),
+            notes: form.notes.trim(),
             disabled: form.disabled ? 1 : 0,
           };
           let doc_to_save = doc;
@@ -3317,7 +3459,8 @@
 
       return {
         list, loading, search, activeFilter, filtered, counts,
-        showDrawer, drawerMode, drawerLoading, saving, form,
+        showDrawer, drawerMode, drawerLoading, drawerTab, saving, form, formErrors,
+        activeRule, GST_TREATMENT_OPTIONS, GST_RULES,
         showDelete, deleteTarget, deleting,
         load, openAdd, openEdit, saveCustomer, confirmDelete, doDelete,
         icon, fmt, fmtDate,
@@ -3435,150 +3578,370 @@
 
   <!-- ── Add / Edit Drawer ── -->
   <teleport to="body">
-    <transition name="cust-drawer-fade">
-      <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
-        <transition name="cust-drawer-slide">
-          <div v-if="showDrawer" class="cust-drawer">
+    <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
+      <div class="cust-drawer" style="width:680px;max-width:98vw">
 
-            <!-- Drawer Header -->
-            <div class="cust-drawer-header">
-              <div class="cust-drawer-header-left">
-                <div class="cust-drawer-icon">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                </div>
-                <div>
-                  <div class="cust-drawer-title">{{drawerMode==='add'?'New Customer':'Edit Customer'}}</div>
-                  <div class="cust-drawer-sub">{{drawerMode==='edit'?form.name:'Fill in customer details'}}</div>
-                </div>
+        <!-- Header -->
+        <div class="cust-drawer-header" style="background:linear-gradient(135deg,#3B5BDB,#2244b8);padding:18px 24px">
+          <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:0">
+            <div style="width:40px;height:40px;border-radius:10px;background:rgba(255,255,255,.18);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            </div>
+            <div style="min-width:0">
+              <div style="font-size:16px;font-weight:700;color:#fff">{{drawerMode==='add'?'New Customer':'Edit Customer'}}</div>
+              <div style="font-size:12px;color:rgba(255,255,255,.7);margin-top:1px">{{drawerMode==='edit'?form.name:'Fill in customer details'}}</div>
+            </div>
+          </div>
+          <button @click="showDrawer=false" style="background:rgba(255,255,255,.15);border:none;border-radius:6px;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0" v-html="icon('x',14)"></button>
+        </div>
+
+        <!-- Tabs -->
+        <div style="display:flex;gap:0;border-bottom:2px solid #e8ecf0;background:#fff;padding:0 24px">
+          <button v-for="t in [{k:'overview',l:'Overview'},{k:'address',l:'Address'},{k:'other',l:'Other Details'},{k:'bank',l:'Bank Details'},{k:'remarks',l:'Remarks'}]"
+            :key="t.k" @click="drawerTab=t.k"
+            :style="'padding:11px 16px;border:none;border-bottom:2px solid '+(drawerTab===t.k?'#3B5BDB':'transparent')+';margin-bottom:-2px;background:none;font-size:13px;font-weight:'+(drawerTab===t.k?'600':'500')+';color:'+(drawerTab===t.k?'#3B5BDB':'#6b7280')+';cursor:pointer;font-family:inherit;transition:all .15s'">
+            {{t.l}}
+          </button>
+        </div>
+
+        <!-- Loading -->
+        <div v-if="drawerLoading" style="flex:1;display:grid;place-items:center;color:#9ca3af;font-size:13px;padding:40px">
+          Loading customer…
+        </div>
+
+        <!-- Body -->
+        <div v-else class="cust-drawer-body" style="padding:24px;overflow-y:auto;flex:1">
+
+          <!-- ── Overview Tab ── -->
+          <template v-if="drawerTab==='overview'">
+
+            <!-- 1. Customer Type -->
+            <div style="margin-bottom:20px">
+              <label class="nim-label" style="margin-bottom:8px;display:block">Customer Type</label>
+              <div style="display:flex;gap:24px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;font-weight:500;color:#374151">
+                  <input type="radio" v-model="form.customer_type" value="Company" style="width:16px;height:16px;accent-color:#3B5BDB;cursor:pointer"/>
+                  Business
+                </label>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13.5px;font-weight:500;color:#374151">
+                  <input type="radio" v-model="form.customer_type" value="Individual" style="width:16px;height:16px;accent-color:#3B5BDB;cursor:pointer"/>
+                  Individual
+                </label>
               </div>
-              <button class="nim-close" @click="showDrawer=false" v-html="icon('x',15)"></button>
             </div>
 
-            <!-- Loading state -->
-            <div v-if="drawerLoading" style="flex:1;display:grid;place-items:center;color:#9ca3af;font-size:13px">
-              <div>Loading customer…</div>
+            <!-- 2. GST Treatment -->
+            <div style="margin-bottom:20px">
+              <label class="nim-label" style="margin-bottom:8px;display:block">GST Treatment</label>
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                <button v-for="opt in GST_TREATMENT_OPTIONS" :key="opt" @click="form.gst_treatment=opt" type="button"
+                  :style="'padding:6px 14px;border-radius:20px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;transition:all .15s;border:1.5px solid '+(form.gst_treatment===opt?GST_RULES[opt].badge.color:'#e2e8f0')+';background:'+(form.gst_treatment===opt?GST_RULES[opt].badge.bg:'#fff')+';color:'+(form.gst_treatment===opt?GST_RULES[opt].badge.color:'#6b7280')">
+                  {{opt}}
+                </button>
+              </div>
+              <!-- Contextual hint -->
+              <div v-if="activeRule.hint" style="margin-top:8px;padding:8px 12px;background:#f8f9fc;border-left:3px solid;border-radius:0 6px 6px 0;font-size:12px;color:#6b7280;line-height:1.5"
+                :style="{borderColor: activeRule.badge.color}">
+                <span :style="{color:activeRule.badge.color,fontWeight:'600'}">{{activeRule.badge.label}}:</span> {{activeRule.hint}}
+                <span v-if="activeRule.taxType"> · Tax: <strong>{{activeRule.taxType}}</strong></span>
+              </div>
             </div>
 
-            <!-- Drawer Body -->
-            <div v-else class="cust-drawer-body">
-
-              <div class="cust-sec-label">Basic Information</div>
-              <div class="nim-grid-3 nim-mb">
-                <div class="nim-field" style="grid-column:span 3">
-                  <label class="nim-label">Customer Name <span class="nim-req">*</span></label>
-                  <input v-model="form.customer_name" class="nim-input" placeholder="Full name or company name"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Customer Type</label>
-                  <select v-model="form.customer_type" class="nim-select">
-                    <option>Company</option><option>Individual</option>
-                  </select>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">GSTIN / Tax ID</label>
-                  <input v-model="form.tax_id" class="nim-input" placeholder="27AAPFU0939F1ZV"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Currency</label>
-                  <select v-model="form.default_currency" class="nim-select">
-                    <option>INR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AED</option><option>SGD</option>
-                  </select>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Credit Limit ({{ {'INR':'₹','USD':'$','EUR':'€','GBP':'£','AED':'د.إ','SGD':'S$'}[form.default_currency] || '₹' }})</label>
-                  <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Payment Terms</label>
-                  <select v-model="form.payment_terms" class="nim-select">
-                    <option value="">Select</option>
-                    <option>Net 30</option><option>Net 15</option><option>Net 7</option>
-                    <option>Due on Receipt</option><option>End of Month</option>
-                  </select>
-                </div>
+            <!-- 3. Primary Contact -->
+            <div style="margin-bottom:16px">
+              <label class="nim-label" style="margin-bottom:8px;display:block">Primary Contact</label>
+              <div style="display:grid;grid-template-columns:140px 1fr 1fr;gap:10px">
+                <select v-model="form.salutation" class="nim-input" style="cursor:pointer">
+                  <option value="">Salutation</option>
+                  <option>Mr.</option><option>Ms.</option><option>Mrs.</option><option>Dr.</option><option>Prof.</option>
+                </select>
+                <input v-model="form.first_name" class="nim-input" placeholder="First Name"/>
+                <input v-model="form.last_name" class="nim-input" placeholder="Last Name"/>
               </div>
+            </div>
 
-              <div class="cust-sec-label">Contact</div>
-              <div class="nim-grid-2 nim-mb">
-                <div class="nim-field">
-                  <label class="nim-label">Email</label>
-                  <input v-model="form.email_id" type="email" class="nim-input" placeholder="email@example.com"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Mobile</label>
-                  <div style="display:flex;">
-                    <select v-model="form.mobile_code" style="width:75px; border-right:none; border-top-right-radius:0; border-bottom-right-radius:0; text-align:center; background:#f9fafb; padding:0 5px;" class="nim-input">
-                      <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
-                      <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
-                      <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
-                    </select>
-                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"/>
+            <!-- 3. Company Name -->
+            <div style="margin-bottom:16px">
+              <label class="nim-label">Company Name</label>
+              <input v-model="form.company_name" class="nim-input" placeholder="Company name"/>
+            </div>
+
+            <!-- 5. Display Name -->
+            <div style="margin-bottom:16px">
+              <label class="nim-label">Display Name <span class="nim-req">*</span></label>
+              <input v-model="form.customer_name" class="nim-input"
+                :style="formErrors.customer_name?'border-color:#dc2626;background:#fff5f5':''"
+                placeholder="Name shown on invoices and orders"
+                @input="delete formErrors.customer_name"/>
+              <div v-if="formErrors.customer_name" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                {{formErrors.customer_name}}
+              </div>
+            </div>
+
+            <!-- 6. Dynamic GST fields (GSTIN / PAN) — shown based on activeRule -->
+            <transition name="gst-field">
+              <div v-if="activeRule.showGstin || activeRule.showPan"
+                style="display:grid;gap:14px;margin-bottom:16px"
+                :style="{gridTemplateColumns: (activeRule.showGstin && activeRule.showPan) ? '1fr 1fr' : '1fr'}">
+                <div v-if="activeRule.showGstin">
+                  <label class="nim-label">
+                    GSTIN / Tax ID
+                    <span v-if="activeRule.requireGstin" class="nim-req">*</span>
+                    <span v-else style="font-size:11px;font-weight:400;color:#9ca3af;margin-left:4px">(optional)</span>
+                  </label>
+                  <input v-model="form.tax_id" class="nim-input"
+                    :style="formErrors.tax_id?'border-color:#dc2626;background:#fff5f5':''"
+                    :placeholder="activeRule.gstinPlaceholder||'27AAPFU0939F1ZV'"
+                    style="font-family:var(--mono);letter-spacing:.04em"
+                    @input="form.tax_id=form.tax_id.toUpperCase();delete formErrors.tax_id"/>
+                  <div v-if="formErrors.tax_id" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                    {{formErrors.tax_id}}
+                  </div>
+                  <div v-else-if="form.tax_id && !formErrors.tax_id && /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(form.tax_id)"
+                    style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    Valid GSTIN
                   </div>
                 </div>
-                <div class="nim-field">
-                  <label class="nim-label">Phone</label>
-                  <input v-model="form.phone" class="nim-input" placeholder="Landline"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Website</label>
-                  <input v-model="form.website" class="nim-input" placeholder="https://"/>
+                <div v-if="activeRule.showPan">
+                  <label class="nim-label">PAN Number <span style="font-size:11px;font-weight:400;color:#9ca3af">(optional)</span></label>
+                  <input v-model="form.pan_no" class="nim-input" placeholder="ABCDE1234F"
+                    style="font-family:var(--mono);letter-spacing:.04em"
+                    @input="form.pan_no=form.pan_no.toUpperCase()"/>
                 </div>
               </div>
+            </transition>
 
-              <div class="cust-sec-label">Billing Address</div>
-              <div class="nim-grid-2 nim-mb">
-                <div class="nim-field" style="grid-column:span 2">
-                  <label class="nim-label">Address Line 1</label>
-                  <input v-model="form.address_line1" class="nim-input" placeholder="Street, building no."/>
-                </div>
-                <div class="nim-field" style="grid-column:span 2">
-                  <label class="nim-label">Address Line 2</label>
-                  <input v-model="form.address_line2" class="nim-input" placeholder="Area, landmark"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">City</label>
-                  <input v-model="form.city" class="nim-input" placeholder="Mumbai"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">State</label>
-                  <input v-model="form.state" class="nim-input" placeholder="Maharashtra"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Pincode</label>
-                  <input v-model="form.pincode" class="nim-input" placeholder="400001"/>
-                </div>
-                <div class="nim-field">
-                  <label class="nim-label">Country</label>
-                  <select v-model="form.country" class="nim-select">
-                    <option>India</option><option>United States</option><option>United Kingdom</option>
-                    <option>Canada</option><option>Australia</option><option>Singapore</option>
-                    <option>United Arab Emirates</option><option>Saudi Arabia</option>
-                    <option>Germany</option><option>France</option>
+            <div style="height:1px;background:#e8ecf0;margin-bottom:20px"></div>
+
+            <!-- 5. Email & Phone -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
+              <div>
+                <label class="nim-label">Email Address</label>
+                <input v-model="form.email_id" type="email" class="nim-input" placeholder="name@company.com"/>
+              </div>
+              <div>
+                <label class="nim-label">Work Phone</label>
+                <input v-model="form.phone" class="nim-input" placeholder="022-12345678"/>
+              </div>
+              <div>
+                <label class="nim-label">Mobile</label>
+                <div style="display:flex;gap:0">
+                  <select v-model="form.mobile_code" class="nim-input" style="width:90px;border-right:none;border-radius:8px 0 0 8px;background:#f8f9fc;cursor:pointer;flex-shrink:0;padding:0 6px">
+                    <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
+                    <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
+                    <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
                   </select>
+                  <input v-model="form.mobile_no" class="nim-input" style="border-radius:0 8px 8px 0;flex:1" placeholder="98765 43210"/>
                 </div>
               </div>
-
-              <!-- Disable toggle (edit only) -->
-              <div v-if="drawerMode==='edit'" class="cust-disable-box" @click="form.disabled = form.disabled?0:1">
-                <input type="checkbox" :checked="!!form.disabled" @click.stop="form.disabled=form.disabled?0:1" style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer"/>
-                <label style="font-size:13px;color:#dc2626;cursor:pointer">Disable this customer (won't appear in invoice dropdowns)</label>
+              <div>
+                <label class="nim-label">Website</label>
+                <input v-model="form.website" class="nim-input" placeholder="https://company.com"/>
               </div>
-
             </div>
 
-            <!-- Drawer Footer -->
-            <div class="nim-footer">
-              <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
-              <button class="nim-btn nim-btn-primary" @click="saveCustomer" :disabled="saving">
-                <span v-if="saving" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
-                {{saving ? 'Saving…' : (drawerMode==='add' ? 'Create Customer' : 'Save Changes')}}
-              </button>
+            <div style="height:1px;background:#e8ecf0;margin-bottom:20px"></div>
+
+            <!-- 6. Billing Preferences -->
+            <div class="cust-sec-label" style="margin-top:0">Billing Preferences</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:20px">
+              <div>
+                <label class="nim-label">Currency</label>
+                <select v-model="form.default_currency" class="nim-input" style="cursor:pointer">
+                  <option>INR</option><option>USD</option><option>EUR</option><option>GBP</option><option>AED</option><option>SGD</option><option>JPY</option><option>CAD</option><option>AUD</option>
+                </select>
+              </div>
+              <div>
+                <label class="nim-label">Payment Terms</label>
+                <select v-model="form.payment_terms" class="nim-input" style="cursor:pointer">
+                  <option value="">— Select —</option>
+                  <option>Net 7</option><option>Net 15</option><option>Net 30</option><option>Net 45</option><option>Net 60</option>
+                  <option>Due on Receipt</option><option>End of Month</option>
+                </select>
+              </div>
+              <div>
+                <label class="nim-label">Credit Limit ({{{'INR':'₹','USD':'$','EUR':'€','GBP':'£','AED':'د.إ','SGD':'S$'}[form.default_currency]||'₹'}})</label>
+                <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"/>
+              </div>
             </div>
 
-          </div>
-        </transition>
+            <div v-if="drawerMode==='edit'" style="padding:14px 16px;background:#fff5f5;border-radius:8px;border:1px solid #fecaca;display:flex;align-items:center;gap:10px;cursor:pointer" @click="form.disabled=form.disabled?0:1">
+              <input type="checkbox" :checked="!!form.disabled" @click.stop="form.disabled=form.disabled?0:1" style="width:16px;height:16px;accent-color:#dc2626;cursor:pointer;flex-shrink:0"/>
+              <div>
+                <div style="font-size:13px;font-weight:600;color:#dc2626">Disable Customer</div>
+                <div style="font-size:12px;color:#9ca3af;margin-top:1px">Disabled customers won't appear in invoice and order dropdowns</div>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── Address Tab ── -->
+          <template v-else-if="drawerTab==='address'">
+            <div class="cust-sec-label" style="margin-top:0">Billing Address</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
+              <div style="grid-column:span 2">
+                <label class="nim-label">Address Line 1</label>
+                <input v-model="form.address_line1" class="nim-input" placeholder="Street, building no., floor"/>
+              </div>
+              <div style="grid-column:span 2">
+                <label class="nim-label">Address Line 2</label>
+                <input v-model="form.address_line2" class="nim-input" placeholder="Area, landmark, district"/>
+              </div>
+              <div>
+                <label class="nim-label">City</label>
+                <input v-model="form.city" class="nim-input" placeholder="Mumbai"/>
+              </div>
+              <div>
+                <label class="nim-label">State</label>
+                <select v-model="form.state" class="nim-input" style="cursor:pointer">
+                  <option value="">— Select State —</option>
+                  <option v-for="s in ['Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Karnataka','Kerala','Madhya Pradesh','Maharashtra','Manipur','Meghalaya','Mizoram','Nagaland','Odisha','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana','Tripura','Uttar Pradesh','Uttarakhand','West Bengal','Delhi','Jammu and Kashmir','Ladakh']" :key="s" :value="s">{{s}}</option>
+                </select>
+              </div>
+              <div>
+                <label class="nim-label">Pincode</label>
+                <input v-model="form.pincode" class="nim-input" placeholder="400001"/>
+              </div>
+              <div>
+                <label class="nim-label">Country</label>
+                <select v-model="form.country" class="nim-input" style="cursor:pointer">
+                  <option>India</option><option>United States</option><option>United Kingdom</option><option>Canada</option><option>Australia</option><option>Singapore</option><option>United Arab Emirates</option><option>Saudi Arabia</option><option>Germany</option><option>France</option><option>Japan</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="cust-sec-label">Shipping Address <span style="font-size:11px;font-weight:400;color:#9ca3af;margin-left:6px">— leave blank to use billing address</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+              <div style="grid-column:span 2">
+                <label class="nim-label">Address Line 1</label>
+                <input v-model="form.ship_address_line1" class="nim-input" placeholder="Street, building no., floor"/>
+              </div>
+              <div style="grid-column:span 2">
+                <label class="nim-label">Address Line 2</label>
+                <input v-model="form.ship_address_line2" class="nim-input" placeholder="Area, landmark, district"/>
+              </div>
+              <div>
+                <label class="nim-label">City</label>
+                <input v-model="form.ship_city" class="nim-input" placeholder="Mumbai"/>
+              </div>
+              <div>
+                <label class="nim-label">State</label>
+                <select v-model="form.ship_state" class="nim-input" style="cursor:pointer">
+                  <option value="">— Select State —</option>
+                  <option v-for="s in ['Andhra Pradesh','Arunachal Pradesh','Assam','Bihar','Chhattisgarh','Goa','Gujarat','Haryana','Himachal Pradesh','Jharkhand','Karnataka','Kerala','Madhya Pradesh','Maharashtra','Manipur','Meghalaya','Mizoram','Nagaland','Odisha','Punjab','Rajasthan','Sikkim','Tamil Nadu','Telangana','Tripura','Uttar Pradesh','Uttarakhand','West Bengal','Delhi','Jammu and Kashmir','Ladakh']" :key="s" :value="s">{{s}}</option>
+                </select>
+              </div>
+              <div>
+                <label class="nim-label">Pincode</label>
+                <input v-model="form.ship_pincode" class="nim-input" placeholder="400001"/>
+              </div>
+              <div>
+                <label class="nim-label">Country</label>
+                <select v-model="form.ship_country" class="nim-input" style="cursor:pointer">
+                  <option>India</option><option>United States</option><option>United Kingdom</option><option>Canada</option><option>Australia</option><option>Singapore</option><option>United Arab Emirates</option><option>Saudi Arabia</option><option>Germany</option><option>France</option><option>Japan</option>
+                </select>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── Other Details Tab ── -->
+          <template v-else-if="drawerTab==='other'">
+            <div class="cust-sec-label" style="margin-top:0">Tax &amp; Compliance</div>
+
+            <!-- Active GST Treatment summary chip -->
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:10px 14px;border-radius:8px;border:1px solid #e8ecf0;background:#fafbfd">
+              <span style="font-size:12px;color:#6b7280;font-weight:500">Current GST Treatment:</span>
+              <span :style="'padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;background:'+activeRule.badge.bg+';color:'+activeRule.badge.color">
+                {{form.gst_treatment}}
+              </span>
+              <span style="font-size:12px;color:#9ca3af">·</span>
+              <span style="font-size:12px;font-weight:600;color:#374151">Tax: {{activeRule.taxType}}</span>
+              <button @click="drawerTab='overview'" style="margin-left:auto;font-size:12px;color:#3B5BDB;background:none;border:none;cursor:pointer;font-weight:600;font-family:inherit">Change →</button>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
+              <transition name="gst-field">
+                <div v-if="activeRule.showPlaceOfSupply">
+                  <label class="nim-label">
+                    Place of Supply
+                    <span v-if="activeRule.requirePlaceOfSupply" class="nim-req">*</span>
+                  </label>
+                  <select v-model="form.place_of_supply" class="nim-input" style="cursor:pointer"
+                    :style="formErrors.place_of_supply?'border-color:#dc2626;background:#fff5f5':''"
+                    @change="delete formErrors.place_of_supply">
+                    <option value="">— Select State —</option>
+                    <option v-for="s in ['01-Jammu and Kashmir','02-Himachal Pradesh','03-Punjab','04-Chandigarh','05-Uttarakhand','06-Haryana','07-Delhi','08-Rajasthan','09-Uttar Pradesh','10-Bihar','11-Sikkim','12-Arunachal Pradesh','13-Nagaland','14-Manipur','15-Mizoram','16-Tripura','17-Meghalaya','18-Assam','19-West Bengal','20-Jharkhand','21-Odisha','22-Chhattisgarh','23-Madhya Pradesh','24-Gujarat','25-Daman and Diu','26-Dadra and Nagar Haveli','27-Maharashtra','28-Andhra Pradesh','29-Karnataka','30-Goa','31-Lakshadweep','32-Kerala','33-Tamil Nadu','34-Puducherry','35-Andaman and Nicobar Islands','36-Telangana','37-Andhra Pradesh (New)','38-Ladakh']" :key="s" :value="s">{{s}}</option>
+                  </select>
+                  <div v-if="formErrors.place_of_supply" style="margin-top:4px;font-size:12px;color:#dc2626">{{formErrors.place_of_supply}}</div>
+                </div>
+              </transition>
+              <div v-if="!activeRule.showPlaceOfSupply" style="padding:12px 14px;border-radius:8px;background:#f0f9ff;border:1px solid #bae6fd;font-size:12.5px;color:#0369a1;line-height:1.5;display:flex;align-items:flex-start;gap:8px">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                Place of Supply not applicable for <strong>{{form.gst_treatment}}</strong> customers.
+              </div>
+              <div>
+                <label class="nim-label">Customer Source</label>
+                <select v-model="form.source" class="nim-input" style="cursor:pointer">
+                  <option value="">— Select —</option>
+                  <option>Cold Calling</option><option>Email</option><option>Existing Customer</option>
+                  <option>Partner</option><option>Campaign</option><option>Website</option><option>Referral</option><option>Word of Mouth</option><option>Other</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="cust-sec-label">Opening Balance</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
+              <div>
+                <label class="nim-label">Opening Balance (₹)</label>
+                <input v-model.number="form.opening_balance" type="number" min="0" class="nim-input" placeholder="0.00"/>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── Bank Details Tab ── -->
+          <template v-else-if="drawerTab==='bank'">
+            <div class="cust-sec-label" style="margin-top:0">Bank Account</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+              <div style="grid-column:span 2">
+                <label class="nim-label">Bank Name</label>
+                <input v-model="form.bank_name" class="nim-input" placeholder="HDFC Bank, SBI, ICICI…"/>
+              </div>
+              <div>
+                <label class="nim-label">Account Number</label>
+                <input v-model="form.bank_account_no" class="nim-input" placeholder="XXXXXXXXXXXXXXXX" style="font-family:var(--mono)" @input="form.bank_account_no=form.bank_account_no.replace(/\s/g,'')"/>
+              </div>
+              <div>
+                <label class="nim-label">IFSC Code</label>
+                <input v-model="form.bank_ifsc" class="nim-input" placeholder="HDFC0000001" style="font-family:var(--mono)" @input="form.bank_ifsc=form.bank_ifsc.toUpperCase()"/>
+              </div>
+            </div>
+          </template>
+
+          <!-- ── Remarks Tab ── -->
+          <template v-else-if="drawerTab==='remarks'">
+            <div class="cust-sec-label" style="margin-top:0">Internal Notes</div>
+            <textarea v-model="form.notes" class="nim-input" rows="8" style="resize:vertical;line-height:1.6" placeholder="Add any internal notes about this customer — payment behaviour, communication preferences, account history…"></textarea>
+          </template>
+
+        </div>
+
+        <!-- Footer -->
+        <div class="nim-footer" style="border-top:1px solid #e8ecf0;padding:14px 24px;background:#fafbfd">
+          <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" @click="saveCustomer" :disabled="saving" style="background:#3B5BDB;border-color:#3B5BDB;min-width:140px;position:relative">
+            <span v-if="saving" v-html="icon('refresh',13)" style="animation:spin 1s linear infinite"></span>
+            {{saving ? 'Saving…' : (drawerMode==='add' ? 'Create Customer' : 'Save Changes')}}
+            <span v-if="Object.keys(formErrors).length && !saving"
+              style="position:absolute;top:-6px;right:-6px;background:#dc2626;color:#fff;border-radius:10px;font-size:10px;font-weight:700;padding:1px 5px;min-width:16px;text-align:center;line-height:16px">
+              {{Object.keys(formErrors).length}}
+            </span>
+          </button>
+        </div>
+
       </div>
-    </transition>
+    </div>
   </teleport>
 
   <!-- ── Delete Confirm Modal ── -->
@@ -7452,6 +7815,7 @@
         try {
           if (newStatus === "Confirmed") {
             await apiPOST("zoho_books_clone.services.workflow_service.confirm_purchase_order", { purchase_order: name });
+            await new Promise(r => setTimeout(r, 400));
           } else if (newStatus === "Received") {
             // "Mark Received" — actually creates a stock receipt
             const tgt = list.value.find(o => o.name === name);
@@ -8179,13 +8543,19 @@
         finally { cancelling.value = false; }
       }
 
+      // ── Bill detail drawer ──
+      const viewBill = ref(null);
+      const showView = ref(false);
+      function openBill(b) { viewBill.value = b; showView.value = true; }
+
       onMounted(load);
       return {
         list, loading, activeFilter, search, filters, counts, summary, filtered,
         pillCountCls, statusClass, statusLabel, isOverdue,
         showNew, showCancel, cancelTarget, cancelling,
+        viewBill, showView, openBill,
         load, confirmCancel, closeCancelModal, doCancel,
-        fmt, fmtDate, flt, icon, openDoc
+        fmt, fmtDate, flt, icon
       };
     },
     template: `
@@ -8287,7 +8657,7 @@
           <!-- Data rows -->
           <tr v-else v-for="b in filtered" :key="b.name"
             class="cust-row"
-            @click="openDoc('Purchase Invoice', b.name)">
+            @click="openBill(b)">
             <td>
               <span style="color:#E67700;font-family:monospace;font-size:12px;font-weight:700">{{b.name}}</span>
             </td>
@@ -8308,7 +8678,7 @@
             <td @click.stop style="text-align:center">
               <div style="display:flex;gap:4px;justify-content:center">
                 <button class="cust-act-btn" style="color:#6b7280;border-color:#e5e7eb"
-                  @click="openDoc('Purchase Invoice', b.name)" title="Open in Frappe">
+                  @click.stop="openBill(b)" title="View Bill">
                   <span v-html="icon('ext',13)"></span>
                 </button>
                 <button v-if="b.status==='Draft'" class="cust-act-btn cust-act-del"
@@ -8325,6 +8695,38 @@
       Showing {{filtered.length}} of {{list.length}} bills
     </div>
   </div>
+
+  <!-- Bill detail drawer -->
+  <teleport to="body">
+    <div v-if="showView && viewBill" class="cust-backdrop" @click.self="showView=false">
+      <div class="cust-drawer" style="width:520px">
+        <div class="cust-drawer-header" style="background:linear-gradient(135deg,rgb(230,119,0),rgb(201,98,0))">
+          <div style="display:flex;align-items:center;gap:12px;flex:1">
+            <div style="width:36px;height:36px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center" v-html="icon('purchase',18)"></div>
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#fff">{{viewBill.name}}</div>
+              <div style="font-size:12px;color:rgba(255,255,255,.75)">{{viewBill.supplier}}</div>
+            </div>
+          </div>
+          <button @click="showView=false" style="background:rgba(255,255,255,.15);border:none;border-radius:6px;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff" v-html="icon('x',14)"></button>
+        </div>
+        <div class="cust-drawer-body">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Bill Date</div><div style="font-size:13.5px;color:#111827">{{fmtDate(viewBill.posting_date)||'—'}}</div></div>
+            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Due Date</div><div style="font-size:13.5px;" :style="{color: isOverdue(viewBill)?'#c92a2a':'#111827',fontWeight:isOverdue(viewBill)?'600':'400'}">{{fmtDate(viewBill.due_date)||'—'}}</div></div>
+            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Status</div><span class="b-badge" :class="statusClass(viewBill)">{{statusLabel(viewBill)}}</span></div>
+            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Vendor Bill No.</div><div style="font-size:13.5px;font-family:monospace;color:#111827">{{viewBill.bill_no||'—'}}</div></div>
+            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Amount</div><div style="font-size:16px;font-weight:700;color:#111827">{{fmt(viewBill.grand_total)}}</div></div>
+            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Outstanding</div><div style="font-size:16px;font-weight:700;" :style="{color:flt(viewBill.outstanding_amount)>0?'#E67700':'#2F9E44'}">{{fmt(viewBill.outstanding_amount)}}</div></div>
+          </div>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showView=false">Close</button>
+          <button v-if="viewBill.status==='Draft'" class="nim-btn" style="background:#dc2626;color:#fff;border-color:#dc2626" @click="confirmCancel(viewBill.name);showView=false">Cancel Bill</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
 
   <!-- Cancel confirm modal -->
   <teleport to="body">
@@ -12478,15 +12880,15 @@
       const today_str = new Date().toISOString().slice(0, 10);
       const from = ref(new Date(new Date().getFullYear(), 3, 1).toISOString().slice(0, 10));
       const to = ref(today_str);
-      // If navigated to /reports/trial-balance or /reports/ar-aging, pick correct tab
-      const initTab = props.defaultTab || (route.name === "trial-balance" ? "tb" : route.name === "ar-aging" ? "aging" : "pl");
+      // Map route name → tab key
+      const _routeTabMap = { "trial-balance":"tb","ar-aging":"aging","balance-sheet":"bs","cash-flow":"cf","gst-summary":"gst" };
+      const initTab = props.defaultTab || _routeTabMap[route.name] || "pl";
       const tab = ref(initTab), running = ref(false);
 
       watch(() => route.name, (newRoute) => {
-        if (newRoute === "trial-balance" && tab.value !== "tb") tab.value = "tb";
-        else if (newRoute === "ar-aging" && tab.value !== "aging") tab.value = "aging";
-        else if (newRoute === "reports" && props.defaultTab && tab.value !== props.defaultTab) tab.value = props.defaultTab;
-        else if (newRoute === "reports" && !props.defaultTab) tab.value = "pl";
+        const mapped = _routeTabMap[newRoute];
+        if (mapped && tab.value !== mapped) { tab.value = mapped; return; }
+        if (newRoute === "reports") tab.value = props.defaultTab || "pl";
       });
       const fyMode = ref("fy"); // "fy" | "custom"
       const selectedFY = ref("");
@@ -13387,11 +13789,22 @@
           }) || [];
         } catch { }
         try {
-          paidAccounts.value = await apiList("Account", {
+          let paid = await apiList("Account", {
             fields: ["name"],
-            filters: [["account_type","in",["Bank","Cash"]],["is_group","=",0]],
+            filters: [["account_type","in",["Bank","Cash","Bank Account"]],["is_group","=",0]],
             limit: 100,
           }) || [];
+          // fallback: any leaf account whose name contains bank or cash
+          if (!paid.length) {
+            paid = await apiList("Account", {
+              fields: ["name"],
+              filters: [["is_group","=",0]],
+              limit: 300,
+            }) || [];
+            paid = paid.filter(a => /bank|cash/i.test(a.name));
+          }
+          paidAccounts.value = paid;
+          if (paid.length && !form.paid_through) form.paid_through = paid[0].name;
         } catch { }
         try {
           suppliers.value = await apiList("Supplier", {
@@ -13399,9 +13812,14 @@
           }) || [];
         } catch { }
         try {
-          costCenters.value = await apiList("Cost Center", {
+          let cc = await apiList("Cost Center", {
             fields: ["name"], filters: [["is_group","=",0]], limit: 100, order: "name asc",
           }) || [];
+          // fallback: load all cost centers without is_group filter
+          if (!cc.length) {
+            cc = await apiList("Cost Center", { fields: ["name"], limit: 100 }) || [];
+          }
+          costCenters.value = cc;
         } catch { }
       }
 
@@ -13710,7 +14128,7 @@
             </div>
 
             <div class="nim-section-label">Accounts</div>
-            <div class="nim-grid-2 nim-mb">
+            <div class="nim-grid-3 nim-mb">
               <div>
                 <label class="nim-label">Expense Account <span class="nim-req">*</span></label>
                 <searchable-select v-model="form.expense_account" :options="expAccounts" placeholder="— Select Account —"/>
@@ -13718,6 +14136,10 @@
               <div>
                 <label class="nim-label">Paid Through <span class="nim-req">*</span></label>
                 <searchable-select v-model="form.paid_through" :options="paidAccounts" placeholder="— Select Account —"/>
+              </div>
+              <div>
+                <label class="nim-label">Cost Center</label>
+                <searchable-select v-model="form.cost_center" :options="costCenters" placeholder="— Select —"/>
               </div>
             </div>
 
@@ -13728,8 +14150,8 @@
                 <searchable-select v-model="form.vendor" :options="suppliers" value-key="name" label-key="supplier_name" placeholder="— Select Vendor —"/>
               </div>
               <div>
-                <label class="nim-label">Cost Center</label>
-                <searchable-select v-model="form.cost_center" :options="costCenters" placeholder="— Select —"/>
+                <label class="nim-label">Reference No.</label>
+                <input class="nim-input" v-model="form.reference_no" placeholder="Receipt / bill no."/>
               </div>
             </div>
             <div class="nim-mb">
@@ -18565,10 +18987,12 @@
     },
     {
       section: "REPORTS", items: [
-        { to: "/reports", lbl: "P & L", icon: "trend" },
-        { to: "/reports/trial-balance", lbl: "Trial Balance", icon: "journal" },
-        { to: "/reports/ar-aging", lbl: "AR Aging", icon: "pay" },
-        { to: "/accounts", lbl: "Balance Sheet", icon: "chart" },
+        { to: "/reports",                lbl: "P & L",           icon: "trend"    },
+        { to: "/reports/balance-sheet",  lbl: "Balance Sheet",   icon: "chart"    },
+        { to: "/reports/cash-flow",      lbl: "Cash Flow",       icon: "pay"      },
+        { to: "/reports/trial-balance",  lbl: "Trial Balance",   icon: "journal"  },
+        { to: "/reports/ar-aging",       lbl: "AR Aging",        icon: "pay"      },
+        { to: "/reports/gst-summary",    lbl: "GST Summary",     icon: "gstfile"  },
       ]
     },
     {
@@ -18604,7 +19028,7 @@
   // Pre-built Set of every exact nav path — used to prevent parent routes from
   // stealing the "active" highlight when a child route has its own nav entry.
   const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Chart of Accounts", "template-editor": "Invoice Template", reports: "Reports", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "bank-transfers": "Bank Transfers", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Accounts", "template-editor": "Invoice Template", reports: "Reports", "balance-sheet": "Balance Sheet", "cash-flow": "Cash Flow", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "gst-summary": "GST Summary", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -19089,6 +19513,10 @@
 .ob-dr-cr-sel{border:1px solid #CDD5E0;border-radius:6px;padding:6px 8px;font-size:12px;outline:none;background:#fff;cursor:pointer;color:#1A1D23;appearance:none;width:100%;transition:border-color .15s;font-family:inherit}
 .ob-dr{border-color:rgba(201,42,42,.4)!important;background:#FFF5F5!important;color:#C92A2A!important}
 .ob-cr{border-color:rgba(47,158,68,.4)!important;background:#F0FBF3!important;color:#2F9E44!important}
+/* ══ GST field transition ══ */
+.gst-field-enter-active,.gst-field-leave-active{transition:all .2s ease;overflow:hidden}
+.gst-field-enter-from,.gst-field-leave-to{opacity:0;max-height:0;transform:translateY(-6px)}
+.gst-field-enter-to,.gst-field-leave-from{opacity:1;max-height:200px;transform:translateY(0)}
 /* ══ Reports ══ */
 .rpt-mode-btn{display:flex;align-items:center;gap:5px;padding:6px 12px;border:none;border-radius:6px;font-size:12.5px;font-weight:500;cursor:pointer;background:transparent;color:#6c757d;transition:all .15s;font-family:inherit}
 .rpt-mode-btn.active{background:#fff;color:#1A1D23;font-weight:600;box-shadow:0 1px 4px rgba(0,0,0,.1)}
@@ -20745,9 +21173,12 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/banking/cheques",           component: ChequeManagement,  name: "cheque-management"  },
       { path: "/banking/cash",              component: CashManagement,    name: "cash-management"    },
       { path: "/accounts", component: Accounts, name: "accounts" },
-      { path: "/reports", component: Reports, name: "reports" },
-      { path: "/reports/trial-balance", component: Reports, name: "trial-balance", props: { defaultTab: "tb" } },
-      { path: "/reports/ar-aging", component: Reports, name: "ar-aging", props: { defaultTab: "aging" } },
+      { path: "/reports",                component: Reports, name: "reports"        },
+      { path: "/reports/balance-sheet",  component: Reports, name: "balance-sheet", props: { defaultTab: "bs"    } },
+      { path: "/reports/cash-flow",      component: Reports, name: "cash-flow",     props: { defaultTab: "cf"    } },
+      { path: "/reports/trial-balance",  component: Reports, name: "trial-balance", props: { defaultTab: "tb"    } },
+      { path: "/reports/ar-aging",       component: Reports, name: "ar-aging",      props: { defaultTab: "aging" } },
+      { path: "/reports/gst-summary",    component: Reports, name: "gst-summary",   props: { defaultTab: "gst"   } },
       { path: "/accounting/chart-of-accounts", component: ChartOfAccounts, name: "chart-of-accounts" },
       { path: "/accounting/journal-entries", component: JournalEntries, name: "journal-entries" },
       { path: "/accounting/opening-balances", component: OpeningBalances, name: "opening-balances" },

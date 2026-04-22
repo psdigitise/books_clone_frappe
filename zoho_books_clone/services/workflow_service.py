@@ -211,8 +211,13 @@ def create_invoice_from_order(sales_order: str) -> dict:
 @frappe.whitelist(allow_guest=False)
 def confirm_purchase_order(purchase_order: str) -> dict:
     """Confirm a Purchase Order (Draft → Confirmed) and track ordered qty."""
-    doc = _get_doc("Purchase Order", purchase_order, required_status="Draft")
+    doc = _get_doc("Purchase Order", purchase_order)
+    if doc.status == "Cancelled":
+        frappe.throw(_("Purchase Order {0} is cancelled.").format(purchase_order))
+    if doc.status != "Draft":
+        return {"purchase_order": doc.name, "status": doc.status}
     frappe.db.set_value("Purchase Order", purchase_order, "status", "Confirmed", update_modified=True)
+    frappe.db.commit()
     # Track ordered qty so projected_qty reflects incoming stock
     wh = _default_warehouse(doc.company)
     if wh:
@@ -320,6 +325,14 @@ def receive_goods_from_order(
     }
 
 
+def _resolve_item_code(item_code: str) -> str:
+    """Return a valid Item name for the given value, falling back to item_name lookup."""
+    if frappe.db.exists("Item", item_code):
+        return item_code
+    found = frappe.db.get_value("Item", {"item_name": item_code}, "name")
+    return found or item_code
+
+
 @frappe.whitelist(allow_guest=False)
 def create_bill_from_order(purchase_order: str) -> dict:
     """
@@ -339,7 +352,7 @@ def create_bill_from_order(purchase_order: str) -> dict:
         "purchase_order":  purchase_order,
         "items": [
             {
-                "item_code": row.item_code,
+                "item_code": _resolve_item_code(row.item_code),
                 "item_name": row.item_name or row.item_code,
                 "qty":       flt(row.qty),
                 "rate":      flt(row.rate),
@@ -349,6 +362,7 @@ def create_bill_from_order(purchase_order: str) -> dict:
         ],
     })
     bill.flags.ignore_permissions = True
+    bill.flags.ignore_mandatory = True
     bill.insert()
 
     frappe.db.set_value("Purchase Order", purchase_order, "status", "Billed", update_modified=True)
