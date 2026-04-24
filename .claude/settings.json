@@ -11,7 +11,26 @@
       "Bash(bench --site site1.local migrate --skip-failing)",
       "Bash(python3 -c ' *)",
       "Bash(pkill -f \"gunicorn.*frappe\")",
-      "Bash(pkill -f \"frappe.app\")"
+      "Bash(pkill -f \"frappe.app\")",
+      "Bash(grep -n \"template.*\\\\`\\\\|zb-detail\\\\|zb-split\\\\|zb-paper\\\\|zb-inv-paper\\\\|zb-ab-\" /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(awk 'NR>=5300 && NR<=5660' /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(grep -n '\\\\${')",
+      "Bash(grep -nc '\\\\`')",
+      "Bash(node -c /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(awk 'NR>=5285 && NR<=5660' /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(bench --site all list-apps)",
+      "Bash(bench --site site1.local execute zoho_books_clone._probe.run)",
+      "Bash(bench --site site1.local clear-cache)",
+      "Bash(grep -n \"<!-- ══ RIGHT PANEL ══\\\\|</teleport>\\\\|<teleport\\\\|^\\\\`}\\);\" /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(awk 'NR>=60 && NR<=80')",
+      "Bash(grep -n \"</teleport>\\\\|<teleport\\\\|^\\\\`}\\);\" /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(awk 'NR>=68 && NR<=90')",
+      "Bash(grep -n \"template: \\\\`\\\\|^\\\\`}\\);\\\\|^</div>\\\\`\\\\|^</div>\\\\`}\\);\" /Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/public/books.js)",
+      "Bash(awk 'NR>=30 && NR<=55')",
+      "Bash(awk 'NR>=18 && NR<=32')",
+      "Read(//Applications/**)",
+      "Bash(python3 -c \"import weasyprint\")",
+      "Bash(python3 -c \"import reportlab\")"
     ],
     "additionalDirectories": [
       "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/api",
@@ -19,7 +38,12 @@
       "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/accounts",
       "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/accounts",
       "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/invoicing/doctype/purchase_invoice",
-      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/invoicing/doctype/purchase_invoice"
+      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/invoicing/doctype/purchase_invoice",
+      "/private/tmp",
+      "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone/invoicing/doctype/credit_note",
+      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone/invoicing/doctype/credit_note",
+      "/Users/halen/Desktop/frappe-project/frappe-bench/apps/zoho_books_clone/zoho_books_clone",
+      "/Users/halen/Desktop/Projects/PSD_Projects/Books/zoho_books_clone"
     ]
   }
 }

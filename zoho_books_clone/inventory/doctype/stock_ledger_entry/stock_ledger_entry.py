@@ -60,6 +60,8 @@ class StockLedgerEntry(Document):
                     "stock_value": 0,
                     "valuation_rate": 0,
                 })
+                bin_doc.flags.ignore_links = True
+                bin_doc.flags.ignore_mandatory = True
                 bin_doc.insert(ignore_permissions=True)
                 # Lock the newly inserted row immediately
                 frappe.db.sql(
@@ -86,4 +88,6 @@ class StockLedgerEntry(Document):
         bin_doc.valuation_rate = flt(self.valuation_rate) if new_qty > 0 else flt(bin_doc.valuation_rate)
         bin_doc.stock_value = total_value
         bin_doc.projected_qty = flt(new_qty) + flt(bin_doc.ordered_qty) - flt(bin_doc.reserved_qty)
+        bin_doc.flags.ignore_links = True
+        bin_doc.flags.ignore_mandatory = True
         bin_doc.save(ignore_permissions=True)

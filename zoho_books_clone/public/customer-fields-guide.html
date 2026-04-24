@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>New Customer — Field Reference Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;font-size:13.5px;color:#1a1d23;background:#fff;line-height:1.6}
+
+  /* ── Page layout ── */
+  .page{max-width:900px;margin:0 auto;padding:48px 40px}
+
+  /* ── Cover ── */
+  .cover{background:linear-gradient(135deg,#3B5BDB 0%,#2244b8 100%);border-radius:16px;padding:48px 40px;margin-bottom:40px;color:#fff;position:relative;overflow:hidden}
+  .cover::after{content:'';position:absolute;right:-60px;top:-60px;width:280px;height:280px;border-radius:50%;background:rgba(255,255,255,.06)}
+  .cover-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.25);border-radius:20px;padding:4px 12px;font-size:11.5px;font-weight:600;margin-bottom:18px;letter-spacing:.04em}
+  .cover h1{font-size:32px;font-weight:800;line-height:1.15;margin-bottom:10px}
+  .cover p{font-size:14px;color:rgba(255,255,255,.8);max-width:520px;line-height:1.7}
+  .cover-meta{display:flex;gap:32px;margin-top:28px;padding-top:24px;border-top:1px solid rgba(255,255,255,.2)}
+  .cover-meta-item{font-size:12px}
+  .cover-meta-item span{display:block;color:rgba(255,255,255,.6);font-weight:500;margin-bottom:2px}
+  .cover-meta-item strong{color:#fff;font-size:13.5px;font-weight:700}
+
+  /* ── TOC ── */
+  .toc{background:#f8f9fc;border:1px solid #e2e8f0;border-radius:12px;padding:24px 28px;margin-bottom:36px}
+  .toc h2{font-size:13px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#3B5BDB;margin-bottom:14px}
+  .toc ol{padding-left:20px}
+  .toc li{font-size:13px;font-weight:500;color:#374151;margin-bottom:6px;line-height:1.4}
+  .toc li a{color:#3B5BDB;text-decoration:none}
+  .toc li a:hover{text-decoration:underline}
+  .toc li span{float:right;color:#9ca3af;font-size:12px;font-weight:400}
+
+  /* ── Section headers ── */
+  .section{margin-bottom:40px}
+  .section-header{display:flex;align-items:center;gap:12px;margin-bottom:20px;padding-bottom:14px;border-bottom:2px solid #e8ecf0}
+  .section-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:18px}
+  .section-title{font-size:18px;font-weight:700;color:#1a1d23}
+  .section-sub{font-size:12.5px;color:#6b7280;margin-top:2px}
+
+  /* ── Field cards ── */
+  .field-grid{display:grid;gap:14px}
+  .field-card{border:1px solid #e8ecf0;border-radius:10px;padding:18px 20px;background:#fff;transition:box-shadow .15s}
+  .field-card:hover{box-shadow:0 2px 12px rgba(0,0,0,.08)}
+  .field-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}
+  .field-name{font-size:14px;font-weight:700;color:#1a1d23;font-family:'JetBrains Mono',monospace}
+  .field-badges{display:flex;gap:6px;flex-wrap:wrap;flex-shrink:0}
+  .badge{display:inline-flex;align-items:center;padding:2px 9px;border-radius:12px;font-size:11px;font-weight:700;letter-spacing:.02em;white-space:nowrap}
+  .badge-req{background:#FFF5F5;color:#C92A2A;border:1px solid #fecaca}
+  .badge-opt{background:#F8F9FA;color:#868E96;border:1px solid #e9ecef}
+  .badge-cond{background:#FFF3BF;color:#E67700;border:1px solid #fde68a}
+  .badge-auto{background:#EDF2FF;color:#3B5BDB;border:1px solid #c5d1f5}
+
+  .field-meta{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px}
+  .meta-item{background:#f8f9fc;border-radius:6px;padding:8px 10px}
+  .meta-label{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#9ca3af;margin-bottom:2px}
+  .meta-value{font-size:12.5px;font-weight:600;color:#374151}
+
+  .field-desc{font-size:13px;color:#4b5563;line-height:1.65;margin-bottom:10px}
+  .field-usecase{display:flex;gap:8px;margin-bottom:0}
+  .field-usecase-icon{font-size:13px;flex-shrink:0;margin-top:1px}
+  .field-usecase-text{font-size:12.5px;color:#6b7280;line-height:1.6}
+
+  .field-validation{background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:8px 12px;font-size:12px;color:#92400E;margin-top:10px;display:flex;gap:8px;align-items:flex-start}
+
+  /* ── GST rules table ── */
+  .gst-table{width:100%;border-collapse:collapse;margin-top:4px;font-size:12.5px}
+  .gst-table th{background:#f1f3f9;color:#374151;font-weight:700;padding:10px 14px;text-align:left;border-bottom:2px solid #e2e8f0}
+  .gst-table td{padding:10px 14px;border-bottom:1px solid #f0f0f0;vertical-align:top}
+  .gst-table tr:last-child td{border-bottom:none}
+  .gst-table tr:hover td{background:#fafbfd}
+  .tick{color:#2F9E44;font-weight:700}
+  .cross{color:#9ca3af}
+  .req-mark{color:#C92A2A;font-weight:700}
+
+  /* ── Info boxes ── */
+  .info-box{border-radius:8px;padding:14px 16px;margin-top:16px;display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.6}
+  .info-box-blue{background:#EFF6FF;border:1px solid #BFDBFE;color:#1e40af}
+  .info-box-green{background:#ECFDF5;border:1px solid #A7F3D0;color:#065f46}
+  .info-box-amber{background:#FFFBEB;border:1px solid #FDE68A;color:#92400E}
+  .info-icon{font-size:16px;flex-shrink:0}
+
+  /* ── Summary table ── */
+  .summary-table{width:100%;border-collapse:collapse;font-size:12.5px}
+  .summary-table th{background:#3B5BDB;color:#fff;padding:10px 14px;text-align:left;font-weight:600}
+  .summary-table td{padding:9px 14px;border-bottom:1px solid #f0f0f0}
+  .summary-table tr:nth-child(even) td{background:#f8f9fc}
+  .summary-table tr:hover td{background:#EEF2FF}
+
+  /* ── Footer ── */
+  .doc-footer{text-align:center;color:#9ca3af;font-size:12px;margin-top:48px;padding-top:24px;border-top:1px solid #e8ecf0}
+
+  /* ── Print ── */
+  @media print{
+    body{font-size:12px}
+    .cover{border-radius:8px;padding:32px 28px;margin-bottom:28px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .page{padding:24px 28px;max-width:100%}
+    .section{margin-bottom:28px;page-break-inside:avoid}
+    .field-card{page-break-inside:avoid;border:1px solid #ddd}
+    .toc{display:none}
+    h1{font-size:24px}
+    .section-title{font-size:15px}
+    @page{margin:16mm 14mm}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ── Cover ── -->
+  <div class="cover">
+    <div class="cover-badge">📋 Field Reference Guide</div>
+    <h1>New Customer<br>Form — Complete Field Guide</h1>
+    <p>A comprehensive reference covering every field in the New Customer form — what it is, why it matters, where it is used, and validation rules to follow.</p>
+    <div class="cover-meta">
+      <div class="cover-meta-item"><span>Module</span><strong>Customers · Sales</strong></div>
+      <div class="cover-meta-item"><span>Tabs</span><strong>5 Tabs · 35+ Fields</strong></div>
+      <div class="cover-meta-item"><span>Version</span><strong>Books v1.0</strong></div>
+      <div class="cover-meta-item"><span>Date</span><strong>April 2026</strong></div>
+    </div>
+  </div>
+
+  <!-- ── TOC ── -->
+  <div class="toc">
+    <h2>Contents</h2>
+    <ol>
+      <li><a href="#overview">Overview Tab</a> — Customer Type, GST Treatment, Contact &amp; Billing<span>pg 2</span></li>
+      <li><a href="#address">Address Tab</a> — Billing &amp; Shipping Address<span>pg 4</span></li>
+      <li><a href="#other">Other Details Tab</a> — Place of Supply, Source, Opening Balance<span>pg 5</span></li>
+      <li><a href="#bank">Bank Details Tab</a> — Bank Account Information<span>pg 6</span></li>
+      <li><a href="#remarks">Remarks Tab</a> — Internal Notes<span>pg 7</span></li>
+      <li><a href="#gst">GST Treatment Reference</a> — Rules &amp; Field Behaviour<span>pg 7</span></li>
+      <li><a href="#summary">Quick Reference Summary</a> — All Fields at a Glance<span>pg 8</span></li>
+    </ol>
+  </div>
+
+  <!-- ═══ OVERVIEW TAB ═══ -->
+  <div class="section" id="overview">
+    <div class="section-header">
+      <div class="section-icon" style="background:#EEF2FF">👤</div>
+      <div>
+        <div class="section-title">Tab 1 — Overview</div>
+        <div class="section-sub">Core identification, contact information, and billing preferences</div>
+      </div>
+    </div>
+    <div class="field-grid">
+
+      <!-- Customer Type -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Customer Type</div>
+          <div class="field-badges"><span class="badge badge-req">Required</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Radio (Business / Individual)</div></div>
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">Business</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Invoices, Reports, GST</div></div>
+        </div>
+        <div class="field-desc">Classifies the customer as a <strong>Business</strong> (company, firm, LLP) or an <strong>Individual</strong> (person). This drives GST treatment defaults, display name logic, and reporting.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Set to <em>Business</em> for B2B invoicing (GSTIN required). Set to <em>Individual</em> for B2C (no GSTIN). Affects GSTR-1 reporting — B2B invoices above ₹2.5 lakh are reported separately.</div>
+        </div>
+      </div>
+
+      <!-- GST Treatment -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">GST Treatment</div>
+          <div class="field-badges"><span class="badge badge-req">Required</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Pill selector (5 options)</div></div>
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">Registered Business</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">GST, Tax computation, GSTR</div></div>
+        </div>
+        <div class="field-desc">The most important tax classification field. Controls which tax rules apply to this customer, which fields are shown/required, and how GST is computed on their invoices. Options: <strong>Registered Business · Unregistered Business · Overseas · SEZ · Consumer</strong>.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Choosing <em>Registered Business</em> makes GSTIN mandatory and enables CGST/SGST or IGST split. <em>Overseas</em> applies zero-rated IGST. <em>SEZ</em> applies 0% GST with mandatory GSTIN. <em>Consumer</em> means B2C — only GST total is needed. See the GST Treatment Reference section for full rules.</div>
+        </div>
+        <div class="field-validation">⚠️ <strong>Changing GST Treatment</strong> after invoices have been created does not retroactively update existing invoices. Always set this before raising the first invoice.</div>
+      </div>
+
+      <!-- Salutation -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Salutation</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Dropdown</div></div>
+          <div class="meta-item"><div class="meta-label">Options</div><div class="meta-value">Mr. Ms. Mrs. Dr. Prof.</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Emails, Letters, PDF</div></div>
+        </div>
+        <div class="field-desc">The honorific prefix for the primary contact. Appears in email communications, formal letters, and printed invoices when addressed to a person.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Used when sending personalised payment reminders or invoice emails — e.g. "Dear Dr. Sharma". Most relevant when Customer Type is <em>Individual</em>.</div>
+        </div>
+      </div>
+
+      <!-- First Name / Last Name -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">First Name &amp; Last Name</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Text inputs</div></div>
+          <div class="meta-item"><div class="meta-label">Max length</div><div class="meta-value">140 chars each</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Contacts, Emails, CRM</div></div>
+        </div>
+        <div class="field-desc">The first and last name of the primary contact person at the customer's organisation. Separate from the Company Name and Display Name.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Used to address the specific person when sending emails or statements. For Individual customers, this is the customer's own name. For Business customers, this is the key contact's name.</div>
+        </div>
+      </div>
+
+      <!-- Company Name -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Company Name</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Text input</div></div>
+          <div class="meta-item"><div class="meta-label">Saved in</div><div class="meta-value">company_name field</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Invoices, Address labels</div></div>
+        </div>
+        <div class="field-desc">The registered legal company or organisation name. This appears on invoice header and address blocks. Separate from the Display Name which is used for searching.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> "Tata Consultancy Services Limited" as the company name, while the Display Name is "TCS" for quick searching. Printed on the invoice as the bill-to company.</div>
+        </div>
+      </div>
+
+      <!-- Display Name -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Display Name</div>
+          <div class="field-badges"><span class="badge badge-req">Required</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Text input</div></div>
+          <div class="meta-item"><div class="meta-label">Saved as</div><div class="meta-value">customer_name</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Everywhere (primary identifier)</div></div>
+        </div>
+        <div class="field-desc">The name shown on all invoices, sales orders, quotes, reports, and dropdowns throughout the application. This is the <strong>primary identifier</strong> for the customer.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> This appears in the "Customer" column on every Sales Invoice, Sales Order, Quote, Payment, and Report. Keep it short and recognisable — e.g. "TCS" rather than the full legal name.</div>
+        </div>
+        <div class="field-validation">⚠️ This is the only mandatory field in the customer form. The record cannot be saved without it. It is also used as the document name (primary key).</div>
+      </div>
+
+      <!-- GSTIN -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">GSTIN / Tax ID</div>
+          <div class="field-badges"><span class="badge badge-cond">Conditional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Format</div><div class="meta-value">15 chars (e.g. 27AAPFU0939F1ZV)</div></div>
+          <div class="meta-item"><div class="meta-label">Visible for</div><div class="meta-value">Registered, SEZ</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">GSTR-1, B2B invoices</div></div>
+        </div>
+        <div class="field-desc">The 15-character GST Identification Number issued to registered businesses. Auto-converts to uppercase. Format: <code style="font-family:monospace;background:#f1f3f9;padding:1px 5px;border-radius:3px">SS-PPPPPNNNNPC-Z-C</code> where SS=state code, P=PAN, N=entity number, C=checksum.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Printed on B2B invoices as legally required. Used in GSTR-1 B2B section. Required for ITC claim by the customer. The first 2 digits (state code) also auto-derive Place of Supply for intra-state tax split.</div>
+        </div>
+        <div class="field-validation">⚠️ Validated against the official GSTIN pattern. Will show "Invalid GSTIN format" error if not matching. Required when GST Treatment = Registered Business or SEZ. Hidden for Overseas, Unregistered, Consumer.</div>
+      </div>
+
+      <!-- PAN Number -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">PAN Number</div>
+          <div class="field-badges"><span class="badge badge-cond">Conditional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Format</div><div class="meta-value">10 chars (e.g. ABCDE1234F)</div></div>
+          <div class="meta-item"><div class="meta-label">Visible for</div><div class="meta-value">Registered, Unregistered, SEZ</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">TDS, Compliance, 26AS</div></div>
+        </div>
+        <div class="field-desc">Permanent Account Number — the 10-character alphanumeric identifier issued by the Income Tax department. Auto-converts to uppercase. Embedded within GSTIN (chars 3–12).</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Required for TDS deduction at source. Used in annual TDS returns (Form 26Q). Also used for 26AS reconciliation and high-value transaction reporting above ₹50 lakh. Hidden for Overseas and Consumer customers.</div>
+        </div>
+      </div>
+
+      <!-- Email Address -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Email Address</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Email input</div></div>
+          <div class="meta-item"><div class="meta-label">Validated</div><div class="meta-value">Format check on save</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Invoice emails, Statements</div></div>
+        </div>
+        <div class="field-desc">The primary email address for the customer. Used as the default recipient when emailing invoices, payment receipts, account statements, and payment reminders.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Pre-filled in the "Send Invoice" dialog. Also used for automated payment reminders and overdue alerts. Should be the accounts payable email of the customer (e.g. ap@customer.com).</div>
+        </div>
+        <div class="field-validation">⚠️ Validated for standard email format (must contain @ and domain). Invalid format will block save.</div>
+      </div>
+
+      <!-- Mobile -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Mobile</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Country code + number</div></div>
+          <div class="meta-item"><div class="meta-label">Saved as</div><div class="meta-value">+91 98765 43210</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">WhatsApp, SMS alerts</div></div>
+        </div>
+        <div class="field-desc">Mobile number with country code prefix. Stored with the international dialling format (e.g. +91 98765 43210). Used for SMS notifications and WhatsApp invoice delivery.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Payment reminder via WhatsApp or SMS. Also useful for quick customer lookup. Select the correct country code for international customers.</div>
+        </div>
+      </div>
+
+      <!-- Work Phone -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Work Phone (Landline)</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Text input</div></div>
+          <div class="meta-item"><div class="meta-label">Example</div><div class="meta-value">022-12345678</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Contact reference</div></div>
+        </div>
+        <div class="field-desc">Office or landline telephone number. Stored for reference and displayed on the customer detail page. Not used for automated communications.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Useful for collections teams to call directly. Also printed on some invoice formats as a contact number for the customer's accounts department.</div>
+        </div>
+      </div>
+
+      <!-- Website -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Website</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">URL text input</div></div>
+          <div class="meta-item"><div class="meta-label">Example</div><div class="meta-value">https://company.com</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Customer profile</div></div>
+        </div>
+        <div class="field-desc">The company website URL. Stored for reference in the customer profile. Helps teams quickly look up the customer's business during communications.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Reference field. Useful for sales and support teams to quickly access the customer's website for context during calls or disputes.</div>
+        </div>
+      </div>
+
+      <!-- Currency -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Currency</div>
+          <div class="field-badges"><span class="badge badge-req">Required</span><span class="badge badge-auto">Auto-filled</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">INR</div></div>
+          <div class="meta-item"><div class="meta-label">Options</div><div class="meta-value">INR, USD, EUR, GBP, AED…</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">All invoices for this customer</div></div>
+        </div>
+        <div class="field-desc">The default billing currency for this customer. All invoices, sales orders, and quotes created for this customer will default to this currency. Amounts are stored in the base company currency (INR) with exchange rate applied.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> For a US client, set currency to USD. Invoices will be raised in USD, and the exchange rate at time of invoice is used to record the INR equivalent in the ledger. Critical for multi-currency reporting and forex gain/loss calculation.</div>
+        </div>
+        <div class="field-validation">⚠️ Once an invoice is created, changing the customer currency does not affect existing invoices. Always set the correct currency before creating the first invoice.</div>
+      </div>
+
+      <!-- Payment Terms -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Payment Terms</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Dropdown</div></div>
+          <div class="meta-item"><div class="meta-label">Options</div><div class="meta-value">Net 7/15/30/45/60, Due on Receipt, EOM</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Invoice due dates, Aging</div></div>
+        </div>
+        <div class="field-desc">The default payment terms for this customer. Automatically pre-fills the due date on new invoices based on the invoice date. Drives the AR Aging report buckets.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> A customer with "Net 30" terms — an invoice raised on 1st April will auto-set due date to 1st May. Overdue invoices appear in the "30–60 days" bucket in the Aging report. Can be overridden per invoice.</div>
+        </div>
+      </div>
+
+      <!-- Credit Limit -->
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Credit Limit</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Number (₹)</div></div>
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">0 = unlimited</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Risk controls, Alerts</div></div>
+        </div>
+        <div class="field-desc">The maximum outstanding receivable amount allowed for this customer. When outstanding balance exceeds this limit, a warning is shown when creating new invoices. Set to 0 for no limit.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> For a customer with a history of late payments, set a credit limit of ₹5,00,000. If their outstanding invoices exceed this, the sales team is warned before raising new invoices — reducing credit risk.</div>
+        </div>
+      </div>
+
+    </div><!-- /field-grid -->
+  </div><!-- /overview section -->
+
+
+  <!-- ═══ ADDRESS TAB ═══ -->
+  <div class="section" id="address">
+    <div class="section-header">
+      <div class="section-icon" style="background:#ECFDF5">📍</div>
+      <div>
+        <div class="section-title">Tab 2 — Address</div>
+        <div class="section-sub">Billing address (printed on invoices) and shipping address (for delivery challans)</div>
+      </div>
+    </div>
+    <div class="field-grid">
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Address Line 1 &amp; 2</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Scope</div><div class="meta-value">Billing address</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Invoice PDF, E-way Bill</div></div>
+          <div class="meta-item"><div class="meta-label">GST relevance</div><div class="meta-value">State used for tax split</div></div>
+        </div>
+        <div class="field-desc">The street address of the customer's billing location. Line 1 is typically street/building; Line 2 is area/landmark. Printed verbatim on the "Bill To" block of PDF invoices.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Required for a legally valid GST invoice. The customer's billing address (city, state) determines whether tax is CGST+SGST (intra-state) or IGST (inter-state). Also used for E-Way Bill generation above ₹50,000.</div>
+        </div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">City, State, Pincode</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">State</div><div class="meta-value">Dropdown (all Indian states)</div></div>
+          <div class="meta-item"><div class="meta-label">Pincode</div><div class="meta-value">6-digit postal code</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">GST tax split, Delivery</div></div>
+        </div>
+        <div class="field-desc">City, State, and Pincode of the billing address. The <strong>State</strong> field is critical for GST compliance — it determines CGST+SGST vs IGST split when compared with the company's state.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> If your company is in Maharashtra (State 27) and the customer's state is also Maharashtra → CGST 9% + SGST 9%. If the customer is in Karnataka → IGST 18%. The Pincode is used for courier and delivery challan generation.</div>
+        </div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Country</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">India</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Export invoices, Currency</div></div>
+          <div class="meta-item"><div class="meta-label">GST relevance</div><div class="meta-value">Non-India = zero-rated IGST</div></div>
+        </div>
+        <div class="field-desc">The country of the billing address. For <em>Overseas</em> customers, must be set to the correct non-India country. Drives export invoice classification and forex reporting.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> For a US client, set Country to "United States" and GST Treatment to "Overseas". This marks the invoice as an <strong>Export Invoice</strong>, applies zero-rated IGST, and the invoice is reported in GSTR-1 under "Export" section.</div>
+        </div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Shipping Address (Lines 1–2, City, State, Pincode, Country)</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">Same as billing if blank</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Delivery Challan, E-way Bill</div></div>
+          <div class="meta-item"><div class="meta-label">GST relevance</div><div class="meta-value">Ship-to state for tax</div></div>
+        </div>
+        <div class="field-desc">The physical delivery address for goods. If left blank, the billing address is used. When filled, this address appears on the Delivery Challan and E-Way Bill as the consignee address.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> A Mumbai head office (billing) with a Pune warehouse (shipping). The shipping state determines the correct GSTIN state code on the E-Way Bill. Also used if the "Ship-to" state differs from "Bill-to" for branch supply scenarios.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ═══ OTHER DETAILS TAB ═══ -->
+  <div class="section" id="other">
+    <div class="section-header">
+      <div class="section-icon" style="background:#FFFBEB">📊</div>
+      <div>
+        <div class="section-title">Tab 3 — Other Details</div>
+        <div class="section-sub">Tax compliance, customer source, and opening balance</div>
+      </div>
+    </div>
+    <div class="field-grid">
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Place of Supply</div>
+          <div class="field-badges"><span class="badge badge-cond">Conditional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Visible for</div><div class="meta-value">Registered, Unregistered, SEZ</div></div>
+          <div class="meta-item"><div class="meta-label">Options</div><div class="meta-value">All 38 GST state codes</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">GSTR-1, Tax computation</div></div>
+        </div>
+        <div class="field-desc">The state where the supply is deemed to have taken place under GST law. Determines CGST+SGST (intra-state) vs IGST (inter-state) on invoices. Pre-filled from GSTIN state code where possible. Uses official GST state codes (e.g. 27-Maharashtra).</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> A registered customer in Delhi (07) buying services from your Mumbai company — Place of Supply = 07-Delhi → IGST applies. If both are in Maharashtra → CGST+SGST. This is a <strong>legal requirement</strong> on every B2B GST invoice. Hidden for Overseas and Consumer customers.</div>
+        </div>
+        <div class="field-validation">⚠️ Required when GST Treatment is Registered Business, Unregistered Business, or SEZ. Invoices without correct Place of Supply may be rejected during GSTR-1 filing.</div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Customer Source</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Dropdown</div></div>
+          <div class="meta-item"><div class="meta-label">Options</div><div class="meta-value">Cold Call, Referral, Website…</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Sales reports, CRM</div></div>
+        </div>
+        <div class="field-desc">Records how this customer was acquired — Cold Calling, Email, Existing Customer, Partner, Campaign, Website, Referral, Word of Mouth, or Other. Used for marketing effectiveness analysis.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Track which marketing channels generate the most revenue. Filter the customer list by Source in reports to see revenue by acquisition channel — e.g. "Referral customers account for 40% of ARR".</div>
+        </div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Opening Balance</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Number (₹)</div></div>
+          <div class="meta-item"><div class="meta-label">Default</div><div class="meta-value">0</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Trial Balance, Ledger</div></div>
+        </div>
+        <div class="field-desc">The outstanding receivable balance owed by this customer on the Books opening date (migration date). Creates a journal entry in the Accounts Receivable ledger to carry forward existing debt.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> When migrating from another accounting system, existing customers may already owe money. Enter ₹2,50,000 as Opening Balance for a customer with a pre-existing debt. This ensures the Trial Balance is correct from Day 1 in Books.</div>
+        </div>
+        <div class="field-validation">⚠️ Only set this during initial data migration. Setting this after transactions have begun can cause imbalance in the ledger.</div>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ═══ BANK DETAILS TAB ═══ -->
+  <div class="section" id="bank">
+    <div class="section-header">
+      <div class="section-icon" style="background:#EFF6FF">🏦</div>
+      <div>
+        <div class="section-title">Tab 4 — Bank Details</div>
+        <div class="section-sub">Customer's bank account for payment tracking and reconciliation</div>
+      </div>
+    </div>
+    <div class="field-grid">
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Bank Name</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Text input</div></div>
+          <div class="meta-item"><div class="meta-label">Example</div><div class="meta-value">HDFC Bank, SBI, ICICI</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Payment reference</div></div>
+        </div>
+        <div class="field-desc">The name of the bank where the customer holds their account. Used as reference when receiving payments or when issuing refunds to the customer.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> When receiving NEFT/RTGS payments from this customer, the bank name helps verify the source. Also used when issuing credit note refunds — the finance team knows which bank to transfer to.</div>
+        </div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Account Number</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Numeric (monospace)</div></div>
+          <div class="meta-item"><div class="meta-label">Stored</div><div class="meta-value">Encrypted / masked</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Refunds, Reconciliation</div></div>
+        </div>
+        <div class="field-desc">The customer's bank account number. Displayed in monospace font for readability. Used as reference for fund transfers and reconciliation of incoming payments.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> When a customer requests a refund against a credit note, the finance team uses this account number to process the NEFT transfer without needing to ask the customer again.</div>
+        </div>
+      </div>
+
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">IFSC Code</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Format</div><div class="meta-value">11 chars (e.g. HDFC0000001)</div></div>
+          <div class="meta-item"><div class="meta-label">Auto</div><div class="meta-value">Converts to uppercase</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">NEFT/RTGS transfers</div></div>
+        </div>
+        <div class="field-desc">Indian Financial System Code — uniquely identifies a bank branch in India's electronic funds transfer system. Required for NEFT and RTGS transactions. Auto-converted to uppercase on input.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> Required when processing NEFT/RTGS refunds to the customer's bank. The IFSC + Account Number together uniquely identify the destination account for any electronic fund transfer.</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ═══ REMARKS TAB ═══ -->
+  <div class="section" id="remarks">
+    <div class="section-header">
+      <div class="section-icon" style="background:#F3F0FF">📝</div>
+      <div>
+        <div class="section-title">Tab 5 — Remarks</div>
+        <div class="section-sub">Internal notes visible only to your team</div>
+      </div>
+    </div>
+    <div class="field-grid">
+      <div class="field-card">
+        <div class="field-header">
+          <div class="field-name">Internal Notes</div>
+          <div class="field-badges"><span class="badge badge-opt">Optional</span></div>
+        </div>
+        <div class="field-meta">
+          <div class="meta-item"><div class="meta-label">Type</div><div class="meta-value">Multi-line textarea</div></div>
+          <div class="meta-item"><div class="meta-label">Visible to</div><div class="meta-value">Internal team only</div></div>
+          <div class="meta-item"><div class="meta-label">Used in</div><div class="meta-value">Customer notes, History</div></div>
+        </div>
+        <div class="field-desc">Free-form internal notes about this customer. Never shown to the customer on invoices or statements. Used by sales, accounts, and support teams to store context about the relationship.</div>
+        <div class="field-usecase">
+          <div class="field-usecase-icon">💡</div>
+          <div class="field-usecase-text"><strong>Use Case:</strong> "Customer prefers invoices via email by 1st of month. Disputes all invoices with rounding differences. Key contact: Priya +91 98xxx. Payment usually on 45th day despite Net 30 terms. Escalation contact: CFO Ravi Sharma."</div>
+        </div>
+        <div class="info-box info-box-blue">
+          <div class="info-icon">ℹ️</div>
+          <div><strong>Privacy note:</strong> These notes are internal only. They do not appear on any customer-facing documents, emails, or portal views. Safe to record payment behaviour, communication history, and sensitive business notes.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ═══ GST TREATMENT REFERENCE ═══ -->
+  <div class="section" id="gst">
+    <div class="section-header">
+      <div class="section-icon" style="background:#FFF0F6">🧾</div>
+      <div>
+        <div class="section-title">GST Treatment Reference</div>
+        <div class="section-sub">How field visibility and requirements change based on selected GST Treatment</div>
+      </div>
+    </div>
+
+    <table class="gst-table">
+      <thead>
+        <tr>
+          <th>GST Treatment</th>
+          <th>GSTIN</th>
+          <th>PAN</th>
+          <th>Place of Supply</th>
+          <th>Tax Applied</th>
+          <th>GSTR-1 Section</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong style="color:#2F9E44">Registered Business</strong></td>
+          <td><span class="req-mark">Required ✓</span></td>
+          <td><span class="tick">Optional</span></td>
+          <td><span class="req-mark">Required ✓</span></td>
+          <td>CGST+SGST or IGST</td>
+          <td>B2B Invoices</td>
+        </tr>
+        <tr>
+          <td><strong style="color:#E67700">Unregistered Business</strong></td>
+          <td><span class="cross">Hidden</span></td>
+          <td><span class="tick">Optional</span></td>
+          <td><span class="req-mark">Required ✓</span></td>
+          <td>CGST+SGST or IGST</td>
+          <td>B2CL / B2CS</td>
+        </tr>
+        <tr>
+          <td><strong style="color:#1971C2">Overseas</strong></td>
+          <td><span class="cross">Hidden</span></td>
+          <td><span class="cross">Hidden</span></td>
+          <td><span class="cross">Not applicable</span></td>
+          <td>IGST 0% (zero-rated)</td>
+          <td>Exports (with/without payment)</td>
+        </tr>
+        <tr>
+          <td><strong style="color:#7048E8">SEZ</strong></td>
+          <td><span class="req-mark">Required ✓</span></td>
+          <td><span class="tick">Optional</span></td>
+          <td><span class="req-mark">Required ✓</span></td>
+          <td>GST 0% (zero-rated)</td>
+          <td>SEZ Supplies</td>
+        </tr>
+        <tr>
+          <td><strong style="color:#495057">Consumer (B2C)</strong></td>
+          <td><span class="cross">Hidden</span></td>
+          <td><span class="cross">Hidden</span></td>
+          <td><span class="cross">Not applicable</span></td>
+          <td>CGST+SGST or IGST</td>
+          <td>B2CS (Small) / B2CL (Large &gt;2.5L)</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="info-box info-box-amber" style="margin-top:16px">
+      <div class="info-icon">⚠️</div>
+      <div><strong>GSTR-1 Impact:</strong> B2B invoices (Registered Business) are reported with invoice-level detail including GSTIN. B2CS invoices (Consumer, Unregistered) are consolidated by state. Export invoices (Overseas) are reported in a separate section. Always select the correct treatment to ensure accurate GST returns.</div>
+    </div>
+  </div>
+
+
+  <!-- ═══ QUICK REFERENCE SUMMARY ═══ -->
+  <div class="section" id="summary">
+    <div class="section-header">
+      <div class="section-icon" style="background:#F0FFF4">⚡</div>
+      <div>
+        <div class="section-title">Quick Reference — All Fields</div>
+        <div class="section-sub">Complete field list with type, requirement, and where it is used</div>
+      </div>
+    </div>
+
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Field</th>
+          <th>Tab</th>
+          <th>Type</th>
+          <th>Required</th>
+          <th>Where Used</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>Customer Type</strong></td><td>Overview</td><td>Radio</td><td>Yes</td><td>GST, Invoices, Reports</td></tr>
+        <tr><td><strong>GST Treatment</strong></td><td>Overview</td><td>Pill selector</td><td>Yes</td><td>Tax computation, GSTR-1</td></tr>
+        <tr><td><strong>Salutation</strong></td><td>Overview</td><td>Dropdown</td><td>No</td><td>Emails, PDF letters</td></tr>
+        <tr><td><strong>First Name</strong></td><td>Overview</td><td>Text</td><td>No</td><td>Contact, CRM</td></tr>
+        <tr><td><strong>Last Name</strong></td><td>Overview</td><td>Text</td><td>No</td><td>Contact, CRM</td></tr>
+        <tr><td><strong>Company Name</strong></td><td>Overview</td><td>Text</td><td>No</td><td>Invoice header, Address label</td></tr>
+        <tr><td><strong>Display Name</strong></td><td>Overview</td><td>Text</td><td>✅ Yes</td><td>All invoices, Orders, Reports</td></tr>
+        <tr><td><strong>GSTIN / Tax ID</strong></td><td>Overview</td><td>Text (15 chars)</td><td>Conditional</td><td>B2B invoices, GSTR-1</td></tr>
+        <tr><td><strong>PAN Number</strong></td><td>Overview</td><td>Text (10 chars)</td><td>Conditional</td><td>TDS, 26AS, Compliance</td></tr>
+        <tr><td><strong>Email Address</strong></td><td>Overview</td><td>Email</td><td>No</td><td>Invoice emails, Statements</td></tr>
+        <tr><td><strong>Mobile</strong></td><td>Overview</td><td>Country code + number</td><td>No</td><td>SMS, WhatsApp</td></tr>
+        <tr><td><strong>Work Phone</strong></td><td>Overview</td><td>Text</td><td>No</td><td>Contact reference</td></tr>
+        <tr><td><strong>Website</strong></td><td>Overview</td><td>URL</td><td>No</td><td>Customer profile</td></tr>
+        <tr><td><strong>Currency</strong></td><td>Overview</td><td>Dropdown</td><td>Yes (default INR)</td><td>All invoices, Forex</td></tr>
+        <tr><td><strong>Payment Terms</strong></td><td>Overview</td><td>Dropdown</td><td>No</td><td>Invoice due dates, Aging</td></tr>
+        <tr><td><strong>Credit Limit</strong></td><td>Overview</td><td>Number (₹)</td><td>No</td><td>Risk alerts</td></tr>
+        <tr><td><strong>Billing Address Line 1–2</strong></td><td>Address</td><td>Text</td><td>No</td><td>Invoice PDF, E-Way Bill</td></tr>
+        <tr><td><strong>Billing City</strong></td><td>Address</td><td>Text</td><td>No</td><td>Address block, Delivery</td></tr>
+        <tr><td><strong>Billing State</strong></td><td>Address</td><td>Dropdown</td><td>No</td><td>GST tax split, E-Way Bill</td></tr>
+        <tr><td><strong>Billing Pincode</strong></td><td>Address</td><td>Text (6 digits)</td><td>No</td><td>Courier, Delivery Challan</td></tr>
+        <tr><td><strong>Billing Country</strong></td><td>Address</td><td>Dropdown</td><td>No</td><td>Export classification, Forex</td></tr>
+        <tr><td><strong>Shipping Address Line 1–2</strong></td><td>Address</td><td>Text</td><td>No</td><td>Delivery Challan, E-Way Bill</td></tr>
+        <tr><td><strong>Shipping City/State/Pincode/Country</strong></td><td>Address</td><td>Text/Dropdown</td><td>No</td><td>Delivery, E-Way Bill</td></tr>
+        <tr><td><strong>Place of Supply</strong></td><td>Other Details</td><td>Dropdown (state code)</td><td>Conditional</td><td>GSTR-1, Tax split</td></tr>
+        <tr><td><strong>Customer Source</strong></td><td>Other Details</td><td>Dropdown</td><td>No</td><td>Sales analytics, CRM</td></tr>
+        <tr><td><strong>Opening Balance</strong></td><td>Other Details</td><td>Number (₹)</td><td>No</td><td>Trial Balance, Migration</td></tr>
+        <tr><td><strong>Bank Name</strong></td><td>Bank Details</td><td>Text</td><td>No</td><td>Refunds, Payment reference</td></tr>
+        <tr><td><strong>Account Number</strong></td><td>Bank Details</td><td>Numeric</td><td>No</td><td>NEFT/RTGS refunds</td></tr>
+        <tr><td><strong>IFSC Code</strong></td><td>Bank Details</td><td>Text (11 chars)</td><td>No</td><td>Bank transfers</td></tr>
+        <tr><td><strong>Internal Notes</strong></td><td>Remarks</td><td>Textarea</td><td>No</td><td>Internal team reference</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Footer -->
+  <div class="doc-footer">
+    <p>Books — Customer Field Reference Guide &nbsp;·&nbsp; Internal Use Only &nbsp;·&nbsp; Generated April 2026</p>
+    <p style="margin-top:4px">This document covers all fields available in the New Customer form as of Books v1.0. Fields marked "Conditional" are shown/hidden dynamically based on GST Treatment selection.</p>
+  </div>
+
+</div><!-- /page -->
+</body>
+</html>

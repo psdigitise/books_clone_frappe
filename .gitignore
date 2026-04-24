@@ -49,3 +49,4 @@ node_modules/
 
 # Frappe / ERPNext build artefacts
 *.min.js.map
+.claude/settings.json

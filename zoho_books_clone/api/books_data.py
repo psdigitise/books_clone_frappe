@@ -710,3 +710,17 @@ def normalize_company_names():
         "rows_updated": updated,
         "message": f"Normalised company name to '{canonical}' across {len(updated)} tables.",
     }
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_invoice_payments(invoice_name):
+    """Return all submitted payment entries linked to a Sales Invoice."""
+    rows = frappe.db.sql("""
+        SELECT pe.name, pe.posting_date, pe.payment_mode,
+               per.allocated_amount, pe.reference_no
+          FROM `tabPayment Entry` pe
+          JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+         WHERE per.reference_name = %s AND pe.docstatus = 1
+         ORDER BY pe.posting_date
+    """, invoice_name, as_dict=True)
+    return rows

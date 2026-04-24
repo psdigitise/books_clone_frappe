@@ -2347,6 +2347,8 @@
       const editing = ref(false), saving = ref(false), submitting = ref(false);
       const customers = ref([]), accounts_ar = ref([]), accounts_income = ref([]);
       const allItems = ref([]);
+      const invPayments = ref([]);
+      const paymentsOpen = ref(false);
       const form = reactive({
         customer: "", posting_date: "", due_date: "", debit_to: "", income_account: "",
         currency: "INR", notes: "", company: "",
@@ -2360,6 +2362,8 @@
         try { inv.value = await apiGet("Sales Invoice", name); }
         catch (e) { detailError.value = e.message; }
         finally { detailLoading.value = false; }
+        try { invPayments.value = await apiGET("zoho_books_clone.api.books_data.get_invoice_payments", { invoice_name: name }); }
+        catch { invPayments.value = []; }
       }
 
       watch(invName, n => { if (n) loadDetail(n); }, { immediate: true });
@@ -2582,7 +2586,7 @@
 
       return {
         list, listLoading, active, search, filters, counts, filtered, pillBadge, goInvoice, invName,
-        inv, detailLoading, detailError, editing, saving, submitting, showSendEmail, showSendMenu, showCustMenu, showRecPay, recPay, recPaySaving, recPayAccounts, saveRecPay, openRecPay, showNew, onInvoiceSaved,
+        inv, detailLoading, detailError, editing, saving, submitting, showSendEmail, showSendMenu, showCustMenu, showRecPay, recPay, recPaySaving, recPayAccounts, saveRecPay, openRecPay, showNew, onInvoiceSaved, invPayments, paymentsOpen,
         form, customers, allItems, onItemPick, accounts_ar, accounts_income,
         statusBadgeCls, isDraft, paidAmt, paidPct, netTotal, totalTax, grandTotal,
         startEdit, saveEdit, submitInvoice, printPdf,
@@ -2886,6 +2890,37 @@
       <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="submitInvoice">Submit Invoice</button>
     </div>
 
+    <!-- Payments Received strip -->
+    <div v-if="inv&&!detailLoading&&!editing" class="no-print"
+      style="border-bottom:1px solid #e8ecf0;background:#fff">
+      <div @click="paymentsOpen=!paymentsOpen"
+        style="display:flex;align-items:center;gap:10px;padding:10px 20px;cursor:pointer;user-select:none">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+        <span style="font-size:13px;font-weight:600;color:#374151">Payments Received</span>
+        <span style="font-size:12px;font-weight:700;color:#fff;background:#2563eb;border-radius:50%;width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center">{{invPayments.length}}</span>
+        <span style="margin-left:auto;color:#9ca3af;font-size:13px">{{paymentsOpen?'▾':'›'}}</span>
+      </div>
+      <div v-if="paymentsOpen&&invPayments.length" style="padding:0 20px 12px">
+        <table style="width:100%;font-size:12px;border-collapse:collapse">
+          <thead><tr style="color:#9ca3af;font-size:11px;text-transform:uppercase;letter-spacing:.5px">
+            <th style="text-align:left;padding:4px 8px 4px 0;font-weight:600">Payment #</th>
+            <th style="text-align:left;padding:4px 8px;font-weight:600">Date</th>
+            <th style="text-align:left;padding:4px 8px;font-weight:600">Mode</th>
+            <th style="text-align:right;padding:4px 0 4px 8px;font-weight:600">Amount</th>
+          </tr></thead>
+          <tbody>
+            <tr v-for="p in invPayments" :key="p.name" style="border-top:1px solid #f3f4f6">
+              <td style="padding:6px 8px 6px 0;color:#2563eb;font-weight:600;font-family:monospace;font-size:11.5px">{{p.name}}</td>
+              <td style="padding:6px 8px;color:#374151">{{fmtDate(p.posting_date)}}</td>
+              <td style="padding:6px 8px;color:#6b7280">{{p.payment_mode||'—'}}</td>
+              <td style="padding:6px 0 6px 8px;text-align:right;font-weight:700;color:#059669;font-family:monospace">{{fmt(p.allocated_amount)}}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="paymentsOpen&&!invPayments.length" style="padding:8px 20px 12px;font-size:12px;color:#9ca3af">No payments recorded yet.</div>
+    </div>
+
     <!-- Loading shimmer -->
     <div v-if="detailLoading" style="flex:1;display:flex;align-items:center;justify-content:center">
       <div style="text-align:center">
@@ -3005,11 +3040,11 @@
                 <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
               </div>
               <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Total</span><span>{{fmt(inv.grand_total)}}</span></div>
-              <div v-if="flt(inv.outstanding_amount)>0" class="zb-pdf-total-row zb-pdf-balance">
-                <span>Balance Due</span><span>{{fmt(inv.outstanding_amount)}}</span>
+              <div v-if="paidAmt>0" class="zb-pdf-total-row" style="color:#059669">
+                <span>Payment Made</span><span style="color:#e03131">(-) {{fmt(paidAmt)}}</span>
               </div>
-              <div v-else class="zb-pdf-total-row" style="color:#2f9e44;font-weight:700;font-size:12px">
-                <span>✓ Paid in Full</span><span>{{fmt(inv.grand_total)}}</span>
+              <div class="zb-pdf-total-row zb-pdf-balance" :style="{color:flt(inv.outstanding_amount)<=0?'#059669':'#e03131',fontWeight:700}">
+                <span>Balance Due</span><span>{{fmt(inv.outstanding_amount)}}</span>
               </div>
             </div>
           </div>
@@ -3455,6 +3490,14 @@
         } finally { deleting.value = false; }
       }
 
+      const selectedCustomer = ref(null);
+      const activeCustomerTab = ref("overview");
+      function selectCustomer(c) { selectedCustomer.value = c; activeCustomerTab.value = "overview"; }
+      function closeCustomer() { selectedCustomer.value = null; }
+      function custInitials(name) {
+        return (name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+      }
+
       onMounted(load);
 
       return {
@@ -3462,121 +3505,270 @@
         showDrawer, drawerMode, drawerLoading, drawerTab, saving, form, formErrors,
         activeRule, GST_TREATMENT_OPTIONS, GST_RULES,
         showDelete, deleteTarget, deleting,
+        selectedCustomer, activeCustomerTab, selectCustomer, closeCustomer, custInitials,
         load, openAdd, openEdit, saveCustomer, confirmDelete, doDelete,
         icon, fmt, fmtDate,
       };
     },
     template: `
-<div class="b-page cust-page">
-
-  <!-- ── Toolbar ── -->
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-filters">
-        <button v-for="f in [{k:'all',l:'All'},{k:'active',l:'Active'},{k:'disabled',l:'Disabled'}]"
-          :key="f.k" class="zb-inv-pill" :class="{'zb-inv-pill-active': activeFilter===f.k}"
-          @click="activeFilter=f.k">
-          {{f.l}}
-          <span class="zb-pill-cnt" :class="activeFilter===f.k?'':'zb-pc-muted'">{{counts[f.k]}}</span>
-        </button>
+<div>
+  <!-- ── FLAT TABLE VIEW (default) ── -->
+  <div v-if="!selectedCustomer" class="b-page cust-page">
+    <div class="cust-toolbar">
+      <div class="cust-toolbar-left">
+        <div class="cust-filters">
+          <button v-for="f in [{k:'all',l:'All'},{k:'active',l:'Active'},{k:'disabled',l:'Disabled'}]"
+            :key="f.k" class="zb-inv-pill" :class="{'zb-inv-pill-active': activeFilter===f.k}"
+            @click="activeFilter=f.k">
+            {{f.l}}
+            <span class="zb-pill-cnt" :class="activeFilter===f.k?'':'zb-pc-muted'">{{counts[f.k]}}</span>
+          </button>
+        </div>
+      </div>
+      <div class="cust-toolbar-right">
+        <div class="cust-search">
+          <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+          <input v-model="search" placeholder="Search customers…" class="cust-search-input" autocomplete="off"/>
+        </div>
+        <button class="zb-tb-btn" @click="load" title="Refresh"><span v-html="icon('refresh',13)"></span> Refresh</button>
+        <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Customer</button>
       </div>
     </div>
-    <div class="cust-toolbar-right">
-      <div class="cust-search">
-        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
-        <input v-model="search" placeholder="Search customers…" class="cust-search-input" autocomplete="off"/>
-      </div>
-      <button class="zb-tb-btn" @click="load" title="Refresh">
-        <span v-html="icon('refresh',13)"></span> Refresh
-      </button>
-      <button class="zb-tb-btn zb-tb-primary" @click="openAdd">
-        <span v-html="icon('plus',13)"></span> New Customer
-      </button>
-    </div>
-  </div>
-
-  <!-- ── Table ── -->
-  <div class="b-card cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
-        <thead>
-          <tr>
-            <th>Customer</th>
-            <th>Type</th>
-            <th>GSTIN</th>
-            <th>Email</th>
-            <th>Mobile</th>
-            <th>City / State</th>
-            <th>Status</th>
+    <div class="b-card cust-table-card">
+      <div class="cust-table-wrap">
+        <table class="cust-table">
+          <thead><tr>
+            <th>Customer</th><th>Type</th><th>GSTIN</th><th>Email</th>
+            <th>Mobile</th><th>City / State</th><th>Status</th>
             <th style="text-align:center;width:100px">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- Loading -->
-          <template v-if="loading">
-            <tr v-for="n in 6" :key="n">
-              <td colspan="8" style="padding:12px 14px">
-                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
+          </tr></thead>
+          <tbody>
+            <template v-if="loading">
+              <tr v-for="n in 6" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div></td></tr>
+            </template>
+            <tr v-else-if="!filtered.length">
+              <td colspan="8" class="cust-empty">
+                <div class="cust-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></div>
+                <div class="cust-empty-title">{{search ? 'No results found' : 'No customers yet'}}</div>
+                <div class="cust-empty-sub">{{search ? 'Try a different search term' : 'Add your first customer to get started'}}</div>
+                <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Customer</button>
               </td>
             </tr>
-          </template>
-          <!-- Empty -->
-          <tr v-else-if="!filtered.length">
-            <td colspan="8" class="cust-empty">
-              <div class="cust-empty-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-              </div>
-              <div class="cust-empty-title">{{search ? 'No results found' : 'No customers yet'}}</div>
-              <div class="cust-empty-sub">{{search ? 'Try a different search term' : 'Add your first customer to get started'}}</div>
-              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd">
-                <span v-html="icon('plus',13)"></span> New Customer
-              </button>
-            </td>
-          </tr>
-          <!-- Rows -->
-          <tr v-else v-for="c in filtered" :key="c.name"
-            class="cust-row" :class="c.disabled?'cust-row-disabled':''"
-            @click="openEdit(c.name)">
-            <td>
-              <div class="cust-name">{{c.customer_name}}</div>
-              <div class="cust-id">{{c.name}}</div>
-            </td>
-            <td>
-              <span class="b-badge" :class="c.customer_type==='Company'?'b-badge-blue':'b-badge-muted'">
-                {{c.customer_type||'—'}}
-              </span>
-            </td>
-            <td class="cust-mono">{{c.tax_id||'—'}}</td>
-            <td class="cust-secondary">{{c.email_id||'—'}}</td>
-            <td class="cust-secondary">{{c.mobile_no||'—'}}</td>
-            <td class="cust-secondary">
-              {{c.city ? (c.city + (c.state ? ', '+c.state : '')) : '—'}}
-            </td>
-            <td>
-              <span class="b-badge" :class="c.disabled?'b-badge-red':'b-badge-green'">
-                {{c.disabled?'Disabled':'Active'}}
-              </span>
-            </td>
-            <td @click.stop style="text-align:center">
-              <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn cust-act-edit" @click="openEdit(c.name)" title="Edit">
-                  <span v-html="icon('edit',13)"></span>
-                </button>
-                <button class="cust-act-btn cust-act-del" @click="confirmDelete(c)" title="Delete">
-                  <span v-html="icon('trash',13)"></span>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div v-if="!loading && filtered.length" class="cust-row-count">
-      Showing {{filtered.length}} of {{list.length}} customers
+            <tr v-else v-for="c in filtered" :key="c.name" class="cust-row" :class="c.disabled?'cust-row-disabled':''" @click="selectCustomer(c)">
+              <td><div class="cust-name">{{c.customer_name}}</div><div class="cust-id">{{c.name}}</div></td>
+              <td><span class="b-badge" :class="c.customer_type==='Company'?'b-badge-blue':'b-badge-muted'">{{c.customer_type||'—'}}</span></td>
+              <td class="cust-mono">{{c.tax_id||'—'}}</td>
+              <td class="cust-secondary">{{c.email_id||'—'}}</td>
+              <td class="cust-secondary">{{c.mobile_no||'—'}}</td>
+              <td class="cust-secondary">{{c.city ? (c.city + (c.state ? ', '+c.state : '')) : '—'}}</td>
+              <td><span class="b-badge" :class="c.disabled?'b-badge-red':'b-badge-green'">{{c.disabled?'Disabled':'Active'}}</span></td>
+              <td @click.stop style="text-align:center">
+                <div style="display:flex;gap:4px;justify-content:center">
+                  <button class="cust-act-btn cust-act-edit" @click="openEdit(c.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+                  <button class="cust-act-btn cust-act-del" @click="confirmDelete(c)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} customers</div>
     </div>
   </div>
 
-  <!-- ── Add / Edit Drawer ── -->
+  <!-- ── TWO-PANEL DETAIL VIEW (when customer selected) ── -->
+  <div v-else class="zb-master-detail" style="height:calc(100vh - 56px)">
+    <!-- Left panel: customer list -->
+    <div class="zb-list-pane" style="width:320px;min-width:260px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;overflow:hidden">
+      <div style="padding:16px 16px 10px;border-bottom:1px solid #f0f2f5;flex-shrink:0">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <span style="font-size:14px;font-weight:700;color:#111827">Active Customers ▾</span>
+          <button class="zb-tb-btn zb-tb-primary" style="padding:5px 10px;font-size:12px" @click="openAdd"><span v-html="icon('plus',12)"></span> New</button>
+        </div>
+        <div class="cust-search" style="width:100%">
+          <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+          <input v-model="search" placeholder="Search customers…" class="cust-search-input" autocomplete="off"/>
+        </div>
+      </div>
+      <div style="flex:1;overflow-y:auto">
+        <div v-for="c in filtered" :key="c.name"
+          @click="selectCustomer(c)"
+          :style="{padding:'12px 16px',borderBottom:'1px solid #f0f2f5',cursor:'pointer',
+            background:selectedCustomer.name===c.name?'#EFF6FF':'transparent',
+            borderLeft:selectedCustomer.name===c.name?'3px solid #2563EB':'3px solid transparent'}">
+          <div style="display:flex;align-items:center;justify-content:space-between">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:13px;font-weight:700;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{c.customer_name}}</div>
+              <div style="font-size:12px;color:#6B7280;margin-top:2px;font-family:monospace">₹0.00</div>
+            </div>
+            <span class="b-badge" :class="c.disabled?'b-badge-red':'b-badge-green'" style="font-size:10px">{{c.disabled?'Disabled':'Active'}}</span>
+          </div>
+        </div>
+      </div>
+      <div style="padding:8px 16px;border-top:1px solid #f0f2f5;font-size:11.5px;color:#9ca3af;flex-shrink:0">{{filtered.length}} customers</div>
+    </div>
+
+    <!-- Right panel: customer detail -->
+    <div style="flex:1;overflow-y:auto;background:#fff">
+      <!-- Header action bar -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid #F3F4F6;position:sticky;top:0;background:#fff;z-index:10">
+        <h2 style="font-size:20px;font-weight:700;color:#111827;margin:0">{{selectedCustomer.customer_name}}</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="nim-btn" style="background:#fff;border:1px solid #E5E7EB;color:#374151;font-size:13px" @click="openEdit(selectedCustomer.name)">Edit</button>
+          <button style="background:none;border:none;cursor:pointer;padding:6px;border:1px solid #E5E7EB;border-radius:6px;display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+          <button class="nim-btn nim-btn-primary" style="font-size:13px">New Transaction ▾</button>
+          <button class="nim-btn" style="background:#fff;border:1px solid #E5E7EB;color:#374151;font-size:13px">More ▾</button>
+          <button @click="closeCustomer" style="background:none;border:1px solid #E5E7EB;border-radius:6px;width:32px;height:32px;cursor:pointer;display:grid;place-items:center;color:#9CA3AF"><span v-html="icon('x',14)"></span></button>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div style="display:flex;border-bottom:2px solid #E5E7EB;padding:0 24px;gap:0">
+        <button v-for="t in ['Overview','Comments','Transactions','Mails','Statement']" :key="t"
+          @click="activeCustomerTab=t.toLowerCase()"
+          :style="{padding:'10px 16px',fontSize:'13.5px',fontWeight:600,border:'none',background:'none',cursor:'pointer',
+            color:activeCustomerTab===t.toLowerCase()?'#2563EB':'#6B7280',
+            borderBottom:activeCustomerTab===t.toLowerCase()?'2px solid #2563EB':'2px solid transparent',marginBottom:'-2px'}">
+          {{t}}
+        </button>
+      </div>
+
+      <!-- Overview tab content -->
+      <div v-if="activeCustomerTab==='overview'" style="display:flex;gap:0;align-items:flex-start">
+
+        <!-- Left column: contact + sections -->
+        <div style="flex:0 0 55%;border-right:1px solid #F3F4F6;padding:20px 24px;display:flex;flex-direction:column;gap:16px;min-height:500px">
+
+          <!-- Company tag -->
+          <div v-if="selectedCustomer.company_name||'PSD'" style="font-size:12px;font-weight:600;color:#6B7280">{{selectedCustomer.company_name||'PSD'}}</div>
+
+          <!-- Contact card -->
+          <div style="display:flex;align-items:flex-start;gap:12px;padding:14px;border:1px solid #F3F4F6;border-radius:10px;background:#FAFAFA">
+            <div :style="{width:'44px',height:'44px',borderRadius:'50%',background:'#E5E7EB',display:'flex',alignItems:'center',justifyContent:'center',color:'#6B7280',fontSize:'16px',fontWeight:700,flexShrink:0}">
+              {{custInitials(selectedCustomer.customer_name)}}
+            </div>
+            <div style="flex:1">
+              <div style="font-size:14px;font-weight:700;color:#111827;margin-bottom:4px">Mr. {{selectedCustomer.customer_name}}</div>
+              <div v-if="selectedCustomer.email_id" style="font-size:12.5px;color:#6B7280;margin-bottom:3px">{{selectedCustomer.email_id}}</div>
+              <div v-if="selectedCustomer.mobile_no" style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:#374151;margin-bottom:3px">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.63 3.18 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6A16 16 0 0 0 15.4 16.1l.97-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                {{selectedCustomer.mobile_no}}
+              </div>
+              <div style="font-size:12px;color:#DC2626;margin-top:4px">Portal invitation not accepted</div>
+              <button style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px;padding:0;margin-top:2px">Re-invite</button>
+            </div>
+            <button style="background:none;border:none;cursor:pointer;padding:4px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
+          </div>
+
+          <!-- ADDRESS -->
+          <div style="border:1px solid #F3F4F6;border-radius:10px;overflow:hidden">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#FAFAFA;border-bottom:1px solid #F3F4F6">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">ADDRESS</span>
+              <span style="color:#9CA3AF;font-size:13px">▲</span>
+            </div>
+            <div style="padding:14px;display:flex;flex-direction:column;gap:12px">
+              <div>
+                <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:4px">Billing Address</div>
+                <div v-if="selectedCustomer.city||selectedCustomer.address_line1" style="font-size:12.5px;color:#374151;line-height:1.6">
+                  <div v-if="selectedCustomer.address_line1">{{selectedCustomer.address_line1}}</div>
+                  <div>{{[selectedCustomer.city,selectedCustomer.state].filter(Boolean).join(', ')}}</div>
+                </div>
+                <div v-else style="font-size:12.5px;color:#9CA3AF">No Billing Address - <a href="#" @click.prevent="openEdit(selectedCustomer.name)" style="color:#2563EB;text-decoration:none">New Address</a></div>
+              </div>
+              <div>
+                <div style="font-size:12px;font-weight:600;color:#374151;margin-bottom:4px">Shipping Address</div>
+                <div style="font-size:12.5px;color:#9CA3AF">No Shipping Address - <a href="#" @click.prevent="openEdit(selectedCustomer.name)" style="color:#2563EB;text-decoration:none">New Address</a></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- OTHER DETAILS -->
+          <div style="border:1px solid #F3F4F6;border-radius:10px;overflow:hidden">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#FAFAFA;border-bottom:1px solid #F3F4F6">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">OTHER DETAILS</span>
+              <span style="color:#9CA3AF;font-size:13px">▲</span>
+            </div>
+            <div style="padding:14px;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;justify-content:space-between;font-size:12.5px">
+                <span style="color:#6B7280">Customer Type</span><span style="font-weight:600;color:#111827">{{selectedCustomer.customer_type||'Business'}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px">
+                <span style="color:#6B7280">Default Currency</span><span style="font-weight:600;color:#111827">{{selectedCustomer.default_currency||'INR'}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px;align-items:center">
+                <span style="color:#6B7280">Portal Status</span>
+                <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:#ECFDF5;color:#059669">● Enabled (1 of 1 Contacts)</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px">
+                <span style="color:#6B7280">Customer Language</span><span style="font-weight:600;color:#111827">English</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- CONTACT PERSONS -->
+          <div style="border:1px solid #F3F4F6;border-radius:10px;overflow:hidden">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:#FAFAFA">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">CONTACT PERSONS</span>
+              <div style="display:flex;gap:6px">
+                <button style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12px">+</button>
+                <span style="color:#9CA3AF;font-size:13px">▲</span>
+              </div>
+            </div>
+            <div style="padding:14px;font-size:12.5px;color:#9CA3AF">No contact persons found.</div>
+          </div>
+        </div>
+
+        <!-- Right column: receivables + activity -->
+        <div style="flex:1;padding:20px 24px;display:flex;flex-direction:column;gap:16px">
+          <!-- Payment due period -->
+          <div>
+            <div style="font-size:12px;color:#6B7280;margin-bottom:4px">Payment due period</div>
+            <div style="font-size:14px;font-weight:600;color:#111827">Due on Receipt</div>
+          </div>
+
+          <!-- Receivables -->
+          <div>
+            <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:12px">Receivables</div>
+            <table style="width:100%;border-collapse:collapse">
+              <thead>
+                <tr style="border-bottom:1px solid #F3F4F6">
+                  <th style="text-align:left;font-size:10.5px;font-weight:600;color:#9CA3AF;padding:0 0 8px">CURRENCY</th>
+                  <th style="text-align:right;font-size:10.5px;font-weight:600;color:#9CA3AF;padding:0 0 8px">OUTSTANDING RECEIVABLES</th>
+                  <th style="text-align:right;font-size:10.5px;font-weight:600;color:#9CA3AF;padding:0 0 8px">UNUSED CREDITS</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-size:13px;font-weight:600;color:#374151;padding:10px 0">INR- Indian Rupee</td>
+                  <td style="text-align:right;font-size:13px;font-weight:700;color:#2563EB;padding:10px 0;font-family:monospace">{{fmt(selectedCustomer.credit_limit||0)}}</td>
+                  <td style="text-align:right;font-size:13px;font-weight:700;color:#111827;padding:10px 0;font-family:monospace">₹0.00</td>
+                </tr>
+              </tbody>
+            </table>
+            <button style="background:none;border:none;cursor:pointer;color:#2563EB;font-size:12.5px;padding:6px 0">View Opening Balance</button>
+          </div>
+
+          <!-- Activity timeline -->
+          <div style="margin-top:8px">
+            <div style="font-size:12.5px;font-weight:700;color:#111827;margin-bottom:12px;display:flex;align-items:center;gap:8px">
+              Recent Activity
+            </div>
+            <div style="text-align:center;padding:24px;color:#9CA3AF;border:1px dashed #E5E7EB;border-radius:8px;font-size:12.5px">
+              No recent activity. Transactions will appear here.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Other tabs -->
+      <div v-if="activeCustomerTab!=='overview'" style="padding:32px 24px;text-align:center;color:#9CA3AF">
+        <div style="font-size:14px;font-weight:600;color:#374151;margin-bottom:6px;text-transform:capitalize">{{activeCustomerTab}}</div>
+        <div style="font-size:12.5px">No {{activeCustomerTab}} data available for {{selectedCustomer.customer_name}}.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Drawer and modals via teleport -->
   <teleport to="body">
     <div v-if="showDrawer" class="cust-backdrop" @click.self="showDrawer=false">
       <div class="cust-drawer" style="width:680px;max-width:98vw">
@@ -4164,127 +4356,373 @@
         } finally { deleting.value = false; }
       }
 
+      // ── Two-panel state ──
+      const selectedVendor = ref(null);
+      const activeVendorTab = ref("overview");
+
+      function selectVendor(v) { selectedVendor.value = v; activeVendorTab.value = "overview"; }
+      function closeVendor() { selectedVendor.value = null; }
+
+      function vendorInitials(name) {
+        return (name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+      }
+
       onMounted(() => { load(); loadAccounts(); });
 
       return {
         list, loading, search, activeFilter, filtered, counts, accounts,
         showDrawer, drawerMode, drawerLoading, saving, form,
         showDelete, deleteTarget, deleting,
+        selectedVendor, activeVendorTab, selectVendor, closeVendor, vendorInitials,
         load, openAdd, openEdit, saveVendor, confirmDelete, doDelete,
         icon, fmt, fmtDate,
       };
     },
     template: `
-<div class="b-page cust-page">
+<div>
 
-  <!-- ── Toolbar ── -->
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-filters">
-        <button v-for="f in [{k:'all',l:'All'},{k:'active',l:'Active'},{k:'disabled',l:'Disabled'}]"
-          :key="f.k" class="zb-inv-pill" :class="{'zb-inv-pill-active': activeFilter===f.k}"
-          @click="activeFilter=f.k">
-          {{f.l}}
-          <span class="zb-pill-cnt" :class="activeFilter===f.k?'':'zb-pc-muted'">{{counts[f.k]}}</span>
-        </button>
+  <!-- ── FLAT TABLE VIEW (default, nothing selected) ── -->
+  <div v-if="!selectedVendor" class="b-page cust-page">
+    <div class="cust-toolbar">
+      <div class="cust-toolbar-left">
+        <div class="cust-filters">
+          <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All <span class="zb-pill-cnt" :class="activeFilter==='all'?'':'zb-pc-muted'">{{counts.all}}</span></button>
+          <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='active'}" @click="activeFilter='active'">Active <span class="zb-pill-cnt" :class="activeFilter==='active'?'':'zb-pc-muted'">{{counts.active}}</span></button>
+          <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='disabled'}" @click="activeFilter='disabled'">Disabled <span class="zb-pill-cnt" :class="activeFilter==='disabled'?'':'zb-pc-muted'">{{counts.disabled}}</span></button>
+        </div>
+      </div>
+      <div class="cust-toolbar-right">
+        <div class="cust-search">
+          <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+          <input v-model="search" placeholder="Search vendors…" class="cust-search-input" autocomplete="off"/>
+        </div>
+        <button class="zb-tb-btn" @click="load" title="Refresh"><span v-html="icon('refresh',13)"></span> Refresh</button>
+        <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Vendor</button>
       </div>
     </div>
-    <div class="cust-toolbar-right">
-      <div class="cust-search">
-        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
-        <input v-model="search" placeholder="Search vendors…" class="cust-search-input" autocomplete="off"/>
+    <div class="b-card cust-table-card">
+      <div class="cust-table-wrap">
+        <table class="cust-table">
+          <thead><tr>
+            <th>Vendor</th><th>Type</th><th>GSTIN</th><th>Email</th>
+            <th>Mobile</th><th>City / State</th><th>Status</th>
+            <th style="text-align:center;width:100px">Actions</th>
+          </tr></thead>
+          <tbody>
+            <template v-if="loading">
+              <tr v-for="n in 6" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div></td></tr>
+            </template>
+            <tr v-else-if="!filtered.length">
+              <td colspan="8" class="cust-empty">
+                <div class="cust-empty-icon"><svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+                <div class="cust-empty-title">{{search ? 'No results found' : 'No vendors yet'}}</div>
+                <div class="cust-empty-sub">{{search ? 'Try a different search term' : 'Add your first vendor to get started'}}</div>
+                <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Vendor</button>
+              </td>
+            </tr>
+            <tr v-else v-for="v in filtered" :key="v.name" class="cust-row" :class="v.disabled?'cust-row-disabled':''" @click="selectVendor(v)">
+              <td><div class="cust-name">{{v.supplier_name||v.name}}</div><div class="cust-id">{{v.name}}</div></td>
+              <td><span class="b-badge" :class="v.supplier_type==='Company'?'b-badge-blue':'b-badge-muted'">{{v.supplier_type||'—'}}</span></td>
+              <td class="cust-mono">{{v.tax_id||'—'}}</td>
+              <td class="cust-secondary">{{v.email_id||'—'}}</td>
+              <td class="cust-secondary">{{v.mobile_no||'—'}}</td>
+              <td class="cust-secondary">{{v.city ? (v.city + (v.state ? ', '+v.state : '')) : '—'}}</td>
+              <td><span class="b-badge" :class="v.disabled?'b-badge-red':'b-badge-green'">{{v.disabled?'Disabled':'Active'}}</span></td>
+              <td @click.stop style="text-align:center">
+                <div style="display:flex;gap:4px;justify-content:center">
+                  <button class="cust-act-btn cust-act-edit" @click="openEdit(v.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+                  <button class="cust-act-btn cust-act-del" @click="confirmDelete(v)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <button class="zb-tb-btn" @click="load" title="Refresh">
-        <span v-html="icon('refresh',13)"></span> Refresh
-      </button>
-      <button class="zb-tb-btn zb-tb-primary" @click="openAdd">
-        <span v-html="icon('plus',13)"></span> New Vendor
-      </button>
+      <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} vendors</div>
     </div>
   </div>
 
-  <!-- ── Table ── -->
-  <div class="b-card cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
-        <thead>
-          <tr>
-            <th>Vendor</th>
-            <th>Type</th>
-            <th>GSTIN</th>
-            <th>Email</th>
-            <th>Mobile</th>
-            <th>City / State</th>
-            <th>Status</th>
-            <th style="text-align:center;width:100px">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- Loading -->
-          <template v-if="loading">
-            <tr v-for="n in 6" :key="n">
-              <td colspan="8" style="padding:12px 14px">
-                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
-              </td>
-            </tr>
-          </template>
-          <!-- Empty -->
-          <tr v-else-if="!filtered.length">
-            <td colspan="8" class="cust-empty">
-              <div class="cust-empty-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-              </div>
-              <div class="cust-empty-title">{{search ? 'No results found' : 'No vendors yet'}}</div>
-              <div class="cust-empty-sub">{{search ? 'Try a different search term' : 'Add your first vendor to get started'}}</div>
-              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd">
-                <span v-html="icon('plus',13)"></span> New Vendor
-              </button>
-            </td>
-          </tr>
-          <!-- Rows -->
-          <tr v-else v-for="v in filtered" :key="v.name"
-            class="cust-row" :class="v.disabled?'cust-row-disabled':''"
-            @click="openEdit(v.name)">
-            <td>
-              <div class="cust-name">{{v.supplier_name}}</div>
-              <div class="cust-id">{{v.name}}</div>
-            </td>
-            <td>
-              <span class="b-badge" :class="v.supplier_type==='Company'?'b-badge-amber':'b-badge-muted'">
-                {{v.supplier_type||'—'}}
-              </span>
-            </td>
-            <td class="cust-mono">{{v.tax_id||'—'}}</td>
-            <td class="cust-secondary">{{v.email_id||'—'}}</td>
-            <td class="cust-secondary">{{v.mobile_no||'—'}}</td>
-            <td class="cust-secondary">
-              {{v.city ? (v.city + (v.state ? ', '+v.state : '')) : '—'}}
-            </td>
-            <td>
-              <span class="b-badge" :class="v.disabled?'b-badge-red':'b-badge-green'">
-                {{v.disabled?'Disabled':'Active'}}
-              </span>
-            </td>
-            <td @click.stop style="text-align:center">
-              <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn cust-act-edit" @click="openEdit(v.name)" title="Edit">
-                  <span v-html="icon('edit',13)"></span>
-                </button>
-                <button class="cust-act-btn" style="color:#6b7280;border-color:#e5e7eb"
-                  @click="window.open('/app/supplier/'+encodeURIComponent(v.name),'_blank')" title="Open in Frappe">
-                  <span v-html="icon('ext',13)"></span>
-                </button>
-                <button class="cust-act-btn cust-act-del" @click="confirmDelete(v)" title="Delete">
-                  <span v-html="icon('trash',13)"></span>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- ── TWO-PANEL DETAIL VIEW (when vendor selected) ── -->
+  <div v-else class="zb-master-detail" style="height:calc(100vh - 56px)">
+
+  <!-- ══ LEFT PANEL ══ -->
+  <div class="zb-list-pane" style="width:320px;min-width:260px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- List header -->
+    <div style="padding:16px 16px 10px;border-bottom:1px solid #f0f2f5;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:14px;font-weight:700;color:#111827">Vendors</span>
+        <button class="nim-btn nim-btn-primary" style="padding:5px 10px;font-size:12px" @click="openAdd">
+          <span v-html="icon('plus',12)"></span> New Vendor
+        </button>
+      </div>
+      <div class="cust-search" style="width:100%">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search vendors…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'" style="font-size:11.5px">All <span class="zb-pill-cnt" :class="activeFilter==='all'?'':'zb-pc-muted'">{{counts.all}}</span></button>
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='active'}" @click="activeFilter='active'" style="font-size:11.5px">Active <span class="zb-pill-cnt" :class="activeFilter==='active'?'':'zb-pc-muted'">{{counts.active}}</span></button>
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='disabled'}" @click="activeFilter='disabled'" style="font-size:11.5px">Disabled <span class="zb-pill-cnt" :class="activeFilter==='disabled'?'':'zb-pc-muted'">{{counts.disabled}}</span></button>
+      </div>
     </div>
-    <div v-if="!loading && filtered.length" class="cust-row-count">
-      Showing {{filtered.length}} of {{list.length}} vendors
+
+    <!-- List body -->
+    <div style="flex:1;overflow-y:auto">
+      <template v-if="loading">
+        <div v-for="n in 6" :key="n" style="padding:14px 16px;border-bottom:1px solid #f0f2f5">
+          <div class="b-shimmer" style="height:12px;border-radius:4px;width:70%;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:10px;border-radius:4px;width:40%"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" style="text-align:center;padding:40px 16px">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" style="margin:0 auto 10px;display:block"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">{{search?'No matches':'No vendors yet'}}</div>
+        <div style="font-size:12px;color:#9ca3af">{{search?'Try different keywords':'Add your first vendor'}}</div>
+        <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;font-size:12px" @click="openAdd">New Vendor</button>
+      </div>
+      <div v-else v-for="v in filtered" :key="v.name"
+        @click="selectVendor(v)"
+        :style="{
+          padding:'12px 16px',
+          borderBottom:'1px solid #f0f2f5',
+          cursor:'pointer',
+          background: selectedVendor && selectedVendor.name===v.name ? '#FFF7ED' : 'transparent',
+          borderLeft: selectedVendor && selectedVendor.name===v.name ? '3px solid #E67700' : '3px solid transparent',
+          transition:'background 0.15s',
+        }"
+        @mouseenter="e=>{ if(!(selectedVendor&&selectedVendor.name===v.name)) e.currentTarget.style.background='#F9FAFB' }"
+        @mouseleave="e=>{ if(!(selectedVendor&&selectedVendor.name===v.name)) e.currentTarget.style.background='transparent' }">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div :style="{
+            width:'34px',height:'34px',borderRadius:'50%',flexShrink:0,
+            display:'flex',alignItems:'center',justifyContent:'center',
+            fontWeight:700,fontSize:'12px',color:'#fff',
+            background: v.disabled ? '#9CA3AF' : 'linear-gradient(135deg,#E67700,#C96200)'
+          }">{{vendorInitials(v.supplier_name)}}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{v.supplier_name||v.name}}
+            </div>
+            <div style="font-size:11.5px;color:#6B7280;margin-top:2px">
+              ₹0.00 outstanding
+              <span v-if="v.disabled" style="margin-left:6px;font-size:10px;font-weight:600;color:#6B7280;background:#F3F4F6;padding:1px 5px;border-radius:10px">Disabled</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div v-if="!loading && filtered.length" style="padding:8px 16px;border-top:1px solid #f0f2f5;font-size:11.5px;color:#9ca3af;display:flex;justify-content:space-between;flex-shrink:0">
+      <span>{{filtered.length}} of {{list.length}} vendors</span>
+      <button @click="load" style="background:none;border:none;cursor:pointer;color:#6B7280;font-size:11.5px;display:flex;align-items:center;gap:3px"><span v-html="icon('refresh',11)"></span> Refresh</button>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT PANEL ══ -->
+  <div style="flex:1;overflow-y:auto;background:#F9FAFB">
+
+    <!-- Empty state -->
+    <div v-if="!selectedVendor" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#9CA3AF">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.2" style="margin-bottom:16px"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:6px">Select a Vendor</div>
+      <div style="font-size:13px;color:#9CA3AF;text-align:center;max-width:220px">Choose a vendor from the left to view details</div>
+    </div>
+
+    <!-- Detail view -->
+    <div v-else style="max-width:960px;margin:0 auto;padding:24px">
+
+      <!-- Detail header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <div :style="{
+            width:'46px',height:'46px',borderRadius:'50%',flexShrink:0,
+            display:'flex',alignItems:'center',justifyContent:'center',
+            fontWeight:700,fontSize:'16px',color:'#fff',
+            background: selectedVendor.disabled ? '#9CA3AF' : 'linear-gradient(135deg,#E67700,#C96200)'
+          }">{{vendorInitials(selectedVendor.supplier_name)}}</div>
+          <div>
+            <div style="font-size:19px;font-weight:700;color:#111827">{{selectedVendor.supplier_name}}</div>
+            <div style="font-size:12px;color:#6B7280">{{selectedVendor.name}}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px" @click="openEdit(selectedVendor.name)">
+            <span v-html="icon('edit',13)"></span> Edit
+          </button>
+          <button class="nim-btn nim-btn-primary" style="font-size:13px;background:#E67700;border-color:#E67700" @click="openAdd">
+            <span v-html="icon('plus',13)"></span> New Transaction
+          </button>
+          <button class="nim-btn" style="background:none;color:#9CA3AF;border:1px solid #E5E7EB;width:32px;height:32px;padding:0;display:grid;place-items:center" @click="closeVendor" title="Close">
+            <span v-html="icon('x',14)"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div style="display:flex;border-bottom:2px solid #E5E7EB;margin-bottom:22px;gap:0">
+        <button @click="activeVendorTab='overview'"
+          :style="{padding:'8px 16px',fontSize:'13.5px',fontWeight:600,border:'none',background:'none',cursor:'pointer',
+            color:activeVendorTab==='overview'?'#E67700':'#6B7280',
+            borderBottom:activeVendorTab==='overview'?'2px solid #E67700':'2px solid transparent',marginBottom:'-2px'}">
+          Overview
+        </button>
+        <button @click="activeVendorTab='transactions'"
+          :style="{padding:'8px 16px',fontSize:'13.5px',fontWeight:600,border:'none',background:'none',cursor:'pointer',
+            color:activeVendorTab==='transactions'?'#E67700':'#6B7280',
+            borderBottom:activeVendorTab==='transactions'?'2px solid #E67700':'2px solid transparent',marginBottom:'-2px'}">
+          Transactions
+        </button>
+      </div>
+
+      <!-- Overview tab -->
+      <div v-if="activeVendorTab==='overview'" style="display:flex;gap:20px;align-items:flex-start">
+
+        <!-- Left column ~55% -->
+        <div style="flex:0 0 55%;min-width:0;display:flex;flex-direction:column;gap:14px">
+
+          <!-- Contact card -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #F3F4F6">
+              <div :style="{
+                width:'44px',height:'44px',borderRadius:'50%',flexShrink:0,
+                display:'flex',alignItems:'center',justifyContent:'center',
+                fontWeight:700,fontSize:'16px',color:'#fff',
+                background: selectedVendor.disabled ? '#9CA3AF' : 'linear-gradient(135deg,#E67700,#C96200)'
+              }">{{vendorInitials(selectedVendor.supplier_name)}}</div>
+              <div>
+                <div style="font-size:14px;font-weight:700;color:#111827">{{selectedVendor.supplier_name}}</div>
+                <div v-if="selectedVendor.email_id" style="font-size:12px;color:#6B7280;margin-top:2px">{{selectedVendor.email_id}}</div>
+              </div>
+              <div style="margin-left:auto">
+                <a href="#" style="font-size:12px;color:#E67700;text-decoration:none">Invite to Portal</a>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:7px">
+              <div v-if="selectedVendor.mobile_no" style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#374151">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.63 3.18 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6A16 16 0 0 0 15.4 16.1l.97-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                <span>{{selectedVendor.mobile_no}}</span>
+              </div>
+              <div v-else style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#9CA3AF">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.63 3.18 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6A16 16 0 0 0 15.4 16.1l.97-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                <span>No phone number</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- ADDRESS section -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden">
+            <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #F3F4F6">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">ADDRESS</span>
+              <span style="font-size:12px;color:#9CA3AF">▲</span>
+            </div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:14px">
+              <div>
+                <div style="font-size:11.5px;font-weight:600;color:#6B7280;margin-bottom:6px">Billing Address</div>
+                <div v-if="selectedVendor.city||selectedVendor.address_line1" style="font-size:13px;color:#374151;line-height:1.6">
+                  <div v-if="selectedVendor.address_line1">{{selectedVendor.address_line1}}</div>
+                  <div v-if="selectedVendor.address_line2">{{selectedVendor.address_line2}}</div>
+                  <div>{{[selectedVendor.city,selectedVendor.state,selectedVendor.pincode].filter(Boolean).join(', ')}}</div>
+                  <div>{{selectedVendor.country||'India'}}</div>
+                </div>
+                <div v-else style="font-size:12.5px;color:#9CA3AF">
+                  No Billing Address — <a href="#" @click.prevent="openEdit(selectedVendor.name)" style="color:#E67700;text-decoration:none">New Address</a>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11.5px;font-weight:600;color:#6B7280;margin-bottom:6px">Shipping Address</div>
+                <div style="font-size:12.5px;color:#9CA3AF">No Shipping Address — <a href="#" @click.prevent="openEdit(selectedVendor.name)" style="color:#E67700;text-decoration:none">New Address</a></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- OTHER DETAILS section -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden">
+            <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #F3F4F6">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">OTHER DETAILS</span>
+              <span style="font-size:12px;color:#9CA3AF">▲</span>
+            </div>
+            <div style="padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;justify-content:space-between;font-size:12.5px">
+                <span style="color:#6B7280">Default Currency</span>
+                <span style="font-weight:600;color:#111827">{{selectedVendor.default_currency||'INR'}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px;align-items:center">
+                <span style="color:#6B7280">Portal Status</span>
+                <span style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;background:#F3F4F6;color:#6B7280">● Disabled</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px">
+                <span style="color:#6B7280">Vendor Type</span>
+                <span style="font-weight:600;color:#111827">{{selectedVendor.supplier_type||'Company'}}</span>
+              </div>
+              <div v-if="selectedVendor.tax_id" style="display:flex;justify-content:space-between;font-size:12.5px">
+                <span style="color:#6B7280">GSTIN / Tax ID</span>
+                <span style="font-weight:600;color:#111827;font-family:monospace">{{selectedVendor.tax_id}}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- CONTACT PERSONS section -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden">
+            <div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">CONTACT PERSONS</span>
+              <button @click="openEdit(selectedVendor.name)" style="background:none;border:none;cursor:pointer;color:#E67700;font-size:12px">+ Add</button>
+            </div>
+            <div style="padding:10px 16px 14px;font-size:12.5px;color:#9CA3AF">No contacts added yet.</div>
+          </div>
+        </div>
+
+        <!-- Right column ~45% -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:14px">
+
+          <!-- Payment due period -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:16px">
+            <div style="font-size:11.5px;color:#6B7280;margin-bottom:4px">Payment due period</div>
+            <div style="font-size:14px;font-weight:600;color:#111827">{{selectedVendor.payment_terms||'Due on Receipt'}}</div>
+          </div>
+
+          <!-- Payables section -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden">
+            <div style="padding:12px 16px;border-bottom:1px solid #F3F4F6">
+              <span style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">PAYABLES</span>
+            </div>
+            <table style="width:100%;border-collapse:collapse">
+              <thead>
+                <tr style="border-bottom:1px solid #F3F4F6">
+                  <th style="text-align:left;font-size:10.5px;font-weight:600;color:#9CA3AF;padding:8px 16px">CURRENCY</th>
+                  <th style="text-align:right;font-size:10.5px;font-weight:600;color:#9CA3AF;padding:8px 12px">OUTSTANDING PAYABLES</th>
+                  <th style="text-align:right;font-size:10.5px;font-weight:600;color:#9CA3AF;padding:8px 16px">UNUSED CREDITS</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style="font-size:13px;font-weight:600;color:#374151;padding:10px 16px">INR</td>
+                  <td style="font-size:13px;font-weight:600;color:#E67700;text-align:right;padding:10px 12px;font-family:monospace">₹0.00</td>
+                  <td style="font-size:13px;font-weight:600;color:#059669;text-align:right;padding:10px 16px;font-family:monospace">₹0.00</td>
+                </tr>
+              </tbody>
+            </table>
+            <div style="padding:10px 16px">
+              <a href="#" style="font-size:12.5px;color:#2563EB;text-decoration:none">Enter Opening Balance</a>
+            </div>
+          </div>
+
+          <!-- Delete button -->
+          <div style="padding:4px 0">
+            <button @click="confirmDelete(selectedVendor)" style="background:none;border:none;cursor:pointer;color:#DC2626;font-size:12.5px;display:flex;align-items:center;gap:6px">
+              <span v-html="icon('trash',13)"></span> Delete Vendor
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Transactions tab -->
+      <div v-else-if="activeVendorTab==='transactions'" style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:24px;text-align:center;color:#9CA3AF">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.5" style="margin:0 auto 12px;display:block"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div style="font-size:14px;font-weight:600;color:#374151;margin-bottom:6px">No transactions yet</div>
+        <div style="font-size:12.5px;color:#9CA3AF">Bills and payments for {{selectedVendor.supplier_name}} will appear here.</div>
+      </div>
     </div>
   </div>
 
@@ -4474,7 +4912,7 @@
     </div>
   </teleport>
 
-</div>
+</div><!-- end root -->
 `});
 
 
@@ -4788,9 +5226,9 @@
               <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Quote</button>
             </td>
           </tr>
-          <tr v-else v-for="q in filtered" :key="q.name" class="cust-row" @click="openEdit(q.name)">
+          <tr v-else v-for="q in filtered" :key="q.name" class="cust-row" @click="$router.push({name:'quote-detail',params:{name:q.name}})">
             <td>
-              <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{q.name}}</div>
+              <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700;cursor:pointer">{{q.name}}</div>
               <div v-if="q.subject" style="font-size:11.5px;color:#9ca3af;margin-top:1px">{{q.subject}}</div>
             </td>
             <td class="cust-name">{{q.customer||'—'}}</td>
@@ -4800,7 +5238,7 @@
             <td><span class="b-badge" :class="displayStatus(q).cls">{{displayStatus(q).label}}</span></td>
             <td @click.stop style="text-align:center">
               <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn cust-act-edit" @click="openEdit(q.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+                <button class="cust-act-btn cust-act-edit" @click="$router.push({name:'quote-detail',params:{name:q.name}})" title="View/Edit"><span v-html="icon('edit',13)"></span></button>
                 <button v-if="q.status!=='Converted'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center;transition:.15s"
                   @click="openConvert(q)" title="Convert to Invoice">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
@@ -5013,6 +5451,641 @@
           <button class="nim-btn nim-btn-ghost" @click="showDelete=false">Cancel</button>
           <button @click="doDelete" :disabled="deleting"
             style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">
+            {{deleting?'Deleting…':'Yes, Delete'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+</div>
+`});
+
+  /* ═══════════════════════════════════════════════════════════════
+     QUOTE DETAIL COMPONENT  (two-panel — sidebar list + PDF view)
+  ═══════════════════════════════════════════════════════════════ */
+  const QuoteDetail = defineComponent({
+    name: "QuoteDetail",
+    setup() {
+      const route  = useRouter();
+      const router = useRouter();
+      const vRoute = useRoute();
+      const quoteName = computed(() => vRoute.params.name);
+
+      // ── Sidebar list ──────────────────────────────────────────────
+      const list        = ref([]);
+      const listLoading = ref(true);
+      const activeF     = ref("all");
+      const search      = ref("");
+      const customers   = ref([]);
+      const allItems    = ref([]);
+
+      function isExpiredQ(q) {
+        return q.status !== "Converted" && q.status !== "Accepted" &&
+          q.expiry && new Date(q.expiry) < new Date();
+      }
+      function qStatus(q) {
+        if (isExpiredQ(q)) return { label:"Expired",   cls:"zb-list-overdue" };
+        return { Draft:     { label:"Draft",     cls:"zb-list-draft"   },
+                 Sent:      { label:"Sent",       cls:"zb-list-unpaid"  },
+                 Accepted:  { label:"Accepted",   cls:"zb-list-paid"    },
+                 Declined:  { label:"Declined",   cls:"zb-list-overdue" },
+                 Converted: { label:"Converted",  cls:"zb-list-paid"    },
+               }[q.status] || { label: q.status||"Draft", cls:"zb-list-draft" };
+      }
+      const counts = computed(() => ({
+        Draft:     list.value.filter(q => q.status==="Draft"     && !isExpiredQ(q)).length,
+        Sent:      list.value.filter(q => q.status==="Sent"      && !isExpiredQ(q)).length,
+        Accepted:  list.value.filter(q => q.status==="Accepted").length,
+        Expired:   list.value.filter(q => isExpiredQ(q)).length,
+        Converted: list.value.filter(q => q.status==="Converted").length,
+      }));
+      const filtered = computed(() => {
+        let r = list.value;
+        if (activeF.value === "Draft")     r = r.filter(q => q.status==="Draft"    && !isExpiredQ(q));
+        if (activeF.value === "Sent")      r = r.filter(q => q.status==="Sent"     && !isExpiredQ(q));
+        if (activeF.value === "Accepted")  r = r.filter(q => q.status==="Accepted");
+        if (activeF.value === "Expired")   r = r.filter(q => isExpiredQ(q));
+        if (activeF.value === "Converted") r = r.filter(q => q.status==="Converted");
+        const s = search.value.toLowerCase().trim();
+        if (s) r = r.filter(x => (x.name+(x.customer||"")+(x.subject||"")).toLowerCase().includes(s));
+        return r;
+      });
+
+      async function loadList() {
+        listLoading.value = true;
+        try {
+          const rows = await apiList("Quotation", {
+            fields: ["name","customer","customer_name","transaction_date","valid_till","title","status","grand_total"],
+            order: "modified desc", limit: 300,
+          });
+          list.value = rows.map(r => ({
+            name: r.name,
+            customer: r.customer_name || r.customer,
+            date: r.transaction_date,
+            expiry: r.valid_till,
+            subject: r.title || "",
+            status: r.status || "Draft",
+            grand_total: flt(r.grand_total),
+          }));
+        } catch(e) { toast("Could not load quotes: "+e.message,"error"); }
+        finally { listLoading.value = false; }
+        try { customers.value = await apiList("Customer", { fields:["name","customer_name"], filters:[["disabled","=",0]], order:"customer_name asc", limit:300 }); } catch {}
+        try { allItems.value   = await apiList("Item",     { fields:["name","item_name","item_code","standard_rate","description"], limit:300 }); } catch {}
+      }
+      function goQuote(name) { router.push({ name:"quote-detail", params:{ name } }); }
+
+      // ── Detail ────────────────────────────────────────────────────
+      const quot        = ref(null);
+      const detailLoading = ref(false);
+      const detailError   = ref(null);
+      const editing       = ref(false);
+      const saving        = ref(false);
+      const deleting      = ref(false);
+      const showDel       = ref(false);
+      const showConvert   = ref(false);
+      const showSendEmail = ref(false);
+
+      async function loadDetail(name) {
+        if (!name) return;
+        detailLoading.value = true; detailError.value = null; editing.value = false;
+        try { quot.value = await apiGet("Quotation", name); }
+        catch(e) { detailError.value = e.message; }
+        finally { detailLoading.value = false; }
+      }
+
+      watch(quoteName, n => { if (n) loadDetail(n); }, { immediate: true });
+      onMounted(() => loadList());
+
+      // ── Edit form ─────────────────────────────────────────────────
+      const form = reactive({
+        customer:"", date:"", expiry:"", subject:"", status:"Draft", terms:"", notes:"",
+        items: [{ item_name:"", description:"", qty:1, rate:0, amount:0 }],
+        taxes: [],
+      });
+      const custSearch  = ref(""); const showCustDrop = ref(false);
+      const custDropItems = computed(() => {
+        const q = custSearch.value.toLowerCase();
+        return customers.value.filter(c => (c.customer_name||c.name).toLowerCase().includes(q)||c.name.toLowerCase().includes(q)).slice(0,40);
+      });
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+
+      async function startEdit() {
+        if (!quot.value) return;
+        Object.assign(form, {
+          customer: quot.value.customer || "",
+          date:     quot.value.transaction_date || todayStr(),
+          expiry:   quot.value.valid_till || "",
+          subject:  quot.value.title || "",
+          status:   quot.value.status || "Draft",
+          terms:    quot.value.terms || "",
+          notes:    quot.value.notes || "",
+          items: (quot.value.items||[{ item_name:"", description:"", qty:1, rate:0, amount:0 }]).map(i=>({...i})),
+          taxes: (quot.value.taxes||[]).map(t=>({...t})),
+        });
+        custSearch.value = quot.value.customer_name || quot.value.customer || "";
+        if (!form.items.length) form.items = [{ item_name:"", description:"", qty:1, rate:0, amount:0 }];
+        editing.value = true;
+      }
+      function recalc() {
+        form.items.forEach(r => { r.amount = Math.round(flt(r.qty)*flt(r.rate)*100)/100; });
+        const net = form.items.reduce((s,r)=>s+flt(r.amount),0);
+        form.taxes.forEach(t => { t.tax_amount = flt(t.rate)>0 ? Math.round(net*flt(t.rate)/100*100)/100 : 0; });
+      }
+      const netTotal   = computed(() => form.items.reduce((s,r)=>s+flt(r.amount),0));
+      const taxTotal   = computed(() => form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
+      const grandTotal = computed(() => Math.round((netTotal.value+taxTotal.value)*100)/100);
+      function addItem()    { form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 }); }
+      function removeItem(i){ if(form.items.length>1){ form.items.splice(i,1); recalc(); } }
+      function addTax()     { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i,1); recalc(); }
+      function onItemPick(row) {
+        const m = allItems.value.find(it=>it.item_name===row.item_name);
+        if(m){ row.rate=m.standard_rate||0; row.description=m.description||""; recalc(); }
+      }
+      function pickCustomer(c) { custSearch.value=c.customer_name||c.name; form.customer=c.name; showCustDrop.value=false; }
+
+      async function saveEdit(status) {
+        const cust = form.customer || custSearch.value.trim();
+        if (!cust) { toast("Please select a customer","error"); return; }
+        saving.value = true;
+        try {
+          recalc();
+          const doc = {
+            doctype: "Quotation", name: quot.value.name,
+            naming_series: "QTN-.YYYY.-.#####",
+            company: co(), customer: cust,
+            transaction_date: form.date, valid_till: form.expiry,
+            title: form.subject, status: status || form.status,
+            terms: form.terms, notes: form.notes,
+            items: form.items.filter(r=>r.item_name||r.rate).map((r,idx)=>({
+              doctype:"Quotation Item", idx:idx+1,
+              item_code: r.item_name, item_name: r.item_name,
+              description: r.description||"", qty: flt(r.qty)||1, rate: flt(r.rate), amount: flt(r.amount),
+            })),
+            taxes: form.taxes.map(t=>({...t})),
+            net_total: Math.round(netTotal.value*100)/100,
+            total_tax: Math.round(taxTotal.value*100)/100,
+            grand_total: grandTotal.value,
+          };
+          const saved = await apiSave(doc);
+          await loadDetail(saved.name||quot.value.name);
+          await loadList();
+          editing.value = false;
+          toast("Quote saved!");
+        } catch(e) { toast("Save failed: "+e.message,"error"); }
+        finally { saving.value = false; }
+      }
+
+      async function markStatus(status) {
+        if (!quot.value) return;
+        saving.value = true;
+        try {
+          await apiSave({ doctype:"Quotation", name:quot.value.name, status });
+          await loadDetail(quot.value.name);
+          await loadList();
+          toast("Status updated to "+status);
+        } catch(e) { toast("Update failed: "+e.message,"error"); }
+        finally { saving.value = false; }
+      }
+
+      async function doDelete() {
+        deleting.value = true;
+        try {
+          await apiDelete("Quotation", quot.value.name);
+          toast("Quote deleted");
+          showDel.value = false;
+          quot.value = null;
+          await loadList();
+          router.push({ name:"quotes" });
+        } catch(e) { toast("Delete failed: "+e.message,"error"); }
+        finally { deleting.value = false; }
+      }
+
+      function doConvert() {
+        const q = quot.value;
+        if (!q) return;
+        localStorage.setItem("convert_to_invoice", JSON.stringify({
+          name: q.name, customer: q.customer, subject: q.title,
+          date: q.transaction_date, expiry: q.valid_till,
+          grand_total: q.grand_total, items: q.items||[], taxes: q.taxes||[],
+          source_type:"Quote", source_name: q.name,
+        }));
+        toast("Drafting invoice — save it to confirm","info");
+        showConvert.value = false;
+        router.push({ name:"invoices" });
+      }
+
+      function printPdf() {
+        const paper = document.getElementById("zb-quote-paper");
+        if (!paper) { window.print(); return; }
+        const cssHref = Array.from(document.styleSheets)
+          .map(s=>{ try{ return s.href; }catch{ return null; } })
+          .filter(h=>h&&h.includes("books.css"))[0]||"";
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Quote</title>
+          ${cssHref?`<link rel="stylesheet" href="${cssHref}">`:""}
+          <style>@page{margin:12mm}body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}.zb-sent-ribbon,.zb-draft-ribbon{display:none!important}</style>
+        </head><body><div class="zb-pdf-paper">${paper.innerHTML}</div>
+        <script>window.onload=function(){window.print();window.close();}<\/script></body></html>`;
+        const w = window.open("","_blank","width=800,height=900");
+        if (!w) { toast("Allow pop-ups to print","error"); return; }
+        w.document.write(html); w.document.close();
+      }
+
+      function toWords(n) {
+        const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+        const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+        function w(n){if(!n)return"";if(n<20)return a[n]+" ";if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?w(n%100):"");if(n<100000)return w(Math.floor(n/1000))+"Thousand "+(n%1000?w(n%1000):"");if(n<10000000)return w(Math.floor(n/100000))+"Lakh "+(n%100000?w(n%100000):"");return w(Math.floor(n/10000000))+"Crore "+(n%10000000?w(n%10000000):"");}
+        const r=Math.floor(n),p=Math.round((n-r)*100);
+        return "Indian Rupee "+w(r).trim()+(p?" and "+w(p).trim()+" Paise":"")+" Only";
+      }
+
+      const statusBadgeCls = computed(() => {
+        const s = quot.value?.status;
+        if (s==="Accepted"||s==="Converted") return "b-badge-green";
+        if (s==="Sent")      return "b-badge-blue";
+        if (s==="Declined"||isExpiredQ(quot.value||{})) return "b-badge-red";
+        return "b-badge-amber";
+      });
+
+      return {
+        quoteName, list, listLoading, activeF, search, counts, filtered, qStatus, isExpiredQ, goQuote,
+        quot, detailLoading, detailError, editing, saving, deleting,
+        showDel, showConvert, showSendEmail,
+        form, custSearch, showCustDrop, custDropItems,
+        netTotal, taxTotal, grandTotal,
+        startEdit, saveEdit, markStatus, doDelete, doConvert, printPdf,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick, pickCustomer,
+        statusBadgeCls, toWords, fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `
+<div class="zb-master-detail no-sidebar-pad" :class="{'zb-mob-hide-list': quoteName}">
+
+  <!-- ══ LEFT SIDEBAR ══ -->
+  <div class="zb-list-pane no-print">
+    <div class="zb-list-header">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:13px;font-weight:700;color:#111827">All Quotes</span>
+          <span style="font-size:11px;color:#9ca3af">▾</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="zb-icon-btn" @click="$router.push('/quotes')" title="Back to list">
+            <span v-html="icon('arrow-left',13)"></span>
+          </button>
+          <button class="zb-icon-btn" @click="$router.push('/quotes')" title="New Quote">
+            <span v-html="icon('plus',13)"></span>
+          </button>
+        </div>
+      </div>
+      <div class="zb-list-search">
+        <span v-html="icon('search',12)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search quotes…" class="zb-list-search-input"/>
+      </div>
+      <div class="zb-list-pills">
+        <button class="zb-list-pill" :class="{active:activeF==='all'}" @click="activeF='all'">All Quotes</button>
+        <button v-for="f in ['Draft','Sent','Accepted','Expired','Converted']" :key="f"
+          class="zb-list-pill" :class="{active:activeF===f}" @click="activeF=f">
+          {{f}} <span class="zb-pill-count">{{counts[f]}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="zb-list-items">
+      <template v-if="listLoading">
+        <div v-for="n in 6" :key="n" class="zb-list-item-shimmer">
+          <div class="b-shimmer" style="width:70%;height:13px;border-radius:3px;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="width:50%;height:11px;border-radius:3px;margin-bottom:4px"></div>
+          <div class="b-shimmer" style="width:35%;height:10px;border-radius:3px"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" class="zb-list-empty">
+        <div style="font-size:13px;color:var(--text-3)">No quotes found</div>
+      </div>
+      <div v-else v-for="row in filtered" :key="row.name"
+        class="zb-list-item" :class="{selected:quoteName===row.name}"
+        @click="goQuote(row.name)">
+        <div class="zb-list-item-top">
+          <span class="zb-list-item-name">{{row.customer||'—'}}</span>
+          <span class="zb-list-item-amount">{{fmt(row.grand_total)}}</span>
+        </div>
+        <div class="zb-list-item-mid">
+          <span class="zb-list-item-num">{{row.name}}</span>
+          <span class="zb-list-item-dot">•</span>
+          <span class="zb-list-item-date">{{fmtDate(row.date)}}</span>
+        </div>
+        <div class="zb-list-item-bot">
+          <span class="zb-list-status-tag" :class="qStatus(row).cls">{{qStatus(row).label}}</span>
+          <span v-if="row.subject" style="margin-left:6px;font-size:10.5px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">{{row.subject}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT DETAIL AREA ══ -->
+  <div class="zb-detail-area">
+
+    <!-- Mobile back -->
+    <div class="zb-mob-back no-print" style="display:none;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e8ecf0;background:#fff;position:sticky;top:0;z-index:20">
+      <button @click="$router.push('/quotes')" style="display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;color:#2563eb;padding:4px 0;font-family:inherit">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        All Quotes
+      </button>
+    </div>
+
+    <!-- No quote selected -->
+    <div v-if="!quoteName" style="flex:1;display:flex;align-items:center;justify-content:center;color:#9ca3af;flex-direction:column;gap:12px;background:#f8fafc">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      <span style="font-size:14px">Select a quote to view details</span>
+    </div>
+
+    <div v-else style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+
+      <!-- Action bar -->
+      <div class="zb-actionbar no-print" v-if="quot&&!detailLoading">
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <span style="font-size:14px;font-weight:700;color:#1a1d23">{{quot.name}}</span>
+          <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">
+            {{isExpiredQ(quot)?'Expired':quot.status||'Draft'}}
+          </span>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <template v-if="editing">
+            <button class="zb-ab-btn" @click="editing=false">Cancel</button>
+            <button class="zb-ab-btn" @click="saveEdit('Draft')" :disabled="saving">Save Draft</button>
+            <button class="zb-ab-btn zb-ab-primary" @click="saveEdit('Sent')" :disabled="saving">
+              <span v-if="saving" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
+              {{saving?'Saving…':'Save & Send'}}
+            </button>
+          </template>
+          <template v-else>
+            <button class="zb-ab-btn" @click="startEdit"><span v-html="icon('edit',12)"></span> Edit</button>
+            <button class="zb-ab-btn" @click="markStatus('Sent')" :disabled="saving" title="Mark as Sent">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              Send
+            </button>
+            <button v-if="quot.status!=='Accepted'" class="zb-ab-btn" @click="markStatus('Accepted')" :disabled="saving" style="color:#059669">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Accept
+            </button>
+            <button v-if="quot.status!=='Declined'" class="zb-ab-btn" @click="markStatus('Declined')" :disabled="saving" style="color:#dc2626">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              Decline
+            </button>
+            <button v-if="quot.status!=='Converted'" class="zb-ab-btn" @click="showConvert=true" style="color:#7c3aed">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+              Convert
+            </button>
+            <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF</button>
+            <button class="zb-ab-btn" @click="showDel=true" style="color:#dc2626"><span v-html="icon('trash',12)"></span></button>
+            <button class="zb-ab-btn zb-ab-dots" @click="$router.push('/quotes')" title="Close">✕</button>
+          </template>
+        </div>
+      </div>
+
+      <!-- What's next banners -->
+      <div class="zb-banner no-print" v-if="quot && !editing && quot.status==='Sent'">
+        <span style="color:#f59e0b;font-size:15px">✦</span>
+        <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Quote sent. Mark it Accepted once the customer confirms, then convert it to an invoice.</span>
+        <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="markStatus('Accepted')">Mark Accepted</button>
+      </div>
+      <div class="zb-banner no-print" v-if="quot && !editing && quot.status==='Accepted'">
+        <span style="color:#f59e0b;font-size:15px">✦</span>
+        <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Quote accepted! Convert it to a Sales Invoice to raise a bill.</span>
+        <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="showConvert=true">Convert to Invoice</button>
+      </div>
+      <div class="zb-banner no-print" v-if="quot && !editing && quot.status==='Draft'">
+        <span style="color:#f59e0b;font-size:15px">✦</span>
+        <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Send this quote to the customer for approval.</span>
+        <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="markStatus('Sent')">Mark as Sent</button>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="detailLoading" style="flex:1;display:flex;align-items:center;justify-content:center">
+        <div style="text-align:center">
+          <div class="b-shimmer" style="width:200px;height:14px;border-radius:4px;margin:0 auto 10px"></div>
+          <div class="b-shimmer" style="width:130px;height:11px;border-radius:4px;margin:0 auto"></div>
+        </div>
+      </div>
+      <div v-else-if="detailError" style="flex:1;display:flex;align-items:center;justify-content:center;color:#e03131;font-size:13px">
+        Error: {{detailError}}
+      </div>
+
+      <div v-else-if="quot" style="display:flex;flex:1;overflow:hidden">
+
+        <!-- ── PDF VIEW ── -->
+        <div class="zb-pdf-wrap" v-if="!editing">
+          <div class="zb-pdf-paper" id="zb-quote-paper">
+            <div v-if="quot.status==='Sent'||quot.status==='Accepted'" class="zb-sent-ribbon">{{quot.status}}</div>
+            <div v-else class="zb-draft-ribbon">{{quot.status||'Draft'}}</div>
+
+            <div class="zb-pdf-head">
+              <div>
+                <div class="zb-pdf-co-name">{{quot.company||'Your Company'}}</div>
+              </div>
+              <div class="zb-pdf-inv-title">QUOTATION</div>
+            </div>
+
+            <table class="zb-pdf-info-table">
+              <thead><tr><th>Quote #</th><th>Quote Date</th><th>Valid Until</th><th>Subject</th></tr></thead>
+              <tbody><tr>
+                <td>{{quot.name}}</td>
+                <td>{{fmtDate(quot.transaction_date)}}</td>
+                <td :style="{color: isExpiredQ(quot)?'#e03131':'inherit'}">{{fmtDate(quot.valid_till)||'—'}}</td>
+                <td>{{quot.title||'—'}}</td>
+              </tr></tbody>
+            </table>
+
+            <div class="zb-pdf-bill-section">
+              <div class="zb-pdf-bill-label">Quote To</div>
+              <div class="zb-pdf-bill-name">{{quot.customer_name||quot.customer}}</div>
+            </div>
+
+            <table class="zb-pdf-items">
+              <thead><tr>
+                <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
+                <th class="zb-pdf-th">Item &amp; Description</th>
+                <th class="zb-pdf-th" style="text-align:right">Qty</th>
+                <th class="zb-pdf-th" style="text-align:right">Rate</th>
+                <th class="zb-pdf-th" style="text-align:right">Amount</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="(item,i) in (quot.items||[])" :key="i" class="zb-pdf-item-row">
+                  <td class="zb-pdf-td" style="text-align:center;color:#aaa;font-size:12px">{{i+1}}</td>
+                  <td class="zb-pdf-td">
+                    <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
+                    <div v-if="item.description&&item.description!==item.item_name" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
+                  </td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}<div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div></td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="zb-pdf-bottom">
+              <div class="zb-pdf-words-block">
+                <div class="zb-pdf-words-lbl">Total In Words</div>
+                <div class="zb-pdf-words-val"><i>{{toWords(flt(quot.grand_total))}}</i></div>
+                <div v-if="quot.notes" style="margin-top:10px">
+                  <div class="zb-pdf-words-lbl">Notes</div>
+                  <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{quot.notes}}</div>
+                </div>
+                <div v-if="quot.terms" style="margin-top:10px">
+                  <div class="zb-pdf-words-lbl">Terms &amp; Conditions</div>
+                  <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{quot.terms}}</div>
+                </div>
+              </div>
+              <div class="zb-pdf-totals-block">
+                <div class="zb-pdf-total-row"><span>Sub Total</span><span>{{fmt(quot.net_total)}}</span></div>
+                <div class="zb-pdf-total-row" v-for="tax in (quot.taxes||[])" :key="tax.tax_type">
+                  <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
+                </div>
+                <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Grand Total</span><span>{{fmt(quot.grand_total)}}</span></div>
+              </div>
+            </div>
+            <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+            <div class="zb-pdf-footer">
+              <span>QUOTATION</span>
+              <span style="color:#9ca3af;font-size:11px">Valid until: {{fmtDate(quot.valid_till)||'—'}}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── EDIT FORM ── -->
+        <div v-else class="zb-edit-wrap no-print">
+          <div class="zb-edit-form">
+            <div class="zb-form-section-title">Quote Details</div>
+            <div class="zb-form-grid3">
+              <div class="zb-form-field" style="position:relative">
+                <label class="zb-form-label">Customer *</label>
+                <input v-model="custSearch" class="zb-form-input" placeholder="Search customer…" autocomplete="off"
+                  @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                <div v-if="showCustDrop&&custDropItems.length" class="qt-cust-drop" style="z-index:200">
+                  <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
+                    <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
+                    <div v-if="c.name!==c.customer_name" style="font-size:11px;color:#9ca3af">{{c.name}}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="zb-form-field"><label class="zb-form-label">Quote Date</label>
+                <input type="date" v-model="form.date" class="zb-form-input"/></div>
+              <div class="zb-form-field"><label class="zb-form-label">Valid Until</label>
+                <input type="date" v-model="form.expiry" class="zb-form-input"/></div>
+              <div class="zb-form-field" style="grid-column:span 2"><label class="zb-form-label">Subject / Title</label>
+                <input v-model="form.subject" class="zb-form-input" placeholder="e.g. Proposal for Website Design"/></div>
+              <div class="zb-form-field"><label class="zb-form-label">Status</label>
+                <select v-model="form.status" class="zb-form-input" style="background:#fff">
+                  <option>Draft</option><option>Sent</option><option>Accepted</option><option>Declined</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="zb-form-section-title" style="margin-top:18px">Items</div>
+            <table class="zb-items-table">
+              <thead><tr>
+                <th>Item</th><th>Description</th>
+                <th style="text-align:center">Qty</th>
+                <th style="text-align:right">Rate</th>
+                <th style="text-align:right">Amount</th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="(item,i) in form.items" :key="i">
+                  <td><searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select —" :compact="true" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)"/></td>
+                  <td><input v-model="item.description" class="zb-form-input" style="font-size:12px;padding:5px 8px" placeholder="Description"/></td>
+                  <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="zb-form-input" style="width:70px;text-align:center;font-size:12px;padding:5px 8px" @input="recalc"/></td>
+                  <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="zb-form-input" style="width:100px;text-align:right;font-size:12px;padding:5px 8px" @input="recalc"/></td>
+                  <td style="text-align:right;font-family:monospace;font-size:13px;padding-right:8px;font-weight:600">{{flt(item.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                  <td><button v-if="form.items.length>1" @click="removeItem(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                </tr>
+              </tbody>
+            </table>
+            <button @click="addItem" class="nim-add-btn" style="margin-top:6px"><span v-html="icon('plus',12)"></span> Add Row</button>
+
+            <div class="zb-form-section-title" style="margin-top:18px;display:flex;align-items:center;justify-content:space-between">
+              <span>Taxes</span>
+              <button @click="addTax" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Tax</button>
+            </div>
+            <div v-if="form.taxes.length" style="margin-bottom:12px">
+              <table class="zb-items-table">
+                <thead><tr><th>Type</th><th>Description</th><th style="text-align:center">Rate%</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="(tax,i) in form.taxes" :key="i">
+                    <td><select v-model="tax.tax_type" class="zb-form-input" style="font-size:12px;padding:5px 8px" @change="tax.description=tax.tax_type;recalc()"><option>CGST</option><option>SGST</option><option>IGST</option><option>Cess</option><option>Other</option></select></td>
+                    <td><input v-model="tax.description" class="zb-form-input" style="font-size:12px;padding:5px 8px"/></td>
+                    <td style="text-align:center"><input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01" class="zb-form-input" style="width:70px;text-align:center;font-size:12px;padding:5px 8px" @input="recalc"/></td>
+                    <td style="text-align:right;font-family:monospace;font-size:13px;padding-right:8px">{{flt(tax.tax_amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                    <td><button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="zb-form-totals">
+              <div class="zb-form-total-row"><span>Subtotal</span><span>{{fmt(netTotal)}}</span></div>
+              <div v-for="tax in form.taxes" :key="tax.tax_type" class="zb-form-total-row">
+                <span>{{tax.description||tax.tax_type}} ({{tax.rate}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
+              </div>
+              <div class="zb-form-total-grand"><span>Grand Total</span><span>{{fmt(grandTotal)}}</span></div>
+            </div>
+
+            <div style="margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:16px">
+              <div class="zb-form-field"><label class="zb-form-label">Terms &amp; Conditions</label>
+                <textarea v-model="form.terms" class="zb-form-input" rows="3" style="resize:vertical"></textarea></div>
+              <div class="zb-form-field"><label class="zb-form-label">Internal Notes</label>
+                <textarea v-model="form.notes" class="zb-form-input" rows="3" style="resize:vertical"></textarea></div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /v-else-if quot -->
+    </div><!-- /v-else quoteName -->
+
+  </div><!-- /zb-detail-area -->
+
+  <!-- ── Convert Modal ── -->
+  <teleport to="body">
+    <div v-if="showConvert" class="nim-overlay" @click.self="showConvert=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></div>
+            <div class="nim-header-title">Convert to Invoice</div>
+          </div>
+          <button class="nim-close" @click="showConvert=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Convert <strong>{{quot?.name}}</strong> for <strong>{{quot?.customer_name||quot?.customer}}</strong>
+            worth <strong>{{fmt(flt(quot?.grand_total))}}</strong> to a Sales Invoice?
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showConvert=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" @click="doConvert">→ Convert to Invoice</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- ── Delete Modal ── -->
+  <teleport to="body">
+    <div v-if="showDel" class="nim-overlay" @click.self="showDel=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div>
+            <div class="nim-header-title">Delete Quote?</div>
+          </div>
+          <button class="nim-close" @click="showDel=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">Delete <strong>{{quot?.name}}</strong>? This cannot be undone.</p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDel=false">Cancel</button>
+          <button @click="doDelete" :disabled="deleting" style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">
             {{deleting?'Deleting…':'Yes, Delete'}}
           </button>
         </div>
@@ -5385,7 +6458,7 @@
               <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Order</button>
             </td>
           </tr>
-          <tr v-else v-for="o in filtered" :key="o.name" class="cust-row" @click="openView(o.name)">
+          <tr v-else v-for="o in filtered" :key="o.name" class="cust-row" @click="$router.push({name:'so-detail',params:{name:o.name}})">
             <td>
               <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{o.name}}</div>
               <div v-if="o.ref_quote" style="font-size:11px;color:#9ca3af;margin-top:1px">from {{o.ref_quote}}</div>
@@ -5405,7 +6478,7 @@
             <td><span class="b-badge" :class="(STATUS_CFG[o.status]||STATUS_CFG.Draft).cls">{{(STATUS_CFG[o.status]||STATUS_CFG.Draft).lbl}}</span></td>
             <td @click.stop style="text-align:center">
               <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn cust-act-edit" @click="openView(o.name)" title="View">
+                <button class="cust-act-btn cust-act-edit" @click="$router.push({name:'so-detail',params:{name:o.name}})" title="View">
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
                 <button v-if="o.status!=='Invoiced'&&o.status!=='Cancelled'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center;transition:.15s"
@@ -5761,6 +6834,658 @@
 `});
 
   /* ═══════════════════════════════════════════════════════════════
+     SALES ORDER DETAIL COMPONENT
+  ═══════════════════════════════════════════════════════════════ */
+  const SalesOrderDetail = defineComponent({
+    name: "SalesOrderDetail",
+    setup() {
+      const router = useRouter();
+      const vRoute = useRoute();
+      const soName = computed(() => vRoute.params.name);
+
+      // ── Sidebar list ─────────────────────────────────────────────
+      const list        = ref([]);
+      const listLoading = ref(true);
+      const activeF     = ref("all");
+      const search      = ref("");
+      const customers   = ref([]);
+      const allItems    = ref([]);
+
+      const SO_STATUS = {
+        Draft:     { label:"Draft",     cls:"zb-list-draft"   },
+        Confirmed: { label:"Confirmed", cls:"zb-list-unpaid"  },
+        Processing:{ label:"Processing",cls:"zb-list-unpaid"  },
+        Ready:     { label:"Ready",     cls:"zb-list-paid"    },
+        Invoiced:  { label:"Invoiced",  cls:"zb-list-paid"    },
+        Cancelled: { label:"Cancelled", cls:"zb-list-overdue" },
+      };
+      function soStatus(o) { return SO_STATUS[o.status] || { label:o.status||"Draft", cls:"zb-list-draft" }; }
+
+      const counts = computed(() => {
+        const r = {};
+        ["Draft","Confirmed","Processing","Ready","Invoiced"].forEach(s => { r[s] = list.value.filter(o=>o.status===s).length; });
+        return r;
+      });
+      const filtered = computed(() => {
+        let r = list.value;
+        if (activeF.value !== "all") r = r.filter(o => o.status === activeF.value);
+        const s = search.value.toLowerCase().trim();
+        if (s) r = r.filter(x => (x.name+(x.customer||"")+(x.ref_quote||"")).toLowerCase().includes(s));
+        return r;
+      });
+
+      async function loadList() {
+        listLoading.value = true;
+        try {
+          const rows = await apiList("Sales Order", {
+            fields:["name","customer","customer_name","transaction_date","delivery_date","status","grand_total","billed_amount","ref_quote"],
+            order:"modified desc", limit:300,
+          });
+          list.value = rows.map(r => ({
+            name: r.name, customer: r.customer_name||r.customer,
+            order_date: r.transaction_date, delivery_date: r.delivery_date,
+            status: r.status||"Draft", grand_total: flt(r.grand_total),
+            billed_amount: flt(r.billed_amount), ref_quote: r.ref_quote||"",
+          }));
+        } catch(e) { toast("Could not load orders: "+e.message,"error"); }
+        finally { listLoading.value = false; }
+        try { customers.value = await apiList("Customer", { fields:["name","customer_name"], filters:[["disabled","=",0]], order:"customer_name asc", limit:300 }); } catch {}
+        try { allItems.value   = await apiList("Item", { fields:["name","item_name","item_code","standard_rate","description"], limit:300 }); } catch {}
+      }
+      function goSO(name) { router.push({ name:"so-detail", params:{ name } }); }
+
+      // ── Detail ───────────────────────────────────────────────────
+      const order        = ref(null);
+      const detailLoading = ref(false);
+      const detailError   = ref(null);
+      const editing       = ref(false);
+      const saving        = ref(false);
+      const deleting      = ref(false);
+      const acting        = ref(false);
+      const showDel       = ref(false);
+      const showConvert   = ref(false);
+      const showDeliver   = ref(false);
+
+      async function loadDetail(name) {
+        if (!name) return;
+        detailLoading.value = true; detailError.value = null; editing.value = false;
+        try { order.value = await apiGet("Sales Order", name); }
+        catch(e) { detailError.value = e.message; }
+        finally { detailLoading.value = false; }
+      }
+
+      watch(soName, n => { if (n) loadDetail(n); }, { immediate: true });
+      onMounted(() => loadList());
+
+      // ── Edit form ────────────────────────────────────────────────
+      const form = reactive({
+        customer:"", order_date:"", delivery_date:"", status:"Draft",
+        ref_quote:"", po_number:"", shipping_address:"", terms:"",
+        items:[{ item_name:"", description:"", qty:1, rate:0, amount:0 }], taxes:[],
+      });
+      const custSearch   = ref(""); const showCustDrop = ref(false);
+      const custDropItems = computed(() => {
+        const q = custSearch.value.toLowerCase();
+        return customers.value.filter(c=>(c.customer_name||c.name).toLowerCase().includes(q)||c.name.toLowerCase().includes(q)).slice(0,40);
+      });
+      function todayStr() { return new Date().toISOString().slice(0,10); }
+      function addDays(d,n){ const dt=new Date(d); dt.setDate(dt.getDate()+n); return dt.toISOString().slice(0,10); }
+
+      function startEdit() {
+        if (!order.value) return;
+        const o = order.value;
+        Object.assign(form, {
+          customer: o.customer||"", order_date: o.transaction_date||todayStr(),
+          delivery_date: o.delivery_date||addDays(todayStr(),14),
+          status: o.status||"Draft", ref_quote: o.ref_quote||"",
+          po_number: o.po_number||"", shipping_address: o.shipping_address||"",
+          terms: o.terms||"",
+          items: (o.items||[{ item_name:"", description:"", qty:1, rate:0, amount:0 }]).map(i=>({...i})),
+          taxes: (o.taxes||[]).map(t=>({...t})),
+        });
+        custSearch.value = o.customer_name||o.customer||"";
+        if (!form.items.length) form.items = [{ item_name:"", description:"", qty:1, rate:0, amount:0 }];
+        editing.value = true;
+      }
+      function recalc() {
+        form.items.forEach(r=>{ r.amount=Math.round(flt(r.qty)*flt(r.rate)*100)/100; });
+        const net = form.items.reduce((s,r)=>s+flt(r.amount),0);
+        form.taxes.forEach(t=>{ t.tax_amount=flt(t.rate)>0?Math.round(net*flt(t.rate)/100*100)/100:0; });
+      }
+      const netTotal   = computed(() => form.items.reduce((s,r)=>s+flt(r.amount),0));
+      const taxTotal   = computed(() => form.taxes.reduce((s,t)=>s+flt(t.tax_amount),0));
+      const grandTotal = computed(() => Math.round((netTotal.value+taxTotal.value)*100)/100);
+      function addItem()    { form.items.push({ item_name:"", description:"", qty:1, rate:0, amount:0 }); }
+      function removeItem(i){ if(form.items.length>1){ form.items.splice(i,1); recalc(); } }
+      function addTax()     { form.taxes.push({ tax_type:"CGST", description:"CGST", rate:9, tax_amount:0 }); recalc(); }
+      function removeTax(i) { form.taxes.splice(i,1); recalc(); }
+      function onItemPick(row) {
+        const m = allItems.value.find(it=>it.item_name===row.item_name);
+        if(m){ row.rate=m.standard_rate||0; row.description=m.description||""; recalc(); }
+      }
+      function pickCustomer(c){ custSearch.value=c.customer_name||c.name; form.customer=c.name; showCustDrop.value=false; }
+
+      async function saveEdit() {
+        const cust = form.customer||custSearch.value.trim();
+        if (!cust){ toast("Please select a customer","error"); return; }
+        saving.value = true;
+        try {
+          recalc();
+          const doc = {
+            doctype:"Sales Order", name:order.value.name,
+            naming_series:"SO-.YYYY.-", company:co(),
+            customer:cust, transaction_date:form.order_date, delivery_date:form.delivery_date,
+            status:form.status, ref_quote:form.ref_quote.trim(), po_number:form.po_number.trim(),
+            shipping_address:form.shipping_address.trim(), terms:form.terms.trim(),
+            items:form.items.filter(r=>r.item_name||r.rate).map((r,i)=>({
+              doctype:"Sales Order Item", idx:i+1,
+              item_code:r.item_name, item_name:r.item_name,
+              description:r.description||"", qty:flt(r.qty)||1, rate:flt(r.rate), amount:flt(r.amount),
+            })),
+            taxes:form.taxes.map(t=>({...t})),
+            net_total:Math.round(netTotal.value*100)/100,
+            total_tax:Math.round(taxTotal.value*100)/100,
+            grand_total:grandTotal.value,
+          };
+          const saved = await apiSave(doc);
+          await loadDetail(saved.name||order.value.name);
+          await loadList();
+          editing.value = false;
+          toast("Order saved!");
+        } catch(e){ toast("Save failed: "+e.message,"error"); }
+        finally { saving.value = false; }
+      }
+
+      async function advanceStatus(newStatus) {
+        if (!order.value) return;
+        acting.value = true;
+        try {
+          if (newStatus === "Confirmed") {
+            await apiPOST("zoho_books_clone.services.workflow_service.confirm_sales_order", { sales_order:order.value.name });
+          } else {
+            await apiSave({ doctype:"Sales Order", name:order.value.name, status:newStatus });
+          }
+          await loadDetail(order.value.name);
+          await loadList();
+          toast("Order → "+newStatus);
+        } catch(e){ toast("Update failed: "+(e.message||e),"error"); }
+        finally { acting.value = false; }
+      }
+
+      async function doDeliver() {
+        acting.value = true;
+        try {
+          const res = await apiPOST("zoho_books_clone.services.workflow_service.create_delivery_from_order", { sales_order:order.value.name });
+          await loadDetail(order.value.name);
+          await loadList();
+          toast(res.fully_delivered ? "Fully delivered!" : `Delivery ${res.stock_entry} created`,"success");
+          showDeliver.value = false;
+        } catch(e){ toast("Delivery failed: "+(e.message||e),"error"); }
+        finally { acting.value = false; }
+      }
+
+      async function doConvert() {
+        acting.value = true;
+        try {
+          const res = await apiPOST("zoho_books_clone.services.workflow_service.create_invoice_from_order", { sales_order:order.value.name });
+          await loadDetail(order.value.name);
+          await loadList();
+          toast("Invoice "+res.sales_invoice+" created!","success");
+          showConvert.value = false;
+          router.push({ name:"invoices" });
+        } catch(e){ toast("Conversion failed: "+(e.message||e),"error"); }
+        finally { acting.value = false; }
+      }
+
+      async function doDelete() {
+        deleting.value = true;
+        try {
+          await apiDelete("Sales Order", order.value.name);
+          toast("Order deleted");
+          showDel.value = false; order.value = null;
+          await loadList();
+          router.push({ name:"sales-orders" });
+        } catch(e){ toast("Delete failed: "+e.message,"error"); }
+        finally { deleting.value = false; }
+      }
+
+      function printPdf() {
+        const paper = document.getElementById("zb-so-paper");
+        if (!paper) { window.print(); return; }
+        const cssHref = Array.from(document.styleSheets).map(s=>{ try{ return s.href; }catch{ return null; } }).filter(h=>h&&h.includes("books.css"))[0]||"";
+        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Order</title>${cssHref?`<link rel="stylesheet" href="${cssHref}">`:""}
+          <style>@page{margin:12mm}body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}.zb-sent-ribbon,.zb-draft-ribbon{display:none!important}</style>
+        </head><body><div class="zb-pdf-paper">${paper.innerHTML}</div>
+        <script>window.onload=function(){window.print();window.close();}<\/script></body></html>`;
+        const w = window.open("","_blank","width=800,height=900");
+        if (!w) { toast("Allow pop-ups to print","error"); return; }
+        w.document.write(html); w.document.close();
+      }
+
+      function toWords(n) {
+        const a=["","One","Two","Three","Four","Five","Six","Seven","Eight","Nine","Ten","Eleven","Twelve","Thirteen","Fourteen","Fifteen","Sixteen","Seventeen","Eighteen","Nineteen"];
+        const b=["","","Twenty","Thirty","Forty","Fifty","Sixty","Seventy","Eighty","Ninety"];
+        function w(n){if(!n)return"";if(n<20)return a[n]+" ";if(n<100)return b[Math.floor(n/10)]+" "+(n%10?a[n%10]+" ":"");if(n<1000)return a[Math.floor(n/100)]+" Hundred "+(n%100?w(n%100):"");if(n<100000)return w(Math.floor(n/1000))+"Thousand "+(n%1000?w(n%1000):"");if(n<10000000)return w(Math.floor(n/100000))+"Lakh "+(n%100000?w(n%100000):"");return w(Math.floor(n/10000000))+"Crore "+(n%10000000?w(n%10000000):"");}
+        const r=Math.floor(n),p=Math.round((n-r)*100);
+        return "Indian Rupee "+w(r).trim()+(p?" and "+w(p).trim()+" Paise":"")+" Only";
+      }
+
+      const statusBadgeCls = computed(()=>{
+        const s = order.value?.status;
+        if (s==="Invoiced"||s==="Ready") return "b-badge-green";
+        if (s==="Confirmed"||s==="Processing") return "b-badge-blue";
+        if (s==="Cancelled") return "b-badge-red";
+        return "b-badge-amber";
+      });
+
+      return {
+        soName, list, listLoading, activeF, search, counts, filtered, soStatus, goSO,
+        order, detailLoading, detailError, editing, saving, deleting, acting,
+        showDel, showConvert, showDeliver,
+        form, custSearch, showCustDrop, custDropItems,
+        netTotal, taxTotal, grandTotal,
+        startEdit, saveEdit, advanceStatus, doDeliver, doConvert, doDelete, printPdf,
+        recalc, addItem, removeItem, addTax, removeTax, onItemPick, pickCustomer,
+        statusBadgeCls, toWords, fmt, fmtDate, flt, icon,
+      };
+    },
+    template: `
+<div class="zb-master-detail no-sidebar-pad" :class="{'zb-mob-hide-list': soName}">
+
+  <!-- ══ LEFT SIDEBAR ══ -->
+  <div class="zb-list-pane no-print">
+    <div class="zb-list-header">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:13px;font-weight:700;color:#111827">All Sales Orders</span>
+          <span style="font-size:11px;color:#9ca3af">▾</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="zb-icon-btn" @click="$router.push('/sales-orders')" title="Back to list"><span v-html="icon('arrow-left',13)"></span></button>
+          <button class="zb-icon-btn" @click="$router.push('/sales-orders')" title="New Order"><span v-html="icon('plus',13)"></span></button>
+        </div>
+      </div>
+      <div class="zb-list-search">
+        <span v-html="icon('search',12)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search orders…" class="zb-list-search-input"/>
+      </div>
+      <div class="zb-list-pills">
+        <button class="zb-list-pill" :class="{active:activeF==='all'}" @click="activeF='all'">All Orders</button>
+        <button v-for="f in ['Draft','Confirmed','Processing','Ready','Invoiced']" :key="f"
+          class="zb-list-pill" :class="{active:activeF===f}" @click="activeF=f">
+          {{f}} <span class="zb-pill-count">{{counts[f]}}</span>
+        </button>
+      </div>
+    </div>
+    <div class="zb-list-items">
+      <template v-if="listLoading">
+        <div v-for="n in 6" :key="n" class="zb-list-item-shimmer">
+          <div class="b-shimmer" style="width:70%;height:13px;border-radius:3px;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="width:50%;height:11px;border-radius:3px;margin-bottom:4px"></div>
+          <div class="b-shimmer" style="width:35%;height:10px;border-radius:3px"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" class="zb-list-empty">
+        <div style="font-size:13px;color:var(--text-3)">No orders found</div>
+      </div>
+      <div v-else v-for="row in filtered" :key="row.name"
+        class="zb-list-item" :class="{selected:soName===row.name}"
+        @click="goSO(row.name)">
+        <div class="zb-list-item-top">
+          <span class="zb-list-item-name">{{row.customer||'—'}}</span>
+          <span class="zb-list-item-amount">{{fmt(row.grand_total)}}</span>
+        </div>
+        <div class="zb-list-item-mid">
+          <span class="zb-list-item-num">{{row.name}}</span>
+          <span class="zb-list-item-dot">•</span>
+          <span class="zb-list-item-date">{{fmtDate(row.order_date)}}</span>
+        </div>
+        <div class="zb-list-item-bot">
+          <span class="zb-list-status-tag" :class="soStatus(row).cls">{{soStatus(row).label}}</span>
+          <span v-if="row.ref_quote" style="margin-left:6px;font-size:10.5px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px">from {{row.ref_quote}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT DETAIL AREA ══ -->
+  <div class="zb-detail-area">
+
+    <!-- Mobile back -->
+    <div class="zb-mob-back no-print" style="display:none;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid #e8ecf0;background:#fff;position:sticky;top:0;z-index:20">
+      <button @click="$router.push('/sales-orders')" style="display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;font-size:13px;font-weight:600;color:#2563eb;padding:4px 0;font-family:inherit">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        All Sales Orders
+      </button>
+    </div>
+
+    <!-- No order selected -->
+    <div v-if="!soName" style="flex:1;display:flex;align-items:center;justify-content:center;color:#9ca3af;flex-direction:column;gap:12px;background:#f8fafc">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <span style="font-size:14px">Select an order to view details</span>
+    </div>
+
+    <div v-else style="display:flex;flex-direction:column;flex:1;overflow:hidden">
+
+      <!-- Action bar -->
+      <div class="zb-actionbar no-print" v-if="order&&!detailLoading">
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <span style="font-size:14px;font-weight:700;color:#1a1d23">{{order.name}}</span>
+          <span class="b-badge" :class="statusBadgeCls" style="font-size:11px">{{order.status||'Draft'}}</span>
+        </div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+          <template v-if="editing">
+            <button class="zb-ab-btn" @click="editing=false">Cancel</button>
+            <button class="zb-ab-btn zb-ab-primary" @click="saveEdit" :disabled="saving">
+              <span v-if="saving" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
+              {{saving?'Saving…':'Save'}}
+            </button>
+          </template>
+          <template v-else>
+            <button class="zb-ab-btn" @click="startEdit"><span v-html="icon('edit',12)"></span> Edit</button>
+            <button v-if="order.status==='Draft'" class="zb-ab-btn" @click="advanceStatus('Confirmed')" :disabled="acting" style="color:#2563eb">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+              Confirm
+            </button>
+            <button v-if="order.status==='Confirmed'||order.status==='Processing'" class="zb-ab-btn" @click="showDeliver=true" :disabled="acting" style="color:#d97706">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+              Deliver
+            </button>
+            <button v-if="order.status!=='Invoiced'&&order.status!=='Cancelled'" class="zb-ab-btn" @click="showConvert=true" :disabled="acting" style="color:#7c3aed">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              Invoice
+            </button>
+            <button class="zb-ab-btn" @click="printPdf"><span v-html="icon('print',12)"></span> PDF</button>
+            <button v-if="order.status==='Draft'" class="zb-ab-btn" @click="showDel=true" style="color:#dc2626"><span v-html="icon('trash',12)"></span></button>
+            <button class="zb-ab-btn zb-ab-dots" @click="$router.push('/sales-orders')" title="Close">✕</button>
+          </template>
+        </div>
+      </div>
+
+      <!-- Status / shipment bar -->
+      <div v-if="order&&!detailLoading&&!editing" class="no-print"
+        style="display:flex;align-items:center;gap:18px;padding:8px 20px;background:#fff;border-bottom:1px solid #e8ecf0;font-size:12px">
+        <span style="color:#6b7280">Invoice Status:
+          <span :style="{color:order.status==='Invoiced'?'#059669':'#9ca3af',fontWeight:600}">
+            {{order.status==='Invoiced'?'INVOICED':'PENDING'}}
+          </span>
+        </span>
+        <span style="color:#6b7280">Shipment:
+          <span :style="{color:order.status==='Ready'?'#059669':'#d97706',fontWeight:600}">
+            {{order.status==='Ready'?'DELIVERED':'PENDING'}}
+          </span>
+        </span>
+        <span v-if="order.po_number" style="color:#6b7280">PO# <span style="font-weight:600;color:#374151">{{order.po_number}}</span></span>
+      </div>
+
+      <!-- What's next banners -->
+      <div class="zb-banner no-print" v-if="order && !editing && order.status==='Draft'">
+        <span style="color:#f59e0b;font-size:15px">✦</span>
+        <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Confirm this order to begin processing.</span>
+        <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="advanceStatus('Confirmed')">Confirm Order</button>
+      </div>
+      <div class="zb-banner no-print" v-if="order && !editing && order.status==='Confirmed'">
+        <span style="color:#f59e0b;font-size:15px">✦</span>
+        <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Create a delivery to ship goods, or convert directly to a Sales Invoice.</span>
+        <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="showConvert=true">Create Invoice</button>
+      </div>
+      <div class="zb-banner no-print" v-if="order && !editing && order.status==='Ready'">
+        <span style="color:#f59e0b;font-size:15px">✦</span>
+        <span style="flex:1;font-size:12px"><b>WHAT'S NEXT?</b> Goods delivered. Convert this order to a Sales Invoice to bill the customer.</span>
+        <button class="zb-ab-btn zb-ab-primary" style="font-size:11px;padding:5px 14px;flex-shrink:0" @click="showConvert=true">Create Invoice</button>
+      </div>
+
+      <!-- Loading -->
+      <div v-if="detailLoading" style="flex:1;display:flex;align-items:center;justify-content:center">
+        <div style="text-align:center">
+          <div class="b-shimmer" style="width:200px;height:14px;border-radius:4px;margin:0 auto 10px"></div>
+          <div class="b-shimmer" style="width:130px;height:11px;border-radius:4px;margin:0 auto"></div>
+        </div>
+      </div>
+      <div v-else-if="detailError" style="flex:1;display:flex;align-items:center;justify-content:center;color:#e03131;font-size:13px">Error: {{detailError}}</div>
+
+      <div v-else-if="order" style="display:flex;flex:1;overflow:hidden">
+
+        <!-- ── PDF VIEW ── -->
+        <div class="zb-pdf-wrap" v-if="!editing">
+          <div class="zb-pdf-paper" id="zb-so-paper">
+            <div v-if="order.status==='Invoiced'||order.status==='Ready'" class="zb-sent-ribbon">{{order.status}}</div>
+            <div v-else class="zb-draft-ribbon">{{order.status||'Draft'}}</div>
+
+            <div class="zb-pdf-head">
+              <div>
+                <div class="zb-pdf-co-name">{{order.company||'Your Company'}}</div>
+              </div>
+              <div class="zb-pdf-inv-title">SALES ORDER</div>
+            </div>
+
+            <table class="zb-pdf-info-table">
+              <thead><tr><th>Sales Order #</th><th>Order Date</th><th>Delivery Date</th><th v-if="order.po_number">Customer PO#</th></tr></thead>
+              <tbody><tr>
+                <td>{{order.name}}</td>
+                <td>{{fmtDate(order.transaction_date)}}</td>
+                <td>{{fmtDate(order.delivery_date)||'—'}}</td>
+                <td v-if="order.po_number">{{order.po_number}}</td>
+              </tr></tbody>
+            </table>
+
+            <div class="zb-pdf-bill-section">
+              <div class="zb-pdf-bill-label">Bill To</div>
+              <div class="zb-pdf-bill-name">{{order.customer_name||order.customer}}</div>
+              <div v-if="order.shipping_address" style="font-size:12px;color:#555;margin-top:4px;white-space:pre-wrap">{{order.shipping_address}}</div>
+            </div>
+
+            <table class="zb-pdf-items">
+              <thead><tr>
+                <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
+                <th class="zb-pdf-th">Item &amp; Description</th>
+                <th class="zb-pdf-th" style="text-align:right">Qty</th>
+                <th class="zb-pdf-th" style="text-align:right">Rate</th>
+                <th class="zb-pdf-th" style="text-align:right">Amount</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="(item,i) in (order.items||[])" :key="i" class="zb-pdf-item-row">
+                  <td class="zb-pdf-td" style="text-align:center;color:#aaa;font-size:12px">{{i+1}}</td>
+                  <td class="zb-pdf-td">
+                    <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
+                    <div v-if="item.description&&item.description!==item.item_name" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
+                  </td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}<div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div></td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div class="zb-pdf-bottom">
+              <div class="zb-pdf-words-block">
+                <div class="zb-pdf-words-lbl">Total In Words</div>
+                <div class="zb-pdf-words-val"><i>{{toWords(flt(order.grand_total))}}</i></div>
+                <div v-if="order.terms" style="margin-top:10px">
+                  <div class="zb-pdf-words-lbl">Terms &amp; Conditions</div>
+                  <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{order.terms}}</div>
+                </div>
+              </div>
+              <div class="zb-pdf-totals-block">
+                <div class="zb-pdf-total-row"><span>Sub Total</span><span>{{fmt(order.net_total)}}</span></div>
+                <div class="zb-pdf-total-row" v-for="tax in (order.taxes||[])" :key="tax.tax_type">
+                  <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
+                </div>
+                <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Total</span><span>{{fmt(order.grand_total)}}</span></div>
+              </div>
+            </div>
+            <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+            <div class="zb-pdf-footer">
+              <span>SALES ORDER</span>
+              <span style="color:#9ca3af;font-size:11px">Order Date: {{fmtDate(order.transaction_date)}}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── EDIT FORM ── -->
+        <div v-else class="zb-edit-wrap no-print">
+          <div class="zb-edit-form">
+            <div class="zb-form-section-title">Order Details</div>
+            <div class="zb-form-grid3">
+              <div class="zb-form-field" style="position:relative">
+                <label class="zb-form-label">Customer *</label>
+                <input v-model="custSearch" class="zb-form-input" placeholder="Search customer…" autocomplete="off"
+                  @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                <div v-if="showCustDrop&&custDropItems.length" class="qt-cust-drop" style="z-index:200">
+                  <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
+                    <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
+                    <div v-if="c.name!==c.customer_name" style="font-size:11px;color:#9ca3af">{{c.name}}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="zb-form-field"><label class="zb-form-label">Order Date</label>
+                <input type="date" v-model="form.order_date" class="zb-form-input"/></div>
+              <div class="zb-form-field"><label class="zb-form-label">Delivery Date</label>
+                <input type="date" v-model="form.delivery_date" class="zb-form-input"/></div>
+              <div class="zb-form-field"><label class="zb-form-label">Status</label>
+                <select v-model="form.status" class="zb-form-input" style="background:#fff">
+                  <option>Draft</option><option>Confirmed</option><option>Processing</option><option>Ready</option><option>Invoiced</option>
+                </select>
+              </div>
+              <div class="zb-form-field"><label class="zb-form-label">Ref. Quotation</label>
+                <input v-model="form.ref_quote" class="zb-form-input" placeholder="QT-…"/></div>
+              <div class="zb-form-field"><label class="zb-form-label">Customer PO#</label>
+                <input v-model="form.po_number" class="zb-form-input" placeholder="Customer PO reference"/></div>
+            </div>
+
+            <div class="zb-form-section-title" style="margin-top:18px">Items</div>
+            <table class="zb-items-table">
+              <thead><tr><th>Item</th><th>Description</th><th style="text-align:center">Qty</th><th style="text-align:right">Rate</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+              <tbody>
+                <tr v-for="(item,i) in form.items" :key="i">
+                  <td><searchable-select v-model="item.item_name" :options="allItems" value-key="item_name" label-key="item_name" placeholder="— Select —" :compact="true" :createable="true" create-doctype="Item" create-label="Item" @update:modelValue="onItemPick(item)"/></td>
+                  <td><input v-model="item.description" class="zb-form-input" style="font-size:12px;padding:5px 8px" placeholder="Description"/></td>
+                  <td style="text-align:center"><input v-model.number="item.qty" type="number" min="0.01" step="0.01" class="zb-form-input" style="width:70px;text-align:center;font-size:12px;padding:5px 8px" @input="recalc"/></td>
+                  <td style="text-align:right"><input v-model.number="item.rate" type="number" min="0" step="0.01" class="zb-form-input" style="width:100px;text-align:right;font-size:12px;padding:5px 8px" @input="recalc"/></td>
+                  <td style="text-align:right;font-family:monospace;font-size:13px;padding-right:8px;font-weight:600">{{flt(item.amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                  <td><button v-if="form.items.length>1" @click="removeItem(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                </tr>
+              </tbody>
+            </table>
+            <button @click="addItem" class="nim-add-btn" style="margin-top:6px"><span v-html="icon('plus',12)"></span> Add Row</button>
+
+            <div class="zb-form-section-title" style="margin-top:18px;display:flex;align-items:center;justify-content:space-between">
+              <span>Taxes</span><button @click="addTax" class="nim-add-btn"><span v-html="icon('plus',12)"></span> Add Tax</button>
+            </div>
+            <div v-if="form.taxes.length" style="margin-bottom:12px">
+              <table class="zb-items-table">
+                <thead><tr><th>Type</th><th>Description</th><th style="text-align:center">Rate%</th><th style="text-align:right">Amount</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="(tax,i) in form.taxes" :key="i">
+                    <td><select v-model="tax.tax_type" class="zb-form-input" style="font-size:12px;padding:5px 8px" @change="tax.description=tax.tax_type;recalc()"><option>CGST</option><option>SGST</option><option>IGST</option><option>Cess</option><option>Other</option></select></td>
+                    <td><input v-model="tax.description" class="zb-form-input" style="font-size:12px;padding:5px 8px"/></td>
+                    <td><input v-model.number="tax.rate" type="number" min="0" max="100" step="0.01" class="zb-form-input" style="width:70px;text-align:center;font-size:12px;padding:5px 8px" @input="recalc"/></td>
+                    <td style="text-align:right;font-family:monospace;font-size:13px;padding-right:8px">{{flt(tax.tax_amount).toLocaleString('en-IN',{minimumFractionDigits:2})}}</td>
+                    <td><button @click="removeTax(i)" class="nim-del-btn" v-html="icon('trash',13)"></button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="zb-form-totals">
+              <div class="zb-form-total-row"><span>Subtotal</span><span>{{fmt(netTotal)}}</span></div>
+              <div v-for="tax in form.taxes" :key="tax.tax_type" class="zb-form-total-row">
+                <span>{{tax.description||tax.tax_type}} ({{tax.rate}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
+              </div>
+              <div class="zb-form-total-grand"><span>Grand Total</span><span>{{fmt(grandTotal)}}</span></div>
+            </div>
+
+            <div style="margin-top:20px">
+              <div class="zb-form-field"><label class="zb-form-label">Terms &amp; Conditions</label>
+                <textarea v-model="form.terms" class="zb-form-input" rows="3" style="resize:vertical"></textarea></div>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /v-else-if order -->
+    </div><!-- /v-else soName -->
+
+  </div><!-- /zb-detail-area -->
+
+  <!-- ── Convert Modal ── -->
+  <teleport to="body">
+    <div v-if="showConvert" class="nim-overlay" @click.self="showConvert=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+            <div class="nim-header-title">Create Invoice</div>
+          </div>
+          <button class="nim-close" @click="showConvert=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Create a Sales Invoice from <strong>{{order?.name}}</strong> for <strong>{{order?.customer_name||order?.customer}}</strong>
+            worth <strong>{{fmt(flt(order?.grand_total))}}</strong>?
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showConvert=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" @click="doConvert" :disabled="acting">{{acting?'Creating…':'Create Invoice'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- ── Deliver Modal ── -->
+  <teleport to="body">
+    <div v-if="showDeliver" class="nim-overlay" @click.self="showDeliver=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header">
+          <div class="nim-header-left">
+            <div class="nim-header-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="1" y="3" width="15" height="13"/><path d="M16 8h4l3 5v4h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+            </div>
+            <div class="nim-header-title">Create Delivery</div>
+          </div>
+          <button class="nim-close" @click="showDeliver=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">
+            Create a delivery (stock entry) for all items in <strong>{{order?.name}}</strong>?
+          </p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDeliver=false">Cancel</button>
+          <button class="nim-btn nim-btn-primary" @click="doDeliver" :disabled="acting">{{acting?'Creating…':'Create Delivery'}}</button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- ── Delete Modal ── -->
+  <teleport to="body">
+    <div v-if="showDel" class="nim-overlay" @click.self="showDel=false">
+      <div class="nim-dialog" style="max-width:420px">
+        <div class="nim-header" style="background:linear-gradient(135deg,#dc2626,#b91c1c)">
+          <div class="nim-header-left">
+            <div class="nim-header-icon"><span v-html="icon('trash',16)"></span></div>
+            <div class="nim-header-title">Delete Order?</div>
+          </div>
+          <button class="nim-close" @click="showDel=false" v-html="icon('x',15)"></button>
+        </div>
+        <div class="nim-body" style="padding:20px 24px">
+          <p style="font-size:14px;color:#374151;line-height:1.6">Delete <strong>{{order?.name}}</strong>? This cannot be undone.</p>
+        </div>
+        <div class="nim-footer">
+          <button class="nim-btn nim-btn-ghost" @click="showDel=false">Cancel</button>
+          <button @click="doDelete" :disabled="deleting" style="height:37px;padding:0 18px;border-radius:8px;font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;border:none;background:#dc2626;color:#fff">
+            {{deleting?'Deleting…':'Yes, Delete'}}
+          </button>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+</div>
+`});
+
+  /* ═══════════════════════════════════════════════════════════════
      RECURRING INVOICES COMPONENT
   ═══════════════════════════════════════════════════════════════ */
   const RecurringInvoices = defineComponent({
@@ -5775,6 +7500,10 @@
       const loading = ref(true);
       const search = ref("");
       const activeFilter = ref("all");
+
+      // Two-panel state
+      const selectedSched = ref(null);
+      const activeTab = ref("overview");
 
       function todayStr() { return new Date().toISOString().slice(0, 10); }
 
@@ -6015,23 +7744,50 @@
         loading.value = true;
         try {
           const rows = await apiList("Sales Invoice", {
-            fields: ["name","customer","customer_name","posting_date","due_date","status","grand_total","net_total","notes"],
+            fields: ["name","customer","customer_name","posting_date","due_date","status","grand_total","net_total"],
             filters: [["status","!=","Cancelled"]],
             order: "modified desc", limit: 500
           });
           list.value = (rows || []).map(r => ({
-            name: r.name, customer: r.customer, schedule_name: r.name || "",
+            name: r.name, customer: r.customer, customer_name: r.customer_name || r.customer,
+            schedule_name: r.name,
             frequency: "monthly",
             start_date: r.posting_date || "",
             end_date: r.due_date || "",
-            status: r.status || "Submitted",
+            status: r.status === "Submitted" ? "Active" : (r.status || "Active"),
             grand_total: flt(r.grand_total), net_total: flt(r.net_total),
+            notes: "",
             items: [], taxes: [], history: []
           }));
         } catch(e) { toast("Could not load recurring invoices: " + e.message, "error"); }
         loading.value = false;
         try { customers.value = await apiList("Customer", { fields: ["name","customer_name"], filters: [["disabled","=",0]], order: "customer_name asc", limit: 300 }); } catch { }
         try { allItems.value = await apiList("Item", { fields: ["name","item_name","item_code","standard_rate","description"], limit: 300, order: "item_name asc" }); } catch { }
+      }
+
+      function selectSched(s) {
+        selectedSched.value = s;
+        activeTab.value = "overview";
+      }
+
+      function closeSched() { selectedSched.value = null; }
+
+      function initials(name) {
+        return (name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+      }
+
+      function schedStatus(s) {
+        if (!s) return "Active";
+        const today = new Date().toISOString().slice(0, 10);
+        if (s.end_date && s.end_date < today) return "Expired";
+        return s.status || "Active";
+      }
+
+      function schedStatusColor(s) {
+        const st = schedStatus(s);
+        if (st === "Active") return { color: "#059669", bg: "#ECFDF5" };
+        if (st === "Paused") return { color: "#D97706", bg: "#FFFBEB" };
+        return { color: "#6B7280", bg: "#F3F4F6" };
       }
 
       onMounted(load);
@@ -6048,6 +7804,7 @@
       return {
         list, loading, search, allItems, activeFilter, filtered, counts, summary,
         FREQ_LABEL, getNextDue, daysUntil,
+        selectedSched, activeTab, selectSched, closeSched, initials, schedStatus, schedStatusColor,
         showDrawer, drawerMode, saving, form, selCustomer, custSearch, showCustDrop, custDropItems,
         netTotal, taxTotal, grandTotal, previewDates, todayStr,
         recalc, addItem, removeItem, addTax, removeTax, onItemPick,
@@ -6059,123 +7816,362 @@
       };
     },
     template: `
-<div class="b-page">
+<div class="zb-master-detail" style="height:calc(100vh - 56px)">
 
-  <!-- Summary strip -->
-  <div class="qt-summary">
-    <div class="qt-sum-card"><div class="qt-sum-label">Total Schedules</div><div class="qt-sum-value">{{summary.total}}</div></div>
-    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#059669">Active</div><div class="qt-sum-value" style="color:#059669">{{summary.active}}</div></div>
-    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#d97706">Due This Week</div><div class="qt-sum-value" style="color:#d97706">{{summary.due}}</div></div>
-    <div class="qt-sum-card"><div class="qt-sum-label" style="color:#2563eb">Monthly Value</div><div class="qt-sum-value" style="color:#2563eb">{{fmt(summary.value)}}</div></div>
-  </div>
+  <!-- ══ LEFT PANEL ══ -->
+  <div class="zb-list-pane" style="width:320px;min-width:260px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;overflow:hidden">
 
-  <!-- Toolbar -->
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-filters">
-        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+    <!-- List header -->
+    <div style="padding:16px 16px 10px;border-bottom:1px solid #f0f2f5;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:14px;font-weight:700;color:#111827">Recurring Invoices</span>
+        <button class="zb-tb-btn zb-tb-primary" style="padding:5px 10px;font-size:12px" @click="openAdd">
+          <span v-html="icon('plus',12)"></span> New
+        </button>
+      </div>
+      <!-- Search -->
+      <div class="cust-search" style="width:100%">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search schedule, customer…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <!-- Filter pills -->
+      <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'" style="font-size:11.5px">All</button>
         <button v-for="f in ['Active','Paused','Ended']" :key="f"
           class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
-          @click="activeFilter=f">
+          @click="activeFilter=f" style="font-size:11.5px">
           {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]}}</span>
         </button>
       </div>
     </div>
-    <div class="cust-toolbar-right">
-      <div class="cust-search">
-        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
-        <input v-model="search" placeholder="Search schedule, customer…" class="cust-search-input" autocomplete="off"/>
+
+    <!-- List body -->
+    <div style="flex:1;overflow-y:auto">
+      <template v-if="loading">
+        <div v-for="n in 5" :key="n" style="padding:14px 16px;border-bottom:1px solid #f0f2f5">
+          <div class="b-shimmer" style="height:12px;border-radius:4px;width:70%;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:10px;border-radius:4px;width:45%"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" style="text-align:center;padding:40px 16px">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" style="margin:0 auto 10px;display:block"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">{{search?'No matches':'No recurring invoices'}}</div>
+        <div style="font-size:12px;color:#9ca3af">{{search?'Try different keywords':'Create your first recurring schedule'}}</div>
+        <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;font-size:12px" @click="openAdd">New Schedule</button>
       </div>
-      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Schedule</button>
+      <div v-else v-for="s in filtered" :key="s.name"
+        @click="selectSched(s)"
+        :style="{
+          padding:'13px 16px',
+          borderBottom:'1px solid #f0f2f5',
+          cursor:'pointer',
+          background: selectedSched && selectedSched.name===s.name ? '#F5F3FF' : 'transparent',
+          borderLeft: selectedSched && selectedSched.name===s.name ? '3px solid #7C3AED' : '3px solid transparent',
+          transition:'background 0.15s',
+        }"
+        @mouseenter="e=>{ if(!(selectedSched&&selectedSched.name===s.name)) e.currentTarget.style.background='#F9FAFB' }"
+        @mouseleave="e=>{ if(!(selectedSched&&selectedSched.name===s.name)) e.currentTarget.style.background='transparent' }">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{s.customer_name||s.customer||'—'}}
+            </div>
+            <div style="font-size:11.5px;color:#6B7280;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{s.schedule_name||s.name}}
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+              <span style="font-size:12.5px;font-weight:700;color:#111827;font-family:monospace">{{fmt(s.grand_total)}}</span>
+              <span style="font-size:11px;color:#9CA3AF">·</span>
+              <span style="font-size:11px;color:#6B7280">{{FREQ_LABEL[s.frequency]||s.frequency}}</span>
+            </div>
+          </div>
+          <div style="flex-shrink:0">
+            <span :style="{
+              display:'inline-block',fontSize:'10px',fontWeight:700,padding:'2px 7px',borderRadius:'20px',letterSpacing:'0.5px',
+              color:schedStatusColor(s).color,background:schedStatusColor(s).bg
+            }">{{schedStatus(s).toUpperCase()}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- List footer -->
+    <div v-if="!loading && filtered.length" style="padding:8px 16px;border-top:1px solid #f0f2f5;font-size:11.5px;color:#9ca3af;display:flex;justify-content:space-between;flex-shrink:0">
+      <span>{{filtered.length}} of {{list.length}} schedules</span>
+      <button @click="load" style="background:none;border:none;cursor:pointer;color:#6B7280;font-size:11.5px;display:flex;align-items:center;gap:3px"><span v-html="icon('refresh',11)"></span> Refresh</button>
     </div>
   </div>
 
-  <!-- Table -->
-  <div class="b-card cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
-        <thead>
-          <tr>
-            <th>Schedule</th>
-            <th>Customer</th>
-            <th>Frequency</th>
-            <th>Amount</th>
-            <th>Next Invoice</th>
-            <th>End Date</th>
-            <th style="text-align:center">Invoices</th>
-            <th>Status</th>
-            <th style="text-align:center;width:130px">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-if="loading">
-            <tr v-for="n in 4" :key="n"><td colspan="9" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:65%"></div></td></tr>
-          </template>
-          <tr v-else-if="!filtered.length">
-            <td colspan="9" class="cust-empty">
-              <div class="cust-empty-icon">
-                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
-              </div>
-              <div class="cust-empty-title">{{search?'No schedules match':'No recurring invoices yet'}}</div>
-              <div class="cust-empty-sub">{{search?'Try a different search':'Set up automatic invoice generation for subscriptions and retainers'}}</div>
-              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd"><span v-html="icon('plus',13)"></span> New Schedule</button>
-            </td>
-          </tr>
-          <tr v-else v-for="s in filtered" :key="s.name" class="cust-row" @click="openEdit(s.name)">
-            <td>
-              <div style="color:#2563eb;font-family:monospace;font-size:12px;font-weight:700">{{s.name}}</div>
-              <div v-if="s.schedule_name" style="font-size:11.5px;color:#9ca3af;margin-top:1px">{{s.schedule_name}}</div>
-            </td>
-            <td class="cust-name">{{s.customer||'—'}}</td>
-            <td class="cust-secondary">{{FREQ_LABEL[s.frequency]||s.frequency}}</td>
-            <td style="font-family:monospace;font-weight:600;color:#111827">{{fmt(s.grand_total)}}</td>
-            <td>
-              <template v-if="s.status==='Active' && getNextDue(s)">
-                <span :class="['ri-next-chip', daysUntil(getNextDue(s))===0?'ri-today':daysUntil(getNextDue(s))<=3?'ri-soon':'ri-ok']">
-                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                  {{daysUntil(getNextDue(s))===0?'Today':daysUntil(getNextDue(s))===1?'Tomorrow':fmtDate(getNextDue(s))}}
-                </span>
-              </template>
-              <span v-else class="ri-next-chip ri-none">—</span>
-            </td>
-            <td class="cust-secondary">{{fmtDate(s.end_date)||'No end'}}</td>
-            <td style="text-align:center;font-family:monospace;font-size:13px;font-weight:600;color:#2563eb">{{(s.history||[]).length}}</td>
-            <td>
-              <span class="b-badge" :class="s.status==='Active'?'b-badge-green':s.status==='Paused'?'b-badge-amber':'b-badge-muted'">
-                {{s.status}}
-              </span>
-            </td>
-            <td @click.stop style="text-align:center">
-              <div style="display:flex;gap:3px;justify-content:center;flex-wrap:wrap">
-                <!-- Generate now -->
-                <button v-if="s.status==='Active'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
-                  @click="openGenerate(s)" title="Generate Invoice Now">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-                </button>
-                <!-- Pause/Resume -->
-                <button v-if="s.status==='Active'" class="cust-act-btn" style="color:#d97706;border-color:rgba(217,119,6,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
-                  @click="toggleStatus(s)" title="Pause">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                </button>
-                <button v-else-if="s.status==='Paused'" class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
-                  @click="toggleStatus(s)" title="Resume">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                </button>
-                <!-- History -->
-                <button class="cust-act-btn cust-act-edit" @click="openHistory(s)" title="Invoice History">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"/></svg>
-                </button>
-                <!-- Delete -->
-                <button class="cust-act-btn cust-act-del" @click="confirmDelete(s)" title="Delete"><span v-html="icon('trash',13)"></span></button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- ══ RIGHT PANEL ══ -->
+  <div style="flex:1;overflow-y:auto;background:#F9FAFB">
+
+    <!-- Empty state -->
+    <div v-if="!selectedSched" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#9CA3AF">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.2" style="margin-bottom:16px"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+      <div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:6px">Select a Schedule</div>
+      <div style="font-size:13px;color:#9CA3AF;text-align:center;max-width:220px">Choose a recurring invoice profile from the left to view its details</div>
     </div>
-    <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} schedules</div>
-  </div>
+
+    <!-- Detail view -->
+    <div v-else style="max-width:900px;margin:0 auto;padding:24px">
+
+      <!-- Action bar -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div :style="{
+            width:'40px',height:'40px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',
+            fontWeight:700,fontSize:'15px',color:'#fff',
+            background:'linear-gradient(135deg,#7C3AED,#9333EA)',flexShrink:0
+          }">{{initials(selectedSched.customer_name||selectedSched.customer)}}</div>
+          <div>
+            <div style="font-size:17px;font-weight:700;color:#111827">{{selectedSched.schedule_name||selectedSched.name}}</div>
+            <div style="font-size:12px;color:#6B7280">{{selectedSched.customer_name||selectedSched.customer}}</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <button v-if="schedStatus(selectedSched)==='Active'" class="nim-btn" style="background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;font-size:13px"
+            @click="openGenerate(selectedSched)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+            Create Invoice
+          </button>
+          <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px" @click="openEdit(selectedSched.name)">
+            <span v-html="icon('edit',13)"></span> Edit
+          </button>
+          <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px" @click="openHistory(selectedSched)">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="12 8 12 12 14 14"/><path d="M3.05 11a9 9 0 1 1 .5 4m-.5 5v-5h5"/></svg>
+            History
+          </button>
+          <button class="nim-btn" style="background:none;color:#9CA3AF;border:1px solid #E5E7EB;width:32px;height:32px;padding:0;display:grid;place-items:center" @click="closeSched" title="Close">
+            <span v-html="icon('x',14)"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Tabs -->
+      <div style="display:flex;border-bottom:2px solid #E5E7EB;margin-bottom:24px;gap:0">
+        <button @click="activeTab='overview'"
+          :style="{padding:'8px 16px',fontSize:'13.5px',fontWeight:600,border:'none',background:'none',cursor:'pointer',
+            color:activeTab==='overview'?'#7C3AED':'#6B7280',
+            borderBottom:activeTab==='overview'?'2px solid #7C3AED':'2px solid transparent',marginBottom:'-2px'}">
+          Overview
+        </button>
+        <button @click="activeTab='activity'"
+          :style="{padding:'8px 16px',fontSize:'13.5px',fontWeight:600,border:'none',background:'none',cursor:'pointer',
+            color:activeTab==='activity'?'#7C3AED':'#6B7280',
+            borderBottom:activeTab==='activity'?'2px solid #7C3AED':'2px solid transparent',marginBottom:'-2px'}">
+          Recent Activities
+        </button>
+      </div>
+
+      <!-- Overview tab -->
+      <div v-if="activeTab==='overview'" style="display:flex;gap:20px;align-items:flex-start">
+
+        <!-- Left column -->
+        <div style="flex:0 0 42%;min-width:0;display:flex;flex-direction:column;gap:16px">
+
+          <!-- Customer card -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #F3F4F6">
+              <div :style="{
+                width:'44px',height:'44px',borderRadius:'50%',display:'flex',alignItems:'center',justifyContent:'center',
+                fontWeight:700,fontSize:'16px',color:'#fff',background:'linear-gradient(135deg,#7C3AED,#9333EA)',flexShrink:0
+              }">{{initials(selectedSched.customer_name||selectedSched.customer)}}</div>
+              <div>
+                <div style="font-size:14px;font-weight:700;color:#111827">{{selectedSched.customer_name||selectedSched.customer}}</div>
+                <div style="font-size:11.5px;color:#6B7280;margin-top:2px">{{selectedSched.customer}}</div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#374151">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07A19.5 19.5 0 0 1 4.69 12 19.79 19.79 0 0 1 1.63 3.18 2 2 0 0 1 3.6 1h3a2 2 0 0 1 2 1.72c.127.96.361 1.903.7 2.81a2 2 0 0 1-.45 2.11L7.91 8.6A16 16 0 0 0 15.4 16.1l.97-.97a2 2 0 0 1 2.11-.45c.907.339 1.85.573 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+                <span>Not available</span>
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;font-size:12.5px;color:#374151">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                <span>Not available</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Details section -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px;margin-bottom:14px">DETAILS</div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:12.5px;color:#6B7280">Profile Status</span>
+                <span :style="{fontSize:'11px',fontWeight:700,padding:'2px 8px',borderRadius:'20px',
+                  color:schedStatusColor(selectedSched).color,background:schedStatusColor(selectedSched).bg}">
+                  {{schedStatus(selectedSched).toUpperCase()}}
+                </span>
+              </div>
+              <div style="display:flex;justify-content:space-between">
+                <span style="font-size:12.5px;color:#6B7280">Start Date</span>
+                <span style="font-size:12.5px;font-weight:600;color:#111827">{{fmtDate(selectedSched.start_date)||'—'}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between">
+                <span style="font-size:12.5px;color:#6B7280">End Date</span>
+                <span style="font-size:12.5px;font-weight:600;color:#111827">{{fmtDate(selectedSched.end_date)||'No End Date'}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between">
+                <span style="font-size:12.5px;color:#6B7280">Payment Terms</span>
+                <span style="font-size:12.5px;font-weight:600;color:#111827">{{selectedSched.payment_terms||'—'}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between">
+                <span style="font-size:12.5px;color:#6B7280">Schedule Ref</span>
+                <span style="font-size:12px;font-family:monospace;color:#2563EB;font-weight:700">{{selectedSched.name}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between">
+                <span style="font-size:12.5px;color:#6B7280">Invoices Generated</span>
+                <span style="font-size:12.5px;font-weight:700;color:#111827">{{(selectedSched.history||[]).length}}</span>
+              </div>
+            </div>
+            <div v-if="schedStatus(selectedSched)==='Active'" style="margin-top:14px;padding:10px 12px;background:#F0FDF4;border-radius:8px;display:flex;gap:8px">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#059669" stroke-width="2" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+              <span style="font-size:11.5px;color:#059669;line-height:1.4">Invoices are automatically generated on the recurring schedule dates.</span>
+            </div>
+          </div>
+
+          <!-- Notes -->
+          <div v-if="selectedSched.notes" style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px;margin-bottom:10px">CUSTOMER NOTES</div>
+            <p style="font-size:12.5px;color:#374151;line-height:1.6;white-space:pre-wrap">{{selectedSched.notes}}</p>
+          </div>
+        </div>
+
+        <!-- Right column -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px">
+
+          <!-- Summary cards row -->
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+            <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px">
+              <div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:6px;letter-spacing:0.5px">INVOICE AMOUNT</div>
+              <div style="font-size:18px;font-weight:800;color:#111827;font-family:monospace">{{fmt(selectedSched.grand_total)}}</div>
+              <div style="font-size:11px;color:#9CA3AF;margin-top:3px">per invoice</div>
+            </div>
+            <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px">
+              <div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:6px;letter-spacing:0.5px">NEXT INVOICE</div>
+              <div style="font-size:13px;font-weight:700;color:#111827">
+                <template v-if="schedStatus(selectedSched)==='Active' && getNextDue(selectedSched)">
+                  {{fmtDate(getNextDue(selectedSched))}}
+                  <div style="font-size:11px;color:#059669;margin-top:2px;font-weight:600">
+                    {{daysUntil(getNextDue(selectedSched))===0?'Today':daysUntil(getNextDue(selectedSched))===1?'Tomorrow':daysUntil(getNextDue(selectedSched))+' days'}}
+                  </div>
+                </template>
+                <span v-else style="color:#9CA3AF;font-size:12px">—</span>
+              </div>
+            </div>
+            <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px">
+              <div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:6px;letter-spacing:0.5px">FREQUENCY</div>
+              <div style="font-size:13px;font-weight:700;color:#111827">{{FREQ_LABEL[selectedSched.frequency]||selectedSched.frequency}}</div>
+              <div style="font-size:11px;color:#9CA3AF;margin-top:3px">recurring</div>
+            </div>
+          </div>
+
+          <!-- Invoice Items card -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px;margin-bottom:12px">INVOICE ITEMS</div>
+            <div v-if="(selectedSched.items||[]).length">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid #F3F4F6">
+                    <th style="text-align:left;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Item</th>
+                    <th style="text-align:center;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Qty</th>
+                    <th style="text-align:right;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Rate</th>
+                    <th style="text-align:right;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(it,i) in selectedSched.items" :key="i" style="border-bottom:1px solid #F9FAFB">
+                    <td style="font-size:12.5px;color:#374151;padding:8px 0">{{it.item_name||it.item_code||'—'}}</td>
+                    <td style="font-size:12.5px;color:#6B7280;text-align:center;padding:8px 0">{{it.qty}}</td>
+                    <td style="font-size:12.5px;color:#6B7280;text-align:right;padding:8px 0;font-family:monospace">{{fmt(it.rate)}}</td>
+                    <td style="font-size:12.5px;font-weight:600;color:#111827;text-align:right;padding:8px 0;font-family:monospace">{{fmt(it.amount)}}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-else style="text-align:center;padding:20px;color:#9CA3AF;font-size:12.5px">
+              No items configured. <button @click="openEdit(selectedSched.name)" style="background:none;border:none;cursor:pointer;color:#7C3AED;text-decoration:underline;font-size:12.5px">Edit to add items</button>
+            </div>
+            <div v-if="selectedSched.grand_total" style="margin-top:12px;padding-top:12px;border-top:1px solid #F3F4F6;display:flex;justify-content:flex-end">
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+                <div style="display:flex;gap:40px;font-size:12.5px;color:#6B7280">
+                  <span>Net Total</span><span style="font-family:monospace;font-weight:600;color:#111827">{{fmt(selectedSched.net_total)}}</span>
+                </div>
+                <div style="display:flex;gap:40px;font-size:13.5px;font-weight:800;color:#111827;border-top:1px solid #E5E7EB;padding-top:6px;margin-top:2px">
+                  <span>Per Invoice Total</span><span style="font-family:monospace">{{fmt(selectedSched.grand_total)}}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- All Child Invoices -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+              <div style="font-size:11px;font-weight:700;color:#9CA3AF;letter-spacing:0.8px">ALL CHILD INVOICES</div>
+              <button v-if="schedStatus(selectedSched)==='Active'" class="nim-btn" style="background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;font-size:11.5px;padding:4px 10px" @click="openGenerate(selectedSched)">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                Generate Now
+              </button>
+            </div>
+            <div v-if="(selectedSched.history||[]).length">
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid #F3F4F6">
+                    <th style="text-align:left;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Invoice Ref</th>
+                    <th style="text-align:left;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Date</th>
+                    <th style="text-align:right;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Amount</th>
+                    <th style="text-align:right;font-size:11px;color:#9CA3AF;font-weight:600;padding:0 0 8px">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="h in (selectedSched.history||[]).slice().reverse()" :key="h.inv_ref" style="border-bottom:1px solid #F9FAFB">
+                    <td style="font-size:12px;font-family:monospace;color:#2563EB;font-weight:700;padding:8px 0">{{h.inv_ref||'—'}}</td>
+                    <td style="font-size:12px;color:#6B7280;padding:8px 0">{{fmtDate(h.date)}}</td>
+                    <td style="font-size:12.5px;font-weight:600;font-family:monospace;color:#111827;text-align:right;padding:8px 0">{{fmt(h.amount)}}</td>
+                    <td style="text-align:right;padding:8px 0">
+                      <button class="nim-btn" style="font-size:11px;padding:3px 8px;background:#F0FDF4;color:#059669;border:1px solid #A7F3D0">Record Payment</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <div style="margin-top:10px;padding-top:10px;border-top:1px solid #F3F4F6;display:flex;justify-content:space-between;font-size:12.5px;color:#6B7280">
+                <span>{{(selectedSched.history||[]).length}} invoice(s) generated</span>
+                <span style="font-weight:700;font-family:monospace;color:#111827">{{fmt((selectedSched.history||[]).reduce((s,h)=>s+flt(h.amount),0))}}</span>
+              </div>
+            </div>
+            <div v-else style="text-align:center;padding:28px;color:#9CA3AF">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.5" style="margin:0 auto 8px;display:block"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              <div style="font-size:12.5px">No invoices generated yet</div>
+              <button v-if="schedStatus(selectedSched)==='Active'" @click="openGenerate(selectedSched)" class="nim-btn nim-btn-primary" style="margin-top:10px;font-size:12px">Generate First Invoice</button>
+            </div>
+          </div>
+
+        </div><!-- /right col -->
+      </div><!-- /overview -->
+
+      <!-- Activity tab -->
+      <div v-if="activeTab==='activity'" style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:24px">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:16px">Recent Activity</div>
+        <div v-if="(selectedSched.history||[]).length" style="display:flex;flex-direction:column;gap:0">
+          <div v-for="(h,i) in (selectedSched.history||[]).slice().reverse()" :key="h.inv_ref"
+            style="display:flex;gap:12px;padding:12px 0;border-bottom:1px solid #F3F4F6">
+            <div style="width:32px;height:32px;border-radius:50%;background:#EFF6FF;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1D4ED8" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            </div>
+            <div>
+              <div style="font-size:13px;font-weight:600;color:#111827">Invoice Generated</div>
+              <div style="font-size:12px;color:#6B7280;margin-top:2px">{{h.inv_ref}} · {{fmt(h.amount)}} · {{fmtDate(h.date)}}</div>
+            </div>
+          </div>
+        </div>
+        <div v-else style="text-align:center;padding:32px;color:#9CA3AF;font-size:13px">No activity recorded yet</div>
+      </div>
+
+    </div><!-- /detail view -->
+  </div><!-- /right panel -->
+
+</div>
 
   <!-- ── Add/Edit Drawer ── -->
   <teleport to="body">
@@ -7888,6 +9884,13 @@
       const nextLabelMap = { Draft: "Mark Sent", Sent: "Confirm Order", Confirmed: "Receive Goods" };
       const nextColorMap = { Draft: "#E67700", Sent: "#E67700", Confirmed: "#2F9E44" };
 
+      // ── Two-panel state ──
+      const selectedPO = ref(null);
+      const showPDFView = ref(true);
+
+      function selectPO(o) { selectedPO.value = o; showPDFView.value = true; }
+      function closePO() { selectedPO.value = null; }
+
       onMounted(load);
 
       return {
@@ -7899,6 +9902,7 @@
         showConvert, convertTarget, converting, showDelete, deleteTarget, deleting,
         showReceive, receiveTarget, receiving, doReceive,
         nextStatusMap, nextLabelMap, nextColorMap,
+        selectedPO, showPDFView, selectPO, closePO,
         load, openAdd, openEdit, openView, saveOrder, advanceStatus,
         openConvert, doConvert, confirmDelete, doDelete,
         addRow, removeRow, addTax, removeTax, recalc, pickVendor, pickItem,
@@ -7906,136 +9910,353 @@
       };
     },
     template: `
-<div class="b-page cust-page">
+<div>
 
-  <!-- Summary strip -->
-  <div class="qt-summary">
-    <div class="qt-sum-card">
-      <div class="qt-sum-label">Total Orders</div>
-      <div class="qt-sum-value">{{summary.total}}</div>
+  <!-- ── FLAT TABLE VIEW (default) ── -->
+  <div v-if="!selectedPO" class="b-page cust-page">
+    <!-- Summary strip -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">TOTAL ORDERS</div>
+        <div style="font-size:22px;font-weight:800;color:#111827">{{summary.total}}</div>
+      </div>
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">PENDING RECEIPT</div>
+        <div style="font-size:22px;font-weight:800;color:#E67700">{{summary.pending}}</div>
+      </div>
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">RECEIVED</div>
+        <div style="font-size:22px;font-weight:800;color:#2F9E44">{{summary.received}}</div>
+      </div>
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">ORDER VALUE</div>
+        <div style="font-size:18px;font-weight:800;color:#111827;font-family:monospace">{{fmt(summary.value)}}</div>
+      </div>
     </div>
-    <div class="qt-sum-card">
-      <div class="qt-sum-label" style="color:#E67700">Pending Receipt</div>
-      <div class="qt-sum-value" style="color:#E67700">{{summary.pending}}</div>
+    <div class="cust-toolbar">
+      <div class="cust-toolbar-left">
+        <div class="cust-filters">
+          <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+          <button v-for="f in ['Draft','Sent','Confirmed','Received','Billed']" :key="f"
+            class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
+            @click="activeFilter=f">
+            {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?pillCls(f):'zb-pc-muted'">{{counts[f]}}</span>
+          </button>
+        </div>
+      </div>
+      <div class="cust-toolbar-right">
+        <div class="cust-search">
+          <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+          <input v-model="search" placeholder="Search order, vendor…" class="cust-search-input" autocomplete="off"/>
+        </div>
+        <button class="zb-tb-btn" @click="load" title="Refresh"><span v-html="icon('refresh',13)"></span> Refresh</button>
+        <button class="zb-tb-btn" style="background:#E67700;color:#fff;border-color:#E67700" @click="openAdd"><span v-html="icon('plus',13)"></span> New Order</button>
+      </div>
     </div>
-    <div class="qt-sum-card">
-      <div class="qt-sum-label" style="color:#2F9E44">Received</div>
-      <div class="qt-sum-value" style="color:#2F9E44">{{summary.received}}</div>
-    </div>
-    <div class="qt-sum-card">
-      <div class="qt-sum-label" style="color:#3B5BDB">Order Value</div>
-      <div class="qt-sum-value" style="color:#3B5BDB;font-size:17px">{{fmt(summary.value)}}</div>
+    <div class="b-card cust-table-card">
+      <div class="cust-table-wrap">
+        <table class="cust-table">
+          <thead><tr>
+            <th>PO #</th><th>Vendor</th><th>Order Date</th><th>Expected By</th>
+            <th style="text-align:right">Amount</th><th>Received</th><th>Status</th>
+            <th style="text-align:center;width:120px">Actions</th>
+          </tr></thead>
+          <tbody>
+            <template v-if="loading">
+              <tr v-for="n in 5" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div></td></tr>
+            </template>
+            <tr v-else-if="!filtered.length">
+              <td colspan="8" class="cust-empty">
+                <div class="cust-empty-title">{{search?'No matches':'No purchase orders yet'}}</div>
+                <div class="cust-empty-sub">{{search?'Try different keywords':'Create your first purchase order'}}</div>
+                <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;background:#E67700;border-color:#E67700" @click="openAdd">New Order</button>
+              </td>
+            </tr>
+            <tr v-else v-for="o in filtered" :key="o.name" class="cust-row" @click="selectPO(o)">
+              <td class="cust-mono">{{o.name}}</td>
+              <td><div class="cust-name">{{o.vendor||'—'}}</div></td>
+              <td class="cust-secondary">{{fmtDate(o.order_date)}}</td>
+              <td class="cust-secondary">{{fmtDate(o.expected_date)||'—'}}</td>
+              <td style="text-align:right;font-family:monospace;font-weight:600">{{fmt(o.grand_total)}}</td>
+              <td>
+                <div style="background:#E5E7EB;border-radius:4px;height:6px;width:80px">
+                  <div :style="{width:receivedPct(o)+'%',height:'100%',background:'#2F9E44',borderRadius:'4px'}"></div>
+                </div>
+              </td>
+              <td><span class="b-badge" :class="(STATUS_CFG[o.status]||STATUS_CFG.Draft).cls">{{o.status}}</span></td>
+              <td @click.stop style="text-align:center">
+                <div style="display:flex;gap:4px;justify-content:center">
+                  <button class="cust-act-btn cust-act-edit" @click="selectPO(o)" title="View"><span v-html="icon('edit',13)"></span></button>
+                  <button v-if="!['Billed','Cancelled'].includes(o.status)" class="cust-act-btn" style="color:#E67700" @click="openConvert(o.name)" title="Convert to Bill"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>
+                  <button v-if="o.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(o.name)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} orders</div>
     </div>
   </div>
 
-  <!-- Toolbar -->
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-filters">
-        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+  <!-- ── TWO-PANEL DETAIL VIEW (when PO selected) ── -->
+  <div v-else class="zb-master-detail" style="height:calc(100vh - 56px)">
+
+  <!-- ══ LEFT PANEL ══ -->
+  <div class="zb-list-pane" style="width:320px;min-width:260px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- List header -->
+    <div style="padding:16px 16px 10px;border-bottom:1px solid #f0f2f5;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:14px;font-weight:700;color:#111827">Purchase Orders</span>
+        <button class="nim-btn nim-btn-primary" style="padding:5px 10px;font-size:12px;background:#E67700;border-color:#E67700" @click="openAdd">
+          <span v-html="icon('plus',12)"></span> New Order
+        </button>
+      </div>
+      <div class="cust-search" style="width:100%">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search order, vendor…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'" style="font-size:11.5px">All</button>
         <button v-for="f in ['Draft','Sent','Confirmed','Received','Billed']" :key="f"
           class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
-          @click="activeFilter=f">
-          {{f}}
-          <span class="zb-pill-cnt" :class="activeFilter===f ? pillCls(f) : 'zb-pc-muted'">{{counts[f]}}</span>
+          @click="activeFilter=f" style="font-size:11.5px">
+          {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?pillCls(f):'zb-pc-muted'">{{counts[f]}}</span>
         </button>
       </div>
     </div>
-    <div class="cust-toolbar-right">
-      <div class="cust-search">
-        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
-        <input v-model="search" placeholder="Search order, vendor..." class="cust-search-input" autocomplete="off"/>
+
+    <!-- List body -->
+    <div style="flex:1;overflow-y:auto">
+      <template v-if="loading">
+        <div v-for="n in 5" :key="n" style="padding:14px 16px;border-bottom:1px solid #f0f2f5">
+          <div class="b-shimmer" style="height:12px;border-radius:4px;width:70%;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:10px;border-radius:4px;width:45%"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" style="text-align:center;padding:40px 16px">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" style="margin:0 auto 10px;display:block"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">{{search?'No matches':'No purchase orders yet'}}</div>
+        <div style="font-size:12px;color:#9ca3af">{{search?'Try different keywords':'Create your first purchase order'}}</div>
+        <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;font-size:12px;background:#E67700;border-color:#E67700" @click="openAdd">New Order</button>
       </div>
-      <button class="zb-tb-btn" @click="load"><span v-html="icon('refresh',13)"></span> Refresh</button>
-      <button class="zb-tb-btn" style="background:#E67700;color:#fff;border-color:#E67700" @click="openAdd">
-        <span v-html="icon('plus',13)"></span> New Order
-      </button>
+      <div v-else v-for="o in filtered" :key="o.name"
+        @click="selectPO(o)"
+        :style="{
+          padding:'12px 16px',
+          borderBottom:'1px solid #f0f2f5',
+          cursor:'pointer',
+          background: selectedPO && selectedPO.name===o.name ? '#FFF7ED' : 'transparent',
+          borderLeft: selectedPO && selectedPO.name===o.name ? '3px solid #E67700' : '3px solid transparent',
+          transition:'background 0.15s',
+        }"
+        @mouseenter="e=>{ if(!(selectedPO&&selectedPO.name===o.name)) e.currentTarget.style.background='#F9FAFB' }"
+        @mouseleave="e=>{ if(!(selectedPO&&selectedPO.name===o.name)) e.currentTarget.style.background='transparent' }">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{o.vendor||'—'}}
+            </div>
+            <div style="font-size:11.5px;color:#6B7280;margin-top:2px">
+              {{o.name}} · {{fmtDate(o.order_date)}}
+            </div>
+            <div style="margin-top:5px;display:flex;align-items:center;justify-content:space-between">
+              <span class="b-badge" :class="(STATUS_CFG[o.status]||STATUS_CFG.Draft).cls" style="font-size:10px">{{o.status}}</span>
+              <span style="font-size:12.5px;font-weight:700;color:#111827;font-family:monospace">{{fmt(o.grand_total)}}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div v-if="!loading && filtered.length" style="padding:8px 16px;border-top:1px solid #f0f2f5;font-size:11.5px;color:#9ca3af;display:flex;justify-content:space-between;flex-shrink:0">
+      <span>{{filtered.length}} of {{list.length}} orders</span>
+      <button @click="load" style="background:none;border:none;cursor:pointer;color:#6B7280;font-size:11.5px;display:flex;align-items:center;gap:3px"><span v-html="icon('refresh',11)"></span> Refresh</button>
     </div>
   </div>
 
-  <!-- Table -->
-  <div class="b-card cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
-        <thead>
-          <tr>
-            <th>PO #</th>
-            <th>Vendor</th>
-            <th>Order Date</th>
-            <th>Expected By</th>
-            <th style="text-align:right">Amount</th>
-            <th style="min-width:110px">Received</th>
-            <th>Status</th>
-            <th style="text-align:center;width:120px">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <template v-if="loading">
-            <tr v-for="n in 5" :key="n">
-              <td colspan="8" style="padding:12px 14px">
-                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
-              </td>
-            </tr>
-          </template>
-          <tr v-else-if="!filtered.length">
-            <td colspan="8" class="cust-empty">
-              <div class="cust-empty-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5">
-                  <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
-                </svg>
-              </div>
-              <div class="cust-empty-title">{{search ? 'No orders match' : 'No purchase orders yet'}}</div>
-              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Create purchase orders to track procurement'}}</div>
-              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;background:#E67700;border-color:#E67700" @click="openAdd">
-                <span v-html="icon('plus',13)"></span> New Order
-              </button>
-            </td>
-          </tr>
-          <tr v-else v-for="o in filtered" :key="o.name" class="cust-row" @click="openView(o.name)">
-            <td>
-              <div style="color:#E67700;font-family:monospace;font-size:12px;font-weight:700">{{o.name}}</div>
-              <div v-if="o.vendor_ref" style="font-size:11px;color:#9ca3af">Ref: {{o.vendor_ref}}</div>
-            </td>
-            <td class="cust-name">{{o.vendor||'—'}}</td>
-            <td class="cust-secondary">{{fmtDate(o.order_date)}}</td>
-            <td class="cust-secondary">{{fmtDate(o.expected_date)||'—'}}</td>
-            <td style="text-align:right;font-family:monospace;font-weight:600;color:#111827">{{fmt(o.grand_total)}}</td>
-            <td>
-              <div style="display:flex;align-items:center;gap:8px">
-                <div style="flex:1;background:#e4e8f0;border-radius:20px;height:6px;overflow:hidden;min-width:60px">
-                  <div :style="{width:receivedPct(o)+'%',height:'100%',borderRadius:'20px',background:receivedPct(o)>=100?'#059669':receivedPct(o)>0?'#E67700':'#e4e8f0',transition:'width .3s'}"></div>
-                </div>
-                <span style="font-size:11px;color:#9ca3af;white-space:nowrap">{{receivedPct(o)}}%</span>
-              </div>
-            </td>
-            <td>
-              <span class="b-badge" :class="(STATUS_CFG[o.status]||STATUS_CFG.Draft).cls">
-                {{o.status}}
-              </span>
-            </td>
-            <td @click.stop style="text-align:center">
-              <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn cust-act-edit" @click="openView(o.name)" title="View">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
-                <button v-if="!['Billed','Cancelled'].includes(o.status)"
-                  class="cust-act-btn" style="color:#059669;border-color:rgba(5,150,105,.3);background:none;width:28px;height:28px;border-radius:6px;border-width:1.5px;cursor:pointer;display:grid;place-items:center"
-                  @click="openConvert(o.name)" title="Create Bill">
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-                </button>
-                <button v-if="o.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(o.name)" title="Delete">
-                  <span v-html="icon('trash',13)"></span>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- ══ RIGHT PANEL ══ -->
+  <div style="flex:1;overflow-y:auto;background:#F9FAFB">
+
+    <!-- Empty state -->
+    <div v-if="!selectedPO" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#9CA3AF">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.2" style="margin-bottom:16px"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+      <div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:6px">Select a Purchase Order</div>
+      <div style="font-size:13px;color:#9CA3AF;text-align:center;max-width:240px">Choose a purchase order from the left to view details</div>
     </div>
-    <div v-if="!loading && filtered.length" class="cust-row-count">
-      Showing {{filtered.length}} of {{list.length}} orders
+
+    <!-- Detail view -->
+    <div v-else style="padding:24px;max-width:960px;margin:0 auto">
+
+      <!-- Detail header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:19px;font-weight:700;color:#111827">{{selectedPO.name}}</div>
+          <span class="b-badge" :class="(STATUS_CFG[selectedPO.status]||STATUS_CFG.Draft).cls">{{selectedPO.status}}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="1.8" style="cursor:pointer" title="Attachments"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="1.8" style="cursor:pointer" title="Comments"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <button class="nim-btn" style="background:none;color:#9CA3AF;border:1px solid #E5E7EB;width:32px;height:32px;padding:0;display:grid;place-items:center" @click="closePO" title="Close">
+            <span v-html="icon('x',14)"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Action bar -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px" @click="openEdit(selectedPO.name)">
+          <span v-html="icon('edit',13)"></span> Edit
+        </button>
+        <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          Send Email
+        </button>
+        <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          PDF/Print ▾
+        </button>
+        <button v-if="!['Billed','Cancelled'].includes(selectedPO.status)"
+          class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700;font-size:13px"
+          @click="openConvert(selectedPO.name)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Convert to Bill
+        </button>
+        <button v-if="selectedPO.status==='Draft'" class="nim-btn" style="background:#fff;color:#DC2626;border:1px solid #FECACA;font-size:13px" @click="confirmDelete(selectedPO.name)">
+          ···
+        </button>
+      </div>
+
+      <!-- What's Next banner -->
+      <div v-if="!['Billed','Cancelled','Received'].includes(selectedPO.status)"
+        style="background:linear-gradient(135deg,#7C3AED11,#9333EA11);border:1px solid #DDD6FE;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#7C3AED">✦</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#7C3AED;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+          <div style="font-size:13px;color:#374151">Convert this to a bill to complete your purchase.</div>
+        </div>
+        <button class="nim-btn" style="background:#7C3AED;color:#fff;border:none;font-size:12.5px;white-space:nowrap" @click="openConvert(selectedPO.name)">Convert to Bill</button>
+      </div>
+
+      <!-- Status row -->
+      <div style="background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12.5px;color:#374151">
+          Receive Status: <strong>YET TO BE RECEIVED</strong>
+          <span style="color:#D1D5DB;margin:0 8px">|</span>
+          Bill Status: <strong>YET TO BE BILLED</strong>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#374151;cursor:pointer">
+          <input type="checkbox" v-model="showPDFView" style="width:14px;height:14px;accent-color:#E67700"/>
+          Show PDF View
+        </label>
+      </div>
+
+      <!-- PDF view card -->
+      <div v-if="showPDFView" style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:36px 40px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
+        <!-- Header row -->
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px">
+          <div>
+            <div style="font-size:15px;font-weight:700;color:#111827">Your Company</div>
+            <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.6">Maharashtra, India<br>your@company.com</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:22px;font-weight:800;color:#E67700;letter-spacing:1px">PURCHASE ORDER</div>
+            <div style="font-size:14px;font-family:monospace;color:#374151;margin-top:4px"># {{selectedPO.name}}</div>
+          </div>
+        </div>
+
+        <!-- Info row -->
+        <div style="display:flex;gap:24px;margin-bottom:20px;padding:12px 0;border-top:1px solid #F3F4F6;border-bottom:1px solid #F3F4F6">
+          <div>
+            <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:3px">DATE</div>
+            <div style="font-size:13px;color:#374151;font-weight:600">{{fmtDate(selectedPO.order_date)}}</div>
+          </div>
+          <div v-if="selectedPO.vendor_ref">
+            <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:3px">REF #</div>
+            <div style="font-size:13px;color:#374151;font-weight:600">{{selectedPO.vendor_ref}}</div>
+          </div>
+          <div>
+            <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:3px">ORDER #</div>
+            <div style="font-size:13px;color:#374151;font-weight:600;font-family:monospace">{{selectedPO.name}}</div>
+          </div>
+        </div>
+
+        <!-- Vendor & deliver to -->
+        <div style="display:flex;gap:40px;margin-bottom:24px">
+          <div style="flex:1">
+            <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:6px">VENDOR ADDRESS</div>
+            <div style="font-size:13.5px;color:#2563EB;font-weight:600;cursor:pointer">{{selectedPO.vendor||'—'}}</div>
+          </div>
+          <div style="flex:1">
+            <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:6px">DELIVER TO</div>
+            <div style="font-size:13px;color:#374151;white-space:pre-line">{{selectedPO.delivery_address||'Company Address'}}</div>
+          </div>
+        </div>
+
+        <!-- Items table -->
+        <table style="width:100%;border-collapse:collapse;margin-bottom:20px">
+          <thead>
+            <tr style="background:#F9FAFB;border-bottom:2px solid #E5E7EB">
+              <th style="text-align:left;font-size:11px;font-weight:700;color:#374151;padding:10px 12px;letter-spacing:0.5px">#</th>
+              <th style="text-align:left;font-size:11px;font-weight:700;color:#374151;padding:10px 12px;letter-spacing:0.5px">ITEM &amp; DESCRIPTION</th>
+              <th style="text-align:center;font-size:11px;font-weight:700;color:#374151;padding:10px 12px;letter-spacing:0.5px">QTY</th>
+              <th style="text-align:right;font-size:11px;font-weight:700;color:#374151;padding:10px 12px;letter-spacing:0.5px">RATE</th>
+              <th style="text-align:right;font-size:11px;font-weight:700;color:#374151;padding:10px 12px;letter-spacing:0.5px">AMOUNT</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!(selectedPO.items||[]).length">
+              <td colspan="5" style="text-align:center;padding:20px;color:#9ca3af;font-size:12.5px">No items — <button @click="openEdit(selectedPO.name)" style="background:none;border:none;cursor:pointer;color:#E67700;text-decoration:underline;font-size:12.5px">Edit to add items</button></td>
+            </tr>
+            <tr v-for="(r,i) in (selectedPO.items||[])" :key="i" style="border-bottom:1px solid #F3F4F6">
+              <td style="font-size:13px;color:#374151;padding:10px 12px">{{i+1}}</td>
+              <td style="padding:10px 12px">
+                <div style="font-size:13px;font-weight:600;color:#111827">{{r.item_name||'—'}}</div>
+                <div v-if="r.description" style="font-size:11.5px;color:#6B7280;margin-top:2px">{{r.description}}</div>
+              </td>
+              <td style="font-size:13px;color:#374151;text-align:center;padding:10px 12px">{{r.qty}}</td>
+              <td style="font-size:13px;color:#374151;text-align:right;padding:10px 12px;font-family:monospace">{{fmt(r.rate)}}</td>
+              <td style="font-size:13px;font-weight:600;color:#111827;text-align:right;padding:10px 12px;font-family:monospace">{{fmt(r.amount)}}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Totals -->
+        <div style="display:flex;justify-content:flex-end;margin-bottom:20px">
+          <div style="min-width:240px">
+            <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#6B7280">
+              <span>Subtotal</span><span style="font-family:monospace;font-weight:600;color:#111827">{{fmt(selectedPO.net_total)}}</span>
+            </div>
+            <div v-if="flt(selectedPO.total_tax)" style="display:flex;justify-content:space-between;padding:6px 0;font-size:13px;color:#6B7280;border-bottom:1px solid #F3F4F6">
+              <span>Tax</span><span style="font-family:monospace;font-weight:600;color:#111827">{{fmt(selectedPO.total_tax)}}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;padding:10px 0 0;font-size:15px;font-weight:700;color:#111827">
+              <span>Grand Total</span><span style="font-family:monospace;color:#E67700">{{fmt(selectedPO.grand_total)}}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Terms -->
+        <div v-if="selectedPO.terms" style="padding-top:16px;border-top:1px solid #F3F4F6">
+          <div style="font-size:10.5px;font-weight:700;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:6px">TERMS &amp; CONDITIONS</div>
+          <div style="font-size:12.5px;color:#6B7280;white-space:pre-line;line-height:1.6">{{selectedPO.terms}}</div>
+        </div>
+      </div>
+
+      <!-- Non-PDF summary (when PDF view is off) -->
+      <div v-else style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:20px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">VENDOR</div><div style="font-size:13.5px;font-weight:600;color:#111827">{{selectedPO.vendor||'—'}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">ORDER DATE</div><div style="font-size:13.5px;color:#111827">{{fmtDate(selectedPO.order_date)}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">EXPECTED BY</div><div style="font-size:13.5px;color:#111827">{{fmtDate(selectedPO.expected_date)||'—'}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">GRAND TOTAL</div><div style="font-size:15px;font-weight:700;color:#E67700;font-family:monospace">{{fmt(selectedPO.grand_total)}}</div></div>
+        </div>
+      </div>
     </div>
   </div>
+  </div><!-- end v-else two-panel PO -->
 
   <!-- ══ DRAWER ══ -->
   <teleport to="body">
@@ -8543,10 +10764,17 @@
         finally { cancelling.value = false; }
       }
 
-      // ── Bill detail drawer ──
+      // ── Two-panel state ──
+      const selectedBill = ref(null);
+      const showBillPDF = ref(true);
+
+      function selectBill(b) { selectedBill.value = b; showBillPDF.value = true; }
+      function closeBill() { selectedBill.value = null; }
+
+      // Keep openBill for backward compat
       const viewBill = ref(null);
       const showView = ref(false);
-      function openBill(b) { viewBill.value = b; showView.value = true; }
+      function openBill(b) { selectBill(b); }
 
       onMounted(load);
       return {
@@ -8554,179 +10782,303 @@
         pillCountCls, statusClass, statusLabel, isOverdue,
         showNew, showCancel, cancelTarget, cancelling,
         viewBill, showView, openBill,
+        selectedBill, showBillPDF, selectBill, closeBill,
         load, confirmCancel, closeCancelModal, doCancel,
         fmt, fmtDate, flt, icon
       };
     },
     template: `
-<div class="b-page cust-page">
+<div>
   <PurchaseModal :show="showNew" @close="showNew=false" @saved="load"/>
 
-  <!-- Summary strip -->
-  <div class="qt-summary">
-    <div class="qt-sum-card">
-      <div class="qt-sum-label">Total Bills</div>
-      <div class="qt-sum-value">{{summary.total}}</div>
+  <!-- ── FLAT TABLE VIEW (default) ── -->
+  <div v-if="!selectedBill" class="b-page cust-page">
+    <div class="cust-toolbar">
+      <div class="cust-toolbar-left">
+        <div class="cust-filters">
+          <button v-for="f in filters" :key="f.k" class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f.k}" @click="activeFilter=f.k">
+            {{f.lbl}}
+            <span v-if="f.k!=='all'" class="zb-pill-cnt" :class="activeFilter===f.k?pillCountCls(f.k):'zb-pc-muted'">{{counts[f.k]}}</span>
+          </button>
+        </div>
+      </div>
+      <div class="cust-toolbar-right">
+        <div class="cust-search">
+          <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+          <input v-model="search" placeholder="Search bill, vendor…" class="cust-search-input" autocomplete="off"/>
+        </div>
+        <button class="zb-tb-btn" @click="load" title="Refresh"><span v-html="icon('refresh',13)"></span> Refresh</button>
+        <button class="zb-tb-btn" style="background:#E67700;color:#fff;border-color:#E67700" @click="showNew=true"><span v-html="icon('plus',13)"></span> New Bill</button>
+      </div>
     </div>
-    <div class="qt-sum-card">
-      <div class="qt-sum-label" style="color:#E67700">Outstanding</div>
-      <div class="qt-sum-value" style="color:#E67700;font-size:17px">{{fmt(summary.outstanding)}}</div>
-    </div>
-    <div class="qt-sum-card">
-      <div class="qt-sum-label" style="color:#C92A2A">Overdue</div>
-      <div class="qt-sum-value" style="color:#C92A2A;font-size:17px">{{fmt(summary.overdue)}}</div>
-    </div>
-    <div class="qt-sum-card">
-      <div class="qt-sum-label" style="color:#2F9E44">Paid This Month</div>
-      <div class="qt-sum-value" style="color:#2F9E44;font-size:17px">{{fmt(summary.paid)}}</div>
+    <div class="b-card cust-table-card">
+      <div class="cust-table-wrap">
+        <table class="cust-table">
+          <thead><tr>
+            <th>Bill #</th><th>Vendor</th><th>Bill Date</th><th>Due Date</th>
+            <th style="text-align:right">Amount</th><th style="text-align:right">Outstanding</th>
+            <th>Status</th><th style="text-align:center;width:80px">Actions</th>
+          </tr></thead>
+          <tbody>
+            <template v-if="loading">
+              <tr v-for="n in 6" :key="n"><td colspan="8" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div></td></tr>
+            </template>
+            <tr v-else-if="!filtered.length">
+              <td colspan="8" class="cust-empty">
+                <div class="cust-empty-title">{{search?'No matches':'No bills yet'}}</div>
+                <div class="cust-empty-sub">{{search?'Try different keywords':'Record vendor bills to track payables'}}</div>
+                <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;background:#E67700;border-color:#E67700" @click="showNew=true">New Bill</button>
+              </td>
+            </tr>
+            <tr v-else v-for="b in filtered" :key="b.name" class="cust-row" @click="selectBill(b)">
+              <td class="cust-mono">{{b.name}}</td>
+              <td><div class="cust-name">{{b.supplier||'—'}}</div></td>
+              <td class="cust-secondary">{{fmtDate(b.posting_date)||'—'}}</td>
+              <td class="cust-secondary" :style="{color:isOverdue(b)?'#C92A2A':'inherit',fontWeight:isOverdue(b)?'600':'400'}">{{fmtDate(b.due_date)||'—'}}</td>
+              <td style="text-align:right;font-family:monospace;font-weight:600">{{fmt(b.grand_total)}}</td>
+              <td style="text-align:right;font-family:monospace" :style="{color:flt(b.outstanding_amount)>0?'#E67700':'#2F9E44',fontWeight:600}">{{fmt(b.outstanding_amount)}}</td>
+              <td><span class="b-badge" :class="statusClass(b)">{{statusLabel(b)}}</span></td>
+              <td @click.stop style="text-align:center">
+                <div style="display:flex;gap:4px;justify-content:center">
+                  <button class="cust-act-btn cust-act-edit" @click="selectBill(b)" title="View"><span v-html="icon('edit',13)"></span></button>
+                  <button v-if="b.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmCancel(b.name)" title="Cancel"><span v-html="icon('trash',13)"></span></button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} bills</div>
     </div>
   </div>
 
-  <!-- Toolbar -->
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <div class="cust-filters">
+  <!-- ── TWO-PANEL DETAIL VIEW (when bill selected) ── -->
+  <div v-else class="zb-master-detail" style="height:calc(100vh - 56px)">
+
+  <!-- ══ LEFT PANEL ══ -->
+  <div class="zb-list-pane" style="width:320px;min-width:260px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;overflow:hidden">
+
+    <!-- List header -->
+    <div style="padding:16px 16px 10px;border-bottom:1px solid #f0f2f5;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:14px;font-weight:700;color:#111827">Bills</span>
+        <button class="nim-btn nim-btn-primary" style="padding:5px 10px;font-size:12px;background:#E67700;border-color:#E67700" @click="showNew=true">
+          <span v-html="icon('plus',12)"></span> New Bill
+        </button>
+      </div>
+      <div class="cust-search" style="width:100%">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search bill, vendor…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap">
         <button v-for="f in filters" :key="f.k"
-          class="zb-inv-pill" :class="{'zb-inv-pill-active': activeFilter===f.k}"
-          @click="activeFilter=f.k">
+          class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f.k}"
+          @click="activeFilter=f.k" style="font-size:11.5px">
           {{f.lbl}}
-          <span v-if="f.k!=='all'" class="zb-pill-cnt" :class="activeFilter===f.k ? pillCountCls(f.k) : 'zb-pc-muted'">
-            {{counts[f.k]}}
-          </span>
+          <span v-if="f.k!=='all'" class="zb-pill-cnt" :class="activeFilter===f.k?pillCountCls(f.k):'zb-pc-muted'">{{counts[f.k]}}</span>
         </button>
       </div>
     </div>
-    <div class="cust-toolbar-right">
-      <div class="cust-search">
-        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
-        <input v-model="search" placeholder="Search bill, vendor..." class="cust-search-input" autocomplete="off"/>
+
+    <!-- List body -->
+    <div style="flex:1;overflow-y:auto">
+      <template v-if="loading">
+        <div v-for="n in 6" :key="n" style="padding:14px 16px;border-bottom:1px solid #f0f2f5">
+          <div class="b-shimmer" style="height:12px;border-radius:4px;width:70%;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:10px;border-radius:4px;width:45%"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" style="text-align:center;padding:40px 16px">
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5" style="margin:0 auto 10px;display:block"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">{{search?'No matches':'No bills yet'}}</div>
+        <div style="font-size:12px;color:#9ca3af">{{search?'Try different keywords':'Record vendor bills to track payables'}}</div>
+        <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;font-size:12px;background:#E67700;border-color:#E67700" @click="showNew=true">New Bill</button>
       </div>
-      <button class="zb-tb-btn" @click="load" title="Refresh">
-        <span v-html="icon('refresh',13)"></span> Refresh
-      </button>
-      <button class="zb-tb-btn" style="background:#E67700;color:#fff;border-color:#E67700" @click="showNew=true">
-        <span v-html="icon('plus',13)"></span> New Bill
-      </button>
-    </div>
-  </div>
-
-  <!-- Table -->
-  <div class="b-card cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
-        <thead>
-          <tr>
-            <th>Bill #</th>
-            <th>Vendor Bill No.</th>
-            <th>Vendor</th>
-            <th>Bill Date</th>
-            <th>Due Date</th>
-            <th style="text-align:right">Amount</th>
-            <th style="text-align:right">Outstanding</th>
-            <th>Status</th>
-            <th style="text-align:center;width:80px">Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          <!-- Loading shimmer -->
-          <template v-if="loading">
-            <tr v-for="n in 6" :key="n">
-              <td colspan="9" style="padding:12px 14px">
-                <div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div>
-              </td>
-            </tr>
-          </template>
-          <!-- Empty state -->
-          <tr v-else-if="!filtered.length">
-            <td colspan="9" class="cust-empty">
-              <div class="cust-empty-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#d1d5db" stroke-width="1.5">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                </svg>
-              </div>
-              <div class="cust-empty-title">{{search ? 'No bills match' : 'No purchase bills yet'}}</div>
-              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Record vendor bills to track payables'}}</div>
-              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px;background:#E67700;border-color:#E67700" @click="showNew=true">
-                <span v-html="icon('plus',13)"></span> New Bill
-              </button>
-            </td>
-          </tr>
-          <!-- Data rows -->
-          <tr v-else v-for="b in filtered" :key="b.name"
-            class="cust-row"
-            @click="openBill(b)">
-            <td>
-              <span style="color:#E67700;font-family:monospace;font-size:12px;font-weight:700">{{b.name}}</span>
-            </td>
-            <td style="font-family:monospace;font-size:12px;color:#868E96">{{b.bill_no||'—'}}</td>
-            <td class="cust-name">{{b.supplier||'—'}}</td>
-            <td class="cust-secondary">{{fmtDate(b.posting_date)}}</td>
-            <td class="cust-secondary" :style="{color: isOverdue(b) ? '#C92A2A' : '', fontWeight: isOverdue(b) ? '600' : ''}">
-              {{fmtDate(b.due_date)}}
-            </td>
-            <td style="text-align:right;font-family:monospace;font-weight:600">{{fmt(b.grand_total)}}</td>
-            <td style="text-align:right;font-family:monospace;font-weight:600"
-              :style="{color: flt(b.outstanding_amount)>0 ? '#E67700' : '#2F9E44'}">
-              {{fmt(b.outstanding_amount)}}
-            </td>
-            <td>
-              <span class="b-badge" :class="statusClass(b)">{{statusLabel(b)}}</span>
-            </td>
-            <td @click.stop style="text-align:center">
-              <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn" style="color:#6b7280;border-color:#e5e7eb"
-                  @click.stop="openBill(b)" title="View Bill">
-                  <span v-html="icon('ext',13)"></span>
-                </button>
-                <button v-if="b.status==='Draft'" class="cust-act-btn cust-act-del"
-                  @click="confirmCancel(b.name)" title="Cancel">
-                  <span v-html="icon('x',13)"></span>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-    <div v-if="!loading && filtered.length" class="cust-row-count">
-      Showing {{filtered.length}} of {{list.length}} bills
-    </div>
-  </div>
-
-  <!-- Bill detail drawer -->
-  <teleport to="body">
-    <div v-if="showView && viewBill" class="cust-backdrop" @click.self="showView=false">
-      <div class="cust-drawer" style="width:520px">
-        <div class="cust-drawer-header" style="background:linear-gradient(135deg,rgb(230,119,0),rgb(201,98,0))">
-          <div style="display:flex;align-items:center;gap:12px;flex:1">
-            <div style="width:36px;height:36px;border-radius:8px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center" v-html="icon('purchase',18)"></div>
-            <div>
-              <div style="font-size:15px;font-weight:700;color:#fff">{{viewBill.name}}</div>
-              <div style="font-size:12px;color:rgba(255,255,255,.75)">{{viewBill.supplier}}</div>
+      <div v-else v-for="b in filtered" :key="b.name"
+        @click="selectBill(b)"
+        :style="{
+          padding:'12px 16px',
+          borderBottom:'1px solid #f0f2f5',
+          cursor:'pointer',
+          background: selectedBill && selectedBill.name===b.name ? '#FFF7ED' : 'transparent',
+          borderLeft: selectedBill && selectedBill.name===b.name ? '3px solid #E67700' : '3px solid transparent',
+          transition:'background 0.15s',
+        }"
+        @mouseenter="e=>{ if(!(selectedBill&&selectedBill.name===b.name)) e.currentTarget.style.background='#F9FAFB' }"
+        @mouseleave="e=>{ if(!(selectedBill&&selectedBill.name===b.name)) e.currentTarget.style.background='transparent' }">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:700;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{b.supplier||'—'}}
+            </div>
+            <div style="font-size:11.5px;color:#6B7280;margin-top:2px">
+              {{b.name}} · {{fmtDate(b.posting_date)}}
+            </div>
+            <div style="margin-top:5px;display:flex;align-items:center;justify-content:space-between">
+              <span class="b-badge" :class="statusClass(b)" style="font-size:10px">{{statusLabel(b)}}</span>
+              <span style="font-size:12.5px;font-weight:700;font-family:monospace" :style="{color:flt(b.outstanding_amount)>0?'#E67700':'#2F9E44'}">{{fmt(b.grand_total)}}</span>
             </div>
           </div>
-          <button @click="showView=false" style="background:rgba(255,255,255,.15);border:none;border-radius:6px;width:30px;height:30px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#fff" v-html="icon('x',14)"></button>
-        </div>
-        <div class="cust-drawer-body">
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
-            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Bill Date</div><div style="font-size:13.5px;color:#111827">{{fmtDate(viewBill.posting_date)||'—'}}</div></div>
-            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Due Date</div><div style="font-size:13.5px;" :style="{color: isOverdue(viewBill)?'#c92a2a':'#111827',fontWeight:isOverdue(viewBill)?'600':'400'}">{{fmtDate(viewBill.due_date)||'—'}}</div></div>
-            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Status</div><span class="b-badge" :class="statusClass(viewBill)">{{statusLabel(viewBill)}}</span></div>
-            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Vendor Bill No.</div><div style="font-size:13.5px;font-family:monospace;color:#111827">{{viewBill.bill_no||'—'}}</div></div>
-            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Amount</div><div style="font-size:16px;font-weight:700;color:#111827">{{fmt(viewBill.grand_total)}}</div></div>
-            <div><div style="font-size:11px;font-weight:600;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px">Outstanding</div><div style="font-size:16px;font-weight:700;" :style="{color:flt(viewBill.outstanding_amount)>0?'#E67700':'#2F9E44'}">{{fmt(viewBill.outstanding_amount)}}</div></div>
-          </div>
-        </div>
-        <div class="nim-footer">
-          <button class="nim-btn nim-btn-ghost" @click="showView=false">Close</button>
-          <button v-if="viewBill.status==='Draft'" class="nim-btn" style="background:#dc2626;color:#fff;border-color:#dc2626" @click="confirmCancel(viewBill.name);showView=false">Cancel Bill</button>
         </div>
       </div>
     </div>
-  </teleport>
+
+    <!-- Footer -->
+    <div v-if="!loading && filtered.length" style="padding:8px 16px;border-top:1px solid #f0f2f5;font-size:11.5px;color:#9ca3af;display:flex;justify-content:space-between;flex-shrink:0">
+      <span>{{filtered.length}} of {{list.length}} bills</span>
+      <button @click="load" style="background:none;border:none;cursor:pointer;color:#6B7280;font-size:11.5px;display:flex;align-items:center;gap:3px"><span v-html="icon('refresh',11)"></span> Refresh</button>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT PANEL ══ -->
+  <div style="flex:1;overflow-y:auto;background:#F9FAFB">
+
+    <!-- Empty state -->
+    <div v-if="!selectedBill" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#9CA3AF">
+      <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="#D1D5DB" stroke-width="1.2" style="margin-bottom:16px"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+      <div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:6px">Select a Bill</div>
+      <div style="font-size:13px;color:#9CA3AF;text-align:center;max-width:220px">Choose a bill from the left to view details</div>
+    </div>
+
+    <!-- Detail view -->
+    <div v-else style="padding:24px;max-width:960px;margin:0 auto">
+
+      <!-- Detail header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:19px;font-weight:700;color:#111827">{{selectedBill.name}}</div>
+          <span class="b-badge" :class="statusClass(selectedBill)">{{statusLabel(selectedBill)}}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="1.8" style="cursor:pointer"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="1.8" style="cursor:pointer"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <button class="nim-btn" style="background:none;color:#9CA3AF;border:1px solid #E5E7EB;width:32px;height:32px;padding:0;display:grid;place-items:center" @click="closeBill" title="Close">
+            <span v-html="icon('x',14)"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Action bar -->
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+        <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px">
+          <span v-html="icon('edit',13)"></span> Edit
+        </button>
+        <button class="nim-btn" style="background:#fff;color:#374151;border:1px solid #E5E7EB;font-size:13px">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+          PDF/Print ▾
+        </button>
+        <button v-if="selectedBill.status==='Draft'" class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700;font-size:13px">
+          Convert to Open
+        </button>
+        <button v-if="['Submitted','Unpaid','Partly Paid'].includes(selectedBill.status)" class="nim-btn nim-btn-primary" style="font-size:13px">
+          Record Payment ▾
+        </button>
+        <button v-if="selectedBill.status==='Draft'" class="nim-btn" style="background:#fff;color:#DC2626;border:1px solid #FECACA;font-size:13px" @click="confirmCancel(selectedBill.name)">···</button>
+      </div>
+
+      <!-- What's next banner -->
+      <div v-if="selectedBill.status==='Draft'"
+        style="background:linear-gradient(135deg,#7C3AED11,#9333EA11);border:1px solid #DDD6FE;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#7C3AED">✦</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#7C3AED;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+          <div style="font-size:13px;color:#374151">Bill has been created. Convert the bill to open status to record payment.</div>
+        </div>
+        <button class="nim-btn" style="background:#7C3AED;color:#fff;border:none;font-size:12.5px;white-space:nowrap">Convert to Open</button>
+      </div>
+
+      <!-- Status row -->
+      <div style="background:#fff;border:1px solid #E5E7EB;border-radius:8px;padding:10px 16px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="font-size:12.5px;color:#374151">
+          <template v-if="flt(selectedBill.outstanding_amount)>0">
+            Outstanding: <strong style="color:#E67700">{{fmt(selectedBill.outstanding_amount)}}</strong>
+            <span v-if="isOverdue(selectedBill)" style="color:#C92A2A;font-size:11px;margin-left:6px">● Overdue</span>
+          </template>
+          <template v-else>
+            <span style="color:#2F9E44;font-weight:600">● Fully Paid</span>
+          </template>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:#374151;cursor:pointer">
+          <input type="checkbox" v-model="showBillPDF" style="width:14px;height:14px;accent-color:#E67700"/>
+          Show PDF View
+        </label>
+      </div>
+
+      <!-- PDF view card -->
+      <div v-if="showBillPDF" style="position:relative;background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:36px 40px;box-shadow:0 2px 8px rgba(0,0,0,.06);overflow:hidden">
+        <!-- Watermark -->
+        <div v-if="selectedBill.status==='Draft'"
+          style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-35deg);font-size:72px;font-weight:900;color:rgba(200,200,200,.18);pointer-events:none;white-space:nowrap;letter-spacing:4px;z-index:0">
+          DRAFT
+        </div>
+
+        <div style="position:relative;z-index:1">
+          <!-- Header -->
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:28px">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#111827">Your Company</div>
+              <div style="font-size:12px;color:#6B7280;margin-top:4px;line-height:1.6">Maharashtra, India<br>your@company.com</div>
+            </div>
+            <div style="text-align:right">
+              <div style="font-size:22px;font-weight:800;color:#E67700;letter-spacing:1px">BILL</div>
+              <div style="font-size:14px;font-family:monospace;color:#374151;margin-top:4px"># {{selectedBill.name}}</div>
+              <div v-if="flt(selectedBill.outstanding_amount)>0" style="font-size:12px;color:#9CA3AF;margin-top:2px">
+                Balance Due: <span style="font-weight:700;color:#E67700;font-family:monospace">{{fmt(selectedBill.outstanding_amount)}}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Info row -->
+          <div style="display:flex;gap:24px;margin-bottom:20px;padding:12px 0;border-top:1px solid #F3F4F6;border-bottom:1px solid #F3F4F6">
+            <div>
+              <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:3px">BILL DATE</div>
+              <div style="font-size:13px;color:#374151;font-weight:600">{{fmtDate(selectedBill.posting_date)||'—'}}</div>
+            </div>
+            <div>
+              <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:3px">DUE DATE</div>
+              <div style="font-size:13px;font-weight:600" :style="{color:isOverdue(selectedBill)?'#C92A2A':'#374151'}">{{fmtDate(selectedBill.due_date)||'—'}}</div>
+            </div>
+            <div v-if="selectedBill.bill_no">
+              <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:3px">VENDOR BILL #</div>
+              <div style="font-size:13px;color:#374151;font-weight:600;font-family:monospace">{{selectedBill.bill_no}}</div>
+            </div>
+          </div>
+
+          <!-- Bill From -->
+          <div style="margin-bottom:24px">
+            <div style="font-size:10.5px;font-weight:600;color:#9CA3AF;letter-spacing:0.5px;margin-bottom:6px">BILL FROM</div>
+            <div style="font-size:14px;color:#2563EB;font-weight:600">{{selectedBill.supplier||'—'}}</div>
+          </div>
+
+          <!-- Totals summary -->
+          <div style="display:flex;justify-content:flex-end;margin-top:20px">
+            <div style="min-width:240px">
+              <div style="display:flex;justify-content:space-between;padding:8px 0;font-size:14px;font-weight:700;color:#111827;border-top:1px solid #F3F4F6">
+                <span>Grand Total</span>
+                <span style="font-family:monospace;color:#E67700">{{fmt(selectedBill.grand_total)}}</span>
+              </div>
+              <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:12.5px;color:#6B7280">
+                <span>Outstanding</span>
+                <span style="font-family:monospace;font-weight:600" :style="{color:flt(selectedBill.outstanding_amount)>0?'#E67700':'#2F9E44'}">{{fmt(selectedBill.outstanding_amount)}}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Simple view (PDF off) -->
+      <div v-else style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:20px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">VENDOR</div><div style="font-size:13.5px;font-weight:600;color:#111827">{{selectedBill.supplier||'—'}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">STATUS</div><span class="b-badge" :class="statusClass(selectedBill)">{{statusLabel(selectedBill)}}</span></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">BILL DATE</div><div style="font-size:13.5px;color:#111827">{{fmtDate(selectedBill.posting_date)||'—'}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">DUE DATE</div><div style="font-size:13.5px;" :style="{color:isOverdue(selectedBill)?'#C92A2A':'#111827',fontWeight:isOverdue(selectedBill)?'600':'400'}">{{fmtDate(selectedBill.due_date)||'—'}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">GRAND TOTAL</div><div style="font-size:15px;font-weight:700;color:#111827;font-family:monospace">{{fmt(selectedBill.grand_total)}}</div></div>
+          <div><div style="font-size:11px;font-weight:600;color:#9CA3AF;margin-bottom:4px">OUTSTANDING</div><div style="font-size:15px;font-weight:700;font-family:monospace" :style="{color:flt(selectedBill.outstanding_amount)>0?'#E67700':'#2F9E44'}">{{fmt(selectedBill.outstanding_amount)}}</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- Cancel confirm modal -->
   <teleport to="body">
@@ -13917,129 +16269,334 @@
 
       function todayStr() { return new Date().toISOString().slice(0, 10); }
 
+      // Two-panel state
+      const selectedExp = ref(null);
+      const expActiveTab = ref("journal");
+      function selectExp(e) { selectedExp.value = e; expActiveTab.value = "journal"; }
+      function closeExp() { selectedExp.value = null; }
+      function expInitials(name) {
+        return (name || "EXP").split(" ").map(w => w[0]).join("").toUpperCase().slice(0, 2);
+      }
+
       onMounted(load);
 
       return {
         list, loading, search, activeFilter, filtered, summary, counts,
         STATUS_CFG, EXPENSE_TYPES, expAccounts, paidAccounts, suppliers, costCenters,
+        selectedExp, expActiveTab, selectExp, closeExp, expInitials,
         showDrawer, drawerMode, saving, showDelete, deleteTarget, form,
         load, openAdd, openEdit, openView, saveExpense, markPaid,
         confirmDelete, doDelete, fmt, fmtDate, flt, icon,
       };
     },
     template: `
-<div class="cust-page">
-  <!-- Summary strip -->
-  <div class="dn-sum-strip">
-    <div class="dn-sum-card">
-      <div class="dn-sum-lbl">Total Expenses</div>
-      <div class="dn-sum-val">{{summary.total}}</div>
-    </div>
-    <div class="dn-sum-card">
-      <div class="dn-sum-lbl">Draft</div>
-      <div class="dn-sum-val" style="color:#868E96">{{summary.draft}}</div>
-    </div>
-    <div class="dn-sum-card">
-      <div class="dn-sum-lbl">Submitted (Unpaid)</div>
-      <div class="dn-sum-val" style="color:#3B5BDB">{{summary.submitted}}</div>
-    </div>
-    <div class="dn-sum-card">
-      <div class="dn-sum-lbl">This Month</div>
-      <div class="dn-sum-val" style="color:#E67700">{{fmt(summary.monthVal)}}</div>
-    </div>
-  </div>
+<div>
 
-  <!-- Action bar -->
-  <div class="cust-toolbar">
-    <div class="cust-toolbar-left">
-      <button class="zb-list-pill" :class="{active:activeFilter==='all'}" @click="activeFilter='all'">All</button>
-      <button class="zb-list-pill" :class="{active:activeFilter==='Draft'}" @click="activeFilter='Draft'">
-        Draft <span class="zb-pill-cnt zb-pc-muted">{{counts.Draft}}</span>
-      </button>
-      <button class="zb-list-pill" :class="{active:activeFilter==='Submitted'}" @click="activeFilter='Submitted'">
-        Submitted <span class="zb-pill-cnt zb-pc-muted">{{counts.Submitted}}</span>
-      </button>
-      <button class="zb-list-pill" :class="{active:activeFilter==='Paid'}" @click="activeFilter='Paid'">
-        Paid <span class="zb-pill-cnt zb-pc-green">{{counts.Paid}}</span>
-      </button>
-      <button class="zb-list-pill" :class="{active:activeFilter==='Cancelled'}" @click="activeFilter='Cancelled'">
-        Cancelled <span class="zb-pill-cnt zb-pc-muted">{{counts.Cancelled}}</span>
-      </button>
-    </div>
-    <div class="cust-toolbar-right">
-      <div class="cust-search">
-        <span v-html="icon('search')" style="color:#9ca3af;flex-shrink:0"></span>
-        <input class="cust-search-input" v-model="search" placeholder="Search expenses…"/>
+  <!-- ── FLAT TABLE VIEW (default) ── -->
+  <div v-if="!selectedExp" class="b-page cust-page">
+    <!-- Summary strip -->
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">TOTAL</div>
+        <div style="font-size:22px;font-weight:800;color:#111827">{{summary.total}}</div>
       </div>
-      <button class="nim-btn nim-btn-ghost" @click="load">
-        <span v-html="icon('refresh')"></span> Refresh
-      </button>
-      <button class="nim-btn nim-btn-primary" @click="openAdd">
-        <span v-html="icon('plus')"></span> New Expense
-      </button>
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">DRAFT</div>
+        <div style="font-size:22px;font-weight:800;color:#6B7280">{{summary.draft}}</div>
+      </div>
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">SUBMITTED</div>
+        <div style="font-size:22px;font-weight:800;color:#2563EB">{{summary.submitted}}</div>
+      </div>
+      <div class="b-card" style="padding:14px 16px">
+        <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.6px;margin-bottom:4px">THIS MONTH</div>
+        <div style="font-size:18px;font-weight:800;color:#DC2626;font-family:monospace">{{fmt(summary.monthVal)}}</div>
+      </div>
+    </div>
+    <div class="cust-toolbar">
+      <div class="cust-toolbar-left">
+        <div class="cust-filters">
+          <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'">All</button>
+          <button v-for="f in ['Draft','Submitted','Paid']" :key="f"
+            class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
+            @click="activeFilter=f">
+            {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]}}</span>
+          </button>
+        </div>
+      </div>
+      <div class="cust-toolbar-right">
+        <div class="cust-search">
+          <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+          <input v-model="search" placeholder="Search expenses…" class="cust-search-input" autocomplete="off"/>
+        </div>
+        <button class="zb-tb-btn" @click="load" title="Refresh"><span v-html="icon('refresh',13)"></span> Refresh</button>
+        <button class="zb-tb-btn zb-tb-primary" @click="openAdd"><span v-html="icon('plus',13)"></span> New Expense</button>
+      </div>
+    </div>
+    <div class="b-card cust-table-card">
+      <div class="cust-table-wrap">
+        <table class="cust-table">
+          <thead><tr>
+            <th>Expense #</th><th>Date</th><th>Type</th><th>Description</th>
+            <th style="text-align:right">Amount</th><th style="text-align:right">Total (incl. GST)</th>
+            <th>Paid Through</th><th>Status</th><th style="text-align:center;width:80px">Actions</th>
+          </tr></thead>
+          <tbody>
+            <template v-if="loading">
+              <tr v-for="n in 5" :key="n"><td colspan="9" style="padding:12px 14px"><div class="b-shimmer" style="height:13px;border-radius:4px;width:70%"></div></td></tr>
+            </template>
+            <tr v-else-if="!filtered.length">
+              <td colspan="9" class="cust-empty">
+                <div style="font-size:24px;margin-bottom:8px">🧾</div>
+                <div class="cust-empty-title">{{search?'No matches':'No expenses yet'}}</div>
+                <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:12px" @click="openAdd">New Expense</button>
+              </td>
+            </tr>
+            <tr v-else v-for="e in filtered" :key="e.name" class="cust-row" @click="selectExp(e)">
+              <td class="cust-mono">{{e.name}}</td>
+              <td class="cust-secondary">{{fmtDate(e.posting_date)}}</td>
+              <td><span style="font-size:11px;padding:2px 7px;border-radius:10px;background:#F3F4F6;font-weight:600;color:#374151">{{e.expense_type}}</span></td>
+              <td class="cust-secondary" style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.description||'—'}}</td>
+              <td style="text-align:right;font-family:monospace;font-weight:600;color:#E67700">{{fmt(e.amount)}}</td>
+              <td style="text-align:right;font-family:monospace;font-weight:600;color:#DC2626">{{fmt(e.total_amount||e.amount)}}</td>
+              <td class="cust-secondary">{{e.paid_through||'—'}}</td>
+              <td><span class="b-badge" :class="STATUS_CFG[e.status]?.cls||'b-badge-muted'">{{e.status}}</span></td>
+              <td @click.stop style="text-align:center">
+                <div style="display:flex;gap:4px;justify-content:center">
+                  <button class="cust-act-btn cust-act-edit" @click="openEdit(e.name)" title="Edit"><span v-html="icon('edit',13)"></span></button>
+                  <button v-if="e.status==='Draft'" class="cust-act-btn cust-act-del" @click="confirmDelete(e.name)" title="Delete"><span v-html="icon('trash',13)"></span></button>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div v-if="!loading && filtered.length" class="cust-row-count">Showing {{filtered.length}} of {{list.length}} expenses</div>
     </div>
   </div>
 
-  <!-- Table -->
-  <div class="cust-table-card">
-    <div class="cust-table-wrap">
-      <table class="cust-table">
-        <thead><tr>
-          <th>Expense #</th><th>Date</th><th>Type</th><th>Description</th>
-          <th style="text-align:right">Amount</th><th style="text-align:right">Total (incl. GST)</th>
-          <th>Paid Through</th><th>Status</th>
-          <th style="text-align:center;width:100px">Actions</th>
-        </tr></thead>
-        <tbody>
-          <tr v-if="loading">
-            <td colspan="9" style="padding:14px"><div class="b-shimmer" style="height:32px"></div></td>
-          </tr>
-          <tr v-else-if="!filtered.length">
-            <td colspan="9" class="cust-empty">
-              <div class="cust-empty-icon">🧾</div>
-              <div class="cust-empty-title">{{search ? 'No expenses match' : 'No expenses yet'}}</div>
-              <div class="cust-empty-sub">{{search ? 'Try a different search' : 'Record business expenses to track spending'}}</div>
-              <button v-if="!search" class="nim-btn nim-btn-primary" style="margin:12px auto 0" @click="openAdd">
-                <span v-html="icon('plus')"></span> New Expense
-              </button>
-            </td>
-          </tr>
-          <tr v-else v-for="e in filtered" :key="e.name" class="cust-row" @click="openView(e.name)">
-            <td>
-              <span style="color:#E67700;font-family:var(--mono);font-size:12px;font-weight:700">{{e.name}}</span>
-            </td>
-            <td style="font-size:12.5px;color:var(--muted)">{{fmtDate(e.posting_date)}}</td>
-            <td>
-              <span style="font-size:12px;font-weight:600;padding:2px 8px;border-radius:20px;background:#F3F4F6;color:#495057">{{e.expense_type}}</span>
-            </td>
-            <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{e.description}}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:600">{{fmt(e.amount)}}</td>
-            <td style="text-align:right;font-family:var(--mono);font-weight:700;color:#E67700">{{fmt(e.total_amount || e.amount)}}</td>
-            <td style="font-size:12.5px;color:var(--muted)">{{e.paid_through || '—'}}</td>
-            <td>
-              <span class="b-badge" :class="STATUS_CFG[e.status]?.cls || 'b-badge-muted'">
-                {{STATUS_CFG[e.status]?.lbl || e.status}}
-              </span>
-            </td>
-            <td style="text-align:center">
-              <div style="display:flex;gap:4px;justify-content:center">
-                <button class="cust-act-btn" @click.stop="openView(e.name)" title="View">
-                  <span v-html="icon('eye')"></span>
-                </button>
-                <button v-if="e.status==='Draft'" class="cust-act-btn" @click.stop="openEdit(e.name)" title="Edit">
-                  <span v-html="icon('edit')"></span>
-                </button>
-                <button v-if="e.status==='Draft'" class="cust-act-btn cust-act-del" @click.stop="confirmDelete(e.name)" title="Delete">
-                  <span v-html="icon('trash')"></span>
-                </button>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+  <!-- ── TWO-PANEL DETAIL VIEW (when expense selected) ── -->
+  <div v-else class="zb-master-detail" style="height:calc(100vh - 56px)">
+
+  <!-- ══ LEFT PANEL ══ -->
+  <div class="zb-list-pane" style="width:320px;min-width:260px;border-right:1px solid #e4e8f0;display:flex;flex-direction:column;overflow:hidden">
+    <div style="padding:16px 16px 10px;border-bottom:1px solid #f0f2f5;flex-shrink:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:14px;font-weight:700;color:#111827">Expenses</span>
+        <button class="zb-tb-btn zb-tb-primary" style="padding:5px 10px;font-size:12px" @click="openAdd">
+          <span v-html="icon('plus',12)"></span> New
+        </button>
+      </div>
+      <div class="cust-search" style="width:100%">
+        <span v-html="icon('search',13)" style="color:#9ca3af;flex-shrink:0"></span>
+        <input v-model="search" placeholder="Search expenses…" class="cust-search-input" autocomplete="off"/>
+      </div>
+      <div style="display:flex;gap:4px;margin-top:8px;flex-wrap:wrap">
+        <button class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter==='all'}" @click="activeFilter='all'" style="font-size:11.5px">All</button>
+        <button v-for="f in ['Draft','Submitted','Paid']" :key="f"
+          class="zb-inv-pill" :class="{'zb-inv-pill-active':activeFilter===f}"
+          @click="activeFilter=f" style="font-size:11.5px">
+          {{f}} <span class="zb-pill-cnt" :class="activeFilter===f?'':'zb-pc-muted'">{{counts[f]}}</span>
+        </button>
+      </div>
     </div>
-    <div class="cust-row-count" v-if="filtered.length">
-      Showing {{filtered.length}} of {{list.length}} expenses
+    <div style="flex:1;overflow-y:auto">
+      <template v-if="loading">
+        <div v-for="n in 5" :key="n" style="padding:14px 16px;border-bottom:1px solid #f0f2f5">
+          <div class="b-shimmer" style="height:12px;border-radius:4px;width:70%;margin-bottom:6px"></div>
+          <div class="b-shimmer" style="height:10px;border-radius:4px;width:45%"></div>
+        </div>
+      </template>
+      <div v-else-if="!filtered.length" style="text-align:center;padding:40px 16px;color:#9CA3AF">
+        <div style="font-size:24px;margin-bottom:8px">🧾</div>
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">{{search?'No matches':'No expenses yet'}}</div>
+        <button v-if="!search" class="nim-btn nim-btn-primary" style="margin-top:10px;font-size:12px" @click="openAdd">New Expense</button>
+      </div>
+      <div v-else v-for="e in filtered" :key="e.name"
+        @click="selectExp(e)"
+        :style="{padding:'13px 16px',borderBottom:'1px solid #f0f2f5',cursor:'pointer',
+          background:selectedExp&&selectedExp.name===e.name?'#FFF7ED':'transparent',
+          borderLeft:selectedExp&&selectedExp.name===e.name?'3px solid #E67700':'3px solid transparent'}">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12.5px;font-weight:700;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+              {{e.description||e.expense_type||e.name}}
+            </div>
+            <div style="font-size:11.5px;color:#6B7280;margin-top:2px;display:flex;align-items:center;gap:6px">
+              <span>{{fmtDate(e.posting_date)}}</span>
+              <span>·</span>
+              <span style="padding:1px 6px;border-radius:10px;background:#F3F4F6;font-size:10.5px;font-weight:600">{{e.expense_type}}</span>
+            </div>
+          </div>
+          <div style="text-align:right;flex-shrink:0">
+            <div style="font-size:13px;font-weight:700;font-family:monospace;color:#E67700">{{fmt(e.total_amount||e.amount)}}</div>
+            <span class="b-badge" :class="STATUS_CFG[e.status]?.cls||'b-badge-muted'" style="font-size:10px;margin-top:3px">{{e.status}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-if="!loading && filtered.length" style="padding:8px 16px;border-top:1px solid #f0f2f5;font-size:11.5px;color:#9ca3af;display:flex;justify-content:space-between;flex-shrink:0">
+      <span>{{filtered.length}} of {{list.length}}</span>
+      <button @click="load" style="background:none;border:none;cursor:pointer;color:#6B7280;font-size:11.5px"><span v-html="icon('refresh',11)"></span> Refresh</button>
+    </div>
+  </div>
+
+  <!-- ══ RIGHT PANEL ══ -->
+  <div style="flex:1;overflow-y:auto;background:#F9FAFB">
+
+    <!-- Empty state -->
+    <div v-if="!selectedExp" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:#9CA3AF">
+      <div style="font-size:52px;margin-bottom:16px">🧾</div>
+      <div style="font-size:15px;font-weight:600;color:#374151;margin-bottom:6px">Select an Expense</div>
+      <div style="font-size:13px;color:#9CA3AF;text-align:center;max-width:220px">Choose an expense from the list to view its details</div>
+    </div>
+
+    <!-- Detail view -->
+    <div v-else style="max-width:900px;margin:0 auto;padding:24px">
+
+      <!-- Header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div style="font-size:17px;font-weight:700;color:#111827">Expense Details</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="nim-btn" style="background:#fff;border:1px solid #E5E7EB;color:#374151;font-size:13px" @click="openView(selectedExp.name)">
+            <span v-html="icon('edit',13)"></span> Edit
+          </button>
+          <button v-if="selectedExp.status==='Draft'" class="nim-btn" style="background:#EFF6FF;color:#1D4ED8;border:1px solid #BFDBFE;font-size:13px" @click="openView(selectedExp.name)">
+            Make Recurring
+          </button>
+          <button class="nim-btn" style="background:#fff;border:1px solid #E5E7EB;color:#374151;font-size:13px">Print</button>
+          <button class="nim-btn" style="background:#fff;border:1px solid #E5E7EB;color:#374151;font-size:13px">···</button>
+          <button @click="closeExp" style="background:none;border:1px solid #E5E7EB;border-radius:6px;width:32px;height:32px;cursor:pointer;display:grid;place-items:center;color:#9CA3AF">
+            <span v-html="icon('x',14)"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Main content area -->
+      <div style="display:flex;gap:20px;align-items:flex-start">
+
+        <!-- Left column: expense details -->
+        <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px">
+
+          <!-- Expense amount card -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:20px">
+            <div style="font-size:12px;color:#9CA3AF;margin-bottom:6px;font-weight:600">Expense Amount</div>
+            <div style="font-size:28px;font-weight:800;color:#DC2626;line-height:1">
+              {{fmt(selectedExp.total_amount||selectedExp.amount)}}
+              <span style="font-size:13px;font-weight:500;color:#9CA3AF;margin-left:6px">on {{fmtDate(selectedExp.posting_date)}}</span>
+            </div>
+            <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+              <span style="font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:20px;background:#F3F4F6;color:#6B7280;letter-spacing:0.5px">NON-BILLABLE</span>
+              <span style="font-size:11.5px;padding:3px 10px;border-radius:20px;background:#EFF6FF;color:#1D4ED8;font-weight:600">{{selectedExp.expense_type}}</span>
+            </div>
+          </div>
+
+          <!-- Details card -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:18px">
+            <div style="display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;justify-content:space-between;font-size:13px">
+                <span style="color:#6B7280">Paid Through</span>
+                <span style="font-weight:600;color:#111827">{{selectedExp.paid_through||'—'}}</span>
+              </div>
+              <div v-if="selectedExp.vendor" style="display:flex;justify-content:space-between;font-size:13px">
+                <span style="color:#6B7280">Vendor</span>
+                <span style="font-weight:600;color:#2563EB">{{selectedExp.vendor}}</span>
+              </div>
+              <div v-if="selectedExp.expense_account" style="display:flex;justify-content:space-between;font-size:13px">
+                <span style="color:#6B7280">Expense Account</span>
+                <span style="font-weight:600;color:#111827">{{selectedExp.expense_account}}</span>
+              </div>
+              <div v-if="selectedExp.reference_no" style="display:flex;justify-content:space-between;font-size:13px">
+                <span style="color:#6B7280">Reference No.</span>
+                <span style="font-weight:600;color:#111827;font-family:monospace">{{selectedExp.reference_no}}</span>
+              </div>
+              <div v-if="selectedExp.cost_center" style="display:flex;justify-content:space-between;font-size:13px">
+                <span style="color:#6B7280">Cost Center</span>
+                <span style="font-weight:600;color:#111827">{{selectedExp.cost_center}}</span>
+              </div>
+              <div v-if="selectedExp.gst_rate" style="display:flex;justify-content:space-between;font-size:13px">
+                <span style="color:#6B7280">GST ({{selectedExp.gst_rate}}%)</span>
+                <span style="font-weight:600;color:#111827;font-family:monospace">{{fmt(selectedExp.tax_amount)}}</span>
+              </div>
+              <div v-if="selectedExp.description" style="border-top:1px solid #F3F4F6;padding-top:12px">
+                <div style="font-size:11px;font-weight:600;color:#9CA3AF;letter-spacing:0.8px;margin-bottom:4px">DESCRIPTION</div>
+                <p style="font-size:12.5px;color:#374151;line-height:1.5">{{selectedExp.description}}</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Journal tab section -->
+          <div style="background:#fff;border:1px solid #E5E7EB;border-radius:10px;overflow:hidden">
+            <div style="display:flex;border-bottom:2px solid #E5E7EB">
+              <button :style="{padding:'10px 16px',fontSize:'13px',fontWeight:600,border:'none',background:'none',cursor:'pointer',
+                color:expActiveTab==='journal'?'#E67700':'#6B7280',
+                borderBottom:expActiveTab==='journal'?'2px solid #E67700':'2px solid transparent',marginBottom:'-2px'}"
+                @click="expActiveTab='journal'">Journal</button>
+            </div>
+            <div style="padding:16px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;color:#6B7280">
+                Amount is displayed in your base currency
+                <span style="background:#2F9E44;color:#fff;font-size:10.5px;font-weight:700;padding:2px 7px;border-radius:4px">INR</span>
+              </div>
+              <div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:10px">Expense</div>
+              <table style="width:100%;border-collapse:collapse">
+                <thead>
+                  <tr style="border-bottom:1px solid #F3F4F6">
+                    <th style="text-align:left;font-size:10.5px;font-weight:700;color:#9CA3AF;padding:0 0 8px;letter-spacing:0.8px">ACCOUNT</th>
+                    <th style="text-align:right;font-size:10.5px;font-weight:700;color:#9CA3AF;padding:0 0 8px;letter-spacing:0.8px">DEBIT</th>
+                    <th style="text-align:right;font-size:10.5px;font-weight:700;color:#9CA3AF;padding:0 0 8px;letter-spacing:0.8px">CREDIT</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="selectedExp.paid_through" style="border-bottom:1px solid #F9FAFB">
+                    <td style="font-size:12.5px;color:#374151;padding:8px 0">{{selectedExp.paid_through}}</td>
+                    <td style="text-align:right;font-size:12.5px;color:#374151;padding:8px 0;font-family:monospace">0.00</td>
+                    <td style="text-align:right;font-size:12.5px;font-weight:600;color:#374151;padding:8px 0;font-family:monospace">{{flt(selectedExp.total_amount||selectedExp.amount).toFixed(2)}}</td>
+                  </tr>
+                  <tr v-if="selectedExp.expense_account" style="border-bottom:1px solid #F9FAFB">
+                    <td style="font-size:12.5px;color:#374151;padding:8px 0">{{selectedExp.expense_account}}</td>
+                    <td style="text-align:right;font-size:12.5px;font-weight:600;color:#374151;padding:8px 0;font-family:monospace">{{flt(selectedExp.total_amount||selectedExp.amount).toFixed(2)}}</td>
+                    <td style="text-align:right;font-size:12.5px;color:#374151;padding:8px 0;font-family:monospace">0.00</td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr style="border-top:1px solid #E5E7EB">
+                    <td style="font-size:12.5px;font-weight:700;padding:8px 0"></td>
+                    <td style="text-align:right;font-size:12.5px;font-weight:700;padding:8px 0;font-family:monospace">{{flt(selectedExp.total_amount||selectedExp.amount).toFixed(2)}}</td>
+                    <td style="text-align:right;font-size:12.5px;font-weight:700;padding:8px 0;font-family:monospace">{{flt(selectedExp.total_amount||selectedExp.amount).toFixed(2)}}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+
+          <!-- Action row -->
+          <div style="display:flex;gap:8px">
+            <button v-if="selectedExp.status==='Draft'" class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700" @click="openView(selectedExp.name)">
+              Submit &amp; Post GL
+            </button>
+            <button v-if="selectedExp.status==='Submitted'" class="nim-btn" style="background:#2F9E44;color:#fff;border-color:#2F9E44" @click="markPaid(selectedExp.name)">
+              Mark Paid
+            </button>
+            <button v-if="selectedExp.status==='Draft'" class="nim-btn" style="background:#fff;color:#DC2626;border:1px solid #FECACA" @click="confirmDelete(selectedExp.name)">
+              <span v-html="icon('trash',13)"></span> Delete
+            </button>
+          </div>
+        </div>
+
+        <!-- Right column: receipt upload -->
+        <div style="flex:0 0 280px;display:flex;flex-direction:column;gap:12px">
+          <div style="background:#fff;border:2px dashed #E5E7EB;border-radius:12px;padding:32px 16px;text-align:center;cursor:pointer" @click="(()=>{})()">
+            <div style="font-size:44px;margin-bottom:8px">🌙</div>
+            <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:4px">Drag or Drop your Receipts</div>
+            <div style="font-size:11.5px;color:#9CA3AF;margin-bottom:16px">Maximum file size allowed is 10MB</div>
+            <button class="nim-btn" style="background:#fff;border:1px solid #E5E7EB;color:#374151;font-size:12.5px;width:100%;justify-content:center">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Upload your Files
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -19028,7 +21585,7 @@
   // Pre-built Set of every exact nav path — used to prevent parent routes from
   // stealing the "active" highlight when a child route has its own nav entry.
   const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "bank-transfers": "Bank Transfers", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Accounts", "template-editor": "Invoice Template", reports: "Reports", "balance-sheet": "Balance Sheet", "cash-flow": "Cash Flow", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "gst-summary": "GST Summary", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", "so-detail": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "bank-transfers": "Bank Transfers", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Accounts", "template-editor": "Invoice Template", reports: "Reports", "balance-sheet": "Balance Sheet", "cash-flow": "Cash Flow", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "gst-summary": "GST Summary", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -21152,6 +23709,8 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/", component: Dashboard, name: "dashboard" },
       { path: "/customers", component: Customers, name: "customers" },
       { path: "/quotes", component: Quotes, name: "quotes" },
+      { path: "/quotes/:name", component: QuoteDetail, name: "quote-detail" },
+      { path: "/sales-orders/:name", component: SalesOrderDetail, name: "so-detail" },
       { path: "/sales-orders", component: SalesOrders, name: "sales-orders" },
       { path: "/recurring", component: RecurringInvoices, name: "recurring" },
       { path: "/credit-notes", component: CreditNotes, name: "credit-notes" },
