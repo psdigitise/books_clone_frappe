@@ -91,6 +91,93 @@ def send_invoice_email(invoice_name, to, subject, body, cc=None):
 
 
 @frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def get_quote_email_defaults(quote_name):
+    """Return pre-filled subject, body and recipient for a Quotation."""
+    quot = frappe.get_doc("Quotation", quote_name)
+    customer_email = frappe.db.get_value("Customer", quot.customer, "email_id") or ""
+    company = quot.company or frappe.defaults.get_default("company") or ""
+    items_html = "".join(
+        f"<tr><td style='padding:6px 12px;border-bottom:1px solid #f0f2f5'>{r.item_name or r.item_code}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #f0f2f5;text-align:right'>{flt(r.qty):.2f}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #f0f2f5;text-align:right'>₹{flt(r.rate):,.2f}</td>"
+        f"<td style='padding:6px 12px;border-bottom:1px solid #f0f2f5;text-align:right'>₹{flt(r.amount):,.2f}</td></tr>"
+        for r in (quot.items or [])
+    )
+    body = (
+        f"Dear {quot.customer_name or quot.customer},<br><br>"
+        f"Thank you for your interest. Please find your quotation <b>{quot.name}</b> below.<br><br>"
+        f"<table style='border-collapse:collapse;font-size:13px;width:100%;max-width:600px'>"
+        f"<thead><tr style='background:#f8faff'>"
+        f"<th style='padding:8px 12px;text-align:left;border-bottom:2px solid #e4e8f0'>Item</th>"
+        f"<th style='padding:8px 12px;text-align:right;border-bottom:2px solid #e4e8f0'>Qty</th>"
+        f"<th style='padding:8px 12px;text-align:right;border-bottom:2px solid #e4e8f0'>Rate</th>"
+        f"<th style='padding:8px 12px;text-align:right;border-bottom:2px solid #e4e8f0'>Amount</th>"
+        f"</tr></thead><tbody>{items_html}</tbody>"
+        f"<tfoot><tr><td colspan='3' style='padding:8px 12px;text-align:right;font-weight:700'>Grand Total</td>"
+        f"<td style='padding:8px 12px;text-align:right;font-weight:700;color:#2563EB'>₹{flt(quot.grand_total):,.2f}</td></tr></tfoot>"
+        f"</table><br>"
+        f"This quotation is valid until <b>{quot.valid_till or 'N/A'}</b>.<br><br>"
+        f"Please reply to accept or discuss any changes.<br><br>"
+        f"Regards,<br>{company}"
+    )
+    return {
+        "to": customer_email,
+        "subject": f"Quotation {quot.name} from {company}",
+        "body": body,
+        "quote_name": quot.name,
+        "customer_name": quot.customer_name or quot.customer,
+    }
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
+def send_quote_email(quote_name, to, subject, body, cc=None):
+    """Send a Quotation by email and mark it as Sent."""
+    if not to:
+        frappe.throw("Recipient email (To) is required.")
+    if not frappe.has_permission("Quotation", "read", quote_name):
+        frappe.throw("Not permitted", frappe.PermissionError)
+
+    recipients = [e.strip() for e in to.split(",") if e.strip()]
+    cc_list = [e.strip() for e in (cc or "").split(",") if e.strip()]
+
+    frappe.sendmail(
+        recipients=recipients,
+        cc=cc_list,
+        subject=subject,
+        message=body,
+        reference_doctype="Quotation",
+        reference_name=quote_name,
+        now=True,
+    )
+
+    # Mark the quotation as Sent
+    frappe.db.set_value("Quotation", quote_name, "status", "Sent", update_modified=True)
+    frappe.db.commit()
+
+    # Log communication
+    try:
+        comm = frappe.get_doc({
+            "doctype": "Communication",
+            "communication_type": "Communication",
+            "communication_medium": "Email",
+            "sent_or_received": "Sent",
+            "subject": subject,
+            "content": body,
+            "sender": frappe.session.user,
+            "recipients": to,
+            "cc": cc or "",
+            "reference_doctype": "Quotation",
+            "reference_name": quote_name,
+            "status": "Linked",
+        })
+        comm.insert(ignore_permissions=True)
+    except Exception:
+        pass
+
+    return {"status": "sent", "to": to, "quote": quote_name}
+
+
+@frappe.whitelist(allow_guest=False, methods=["GET", "POST"])
 def save_doc(doc):
     if isinstance(doc, str):
         doc = json.loads(doc)
@@ -716,11 +803,11 @@ def normalize_company_names():
 def get_invoice_payments(invoice_name):
     """Return all submitted payment entries linked to a Sales Invoice."""
     rows = frappe.db.sql("""
-        SELECT pe.name, pe.posting_date, pe.payment_mode,
+        SELECT pe.name, pe.payment_date AS posting_date, pe.mode_of_payment AS payment_mode,
                per.allocated_amount, pe.reference_no
           FROM `tabPayment Entry` pe
           JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
          WHERE per.reference_name = %s AND pe.docstatus = 1
-         ORDER BY pe.posting_date
+         ORDER BY pe.payment_date
     """, invoice_name, as_dict=True)
     return rows

@@ -118,9 +118,10 @@ class CreditNote(Document):
 
     def _update_source_invoice_outstanding(self):
         """
-        Increase outstanding on the source Sales Invoice by this CN's value,
-        since the customer now owes less (or gets a refund credit).
-        Also refresh the invoice status so UI reflects the new balance.
+        Reduce outstanding on the source Sales Invoice by this CN's value —
+        the customer's liability for this invoice is reduced by the returned amount.
+        If the invoice was already fully paid, outstanding goes negative, indicating
+        the customer is owed a refund / has a credit balance.
         """
         si = frappe.db.get_value(
             "Sales Invoice", self.return_against,
@@ -129,7 +130,7 @@ class CreditNote(Document):
         )
         if not si:
             return
-        new_outstanding = flt(si.outstanding_amount) + flt(self.grand_total)
+        new_outstanding = flt(si.outstanding_amount) - flt(self.grand_total)
         new_status = _compute_si_status(
             si.docstatus, new_outstanding, si.grand_total, si.due_date
         )
@@ -153,7 +154,7 @@ class CreditNote(Document):
                 as_dict=True,
             )
             if si:
-                restored = max(0.0, flt(si.outstanding_amount) - flt(self.grand_total))
+                restored = flt(si.outstanding_amount) + flt(self.grand_total)
                 new_status = _compute_si_status(
                     si.docstatus, restored, si.grand_total, si.due_date
                 )

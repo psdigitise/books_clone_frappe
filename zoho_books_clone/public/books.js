@@ -65,6 +65,18 @@
   ──────────────────────────────────────────────────────────── */
 
   function _parseResponse(json, status) {
+    // Session expired or unauthorized — redirect to login
+    if (status === 401) {
+      const dest = window.location.pathname + window.location.hash;
+      window.location.href = "/login?redirect-to=" + encodeURIComponent(dest || "/books");
+      throw new Error("Session expired");
+    }
+    // CSRF mismatch — refresh token silently (next request will succeed)
+    if (status === 403 && json && (json.exc_type === "CSRFTokenError" || (json.exc || "").includes("CSRFToken"))) {
+      fetch("/api/method/zoho_books_clone.api.session.get_books_session", { method: "GET", credentials: "same-origin" })
+        .then(r => r.json()).then(d => { if (d.message?.csrf_token) window.frappe.csrf_token = d.message.csrf_token; })
+        .catch(() => {});
+    }
     if (json.exc || json.exc_type) {
       // Frappe double-escapes the traceback as a JSON-encoded list, so literal \n
       // and \" survive the outer JSON.parse.  Normalise them before matching.
@@ -196,11 +208,33 @@
     return await apiGET("zoho_books_clone.api.docs.delete_doc", { doctype, name });
   }
 
+  // Doctypes that carry a `company` link field — auto-filter by the session company
+  const _CO_SCOPED = new Set([
+    "Sales Invoice","Purchase Invoice","Quotation","Sales Order","Purchase Order",
+    "Payment Entry","Stock Entry","Journal Entry","Account","Warehouse","Cost Center",
+    "Bank Account","Bank Transaction","Expense","Expense Claim","Credit Note","Debit Note",
+  ]);
+  // Party master doctypes with no company field — filter by owner (creator)
+  const _OWN_SCOPED = new Set(["Customer","Supplier"]);
+
   async function apiList(dt, opts) {
+    const filters = [...(opts.filters || [])];
+    const co  = window.__booksCompany || "";
+    const usr = window.frappe?.session?.user || "";
+
+    if (co && _CO_SCOPED.has(dt)) {
+      const already = filters.some(f => Array.isArray(f) && f[0] === "company");
+      if (!already) filters.push(["company", "=", co]);
+    }
+    if (usr && usr !== "Administrator" && _OWN_SCOPED.has(dt)) {
+      const already = filters.some(f => Array.isArray(f) && f[0] === "owner");
+      if (!already) filters.push(["owner", "=", usr]);
+    }
+
     return await apiGET("frappe.client.get_list", {
       doctype: dt,
       fields: JSON.stringify(opts.fields || ["name"]),
-      filters: JSON.stringify(opts.filters || []),
+      filters: JSON.stringify(filters),
       order_by: opts.order || "modified desc",
       limit_page_length: opts.limit || 50
     }) || [];
@@ -208,6 +242,10 @@
 
   async function apiLinkValues(doctype, txt, filters) {
     const f = filters ? [...filters, ["name", "like", "%" + txt + "%"]] : [["name", "like", "%" + txt + "%"]];
+    const usr = window.frappe?.session?.user || "";
+    if (usr && usr !== "Administrator" && _OWN_SCOPED.has(doctype)) {
+      if (!f.some(x => Array.isArray(x) && x[0] === "owner")) f.push(["owner", "=", usr]);
+    }
     return await apiGET("frappe.client.get_list", {
       doctype, fields: JSON.stringify(["name"]),
       filters: JSON.stringify(f),
@@ -309,6 +347,18 @@
     gstfile:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="M9 13h6M9 17h4"/><circle cx="16" cy="17" r="1.5"/>',
     shield:    '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
     percent:   '<line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/>',
+    gear:      '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+    user:      '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+    lock:      '<rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+    mail:      '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/>',
+    building:  '<path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/>',
+    audit:     '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+    org:       '<circle cx="12" cy="5" r="3"/><path d="M6 12h12M9 12v6M15 12v6M6 22h12"/><circle cx="6" cy="19" r="3"/><circle cx="18" cy="19" r="3"/>',
+    webhook:   '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>',
+    'user-plus': '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/>',
+    hash:      '<line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>',
+    calendar:  '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+    currency:  '<circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 0 0 0 4h4a2 2 0 0 1 0 4H8"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="12" y1="3" x2="12" y2="6"/>',
   };
   function icon(k, s) { s = s || 16; return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`; }
 
@@ -523,7 +573,7 @@
     <span class="ss-display" :class="{'ss-ph': !modelValue && modelValue !== 0}">
       {{(modelValue || modelValue === 0) ? displayLabel : placeholder}}
     </span>
-    <span class="ss-caret" v-html="icon('chevD',11)"></span>
+    <span v-if="normalized.length > 1" class="ss-caret" v-html="icon('chevD',11)"></span>
   </div>
 
   <!-- Dropdown -->
@@ -645,9 +695,11 @@
           if (r?.default_currency) form.currency = r.default_currency;
         } catch { }
         // Pre-fill items from this customer's last invoice/order
+        // — only when form has no items yet AND this is not a conversion from a quote/order
         try {
           const blank = form.items.length === 1 && !form.items[0].item_name && !form.items[0].rate;
-          if (blank) {
+          const isConversion = !!form.source_name;
+          if (blank && !isConversion) {
             const res = await apiGET("zoho_books_clone.api.docs.get_party_last_items", { party_type: "Customer", party: form.customer });
             if (res?.items?.length) {
               form.items = res.items.map(i => ({ item_name: i.item_name || i.item_code || "", description: i.description || "", qty: flt(i.qty) || 1, rate: flt(i.rate), amount: 0 }));
@@ -685,16 +737,34 @@
           if (m) {
             try {
               const data = JSON.parse(m);
-              form.source_name = data.source_name;
-              form.source_type = data.source_type;
-              form.customer = data.customer;
-              form.posting_date = data.order_date || data.date || today();
+              form.source_name = data.source_name || "";
+              form.source_type = data.source_type || "";
+              form.customer = data.customer || "";
+              form.posting_date = today();
               form.due_date = data.delivery_date || data.expiry || data.order_date || data.date || today();
-              if (data.items) {
-                form.items = data.items.map(i => ({ ...i }));
+              // Normalize items — handle all field-name variants from Quotation / Sales Order
+              if (data.items && data.items.length) {
+                form.items = data.items.map(i => ({
+                  item_name:   i.item_name   || i.item_code || "",
+                  item_code:   i.item_code   || i.item_name || "",
+                  description: i.description || "",
+                  qty:         flt(i.qty)    || 1,
+                  rate:        flt(i.rate)   || 0,
+                  amount:      flt(i.amount) || 0,
+                }));
+              }
+              // Carry over taxes if available
+              if (data.taxes && data.taxes.length) {
+                form.taxes = data.taxes.map(t => ({
+                  tax_type:    t.tax_type    || t.description || "GST",
+                  description: t.description || t.tax_type    || "",
+                  rate:        flt(t.rate),
+                  tax_amount:  flt(t.tax_amount),
+                  account_head:t.account_head|| "",
+                }));
               }
               recalc();
-            } catch (e) { }
+            } catch (e) { console.warn("[Books] convert_to_invoice parse error:", e); }
             localStorage.removeItem("convert_to_invoice");
           }
         }
@@ -1497,7 +1567,8 @@
         </div>
         <div class="nim-field">
           <label class="nim-label">Supplier Invoice No</label>
-          <input v-model="form.bill_no" class="nim-input" placeholder="e.g. INV-001"/>
+          <input v-model="form.bill_no" class="nim-input" placeholder="e.g. INV-001"
+            @input="form.bill_no=form.bill_no.replace(/[^a-zA-Z0-9\-\/]/g,'')"/>
         </div>
       </div>
       <div class="nim-grid-3 nim-mb">
@@ -1839,24 +1910,10 @@
         { lbl: "Outstanding", val: fmt(kpis.value?.month_outstanding), trend: kpis.value?.overdue_count + " overdue", up: false, icon: "accts", bg: "#fef2f2", ic: "#dc2626" },
         { lbl: "Net Profit (MTD)", val: fmt(kpis.value?.net_profit_mtd), trend: "month to date", up: true, icon: "chart", bg: "#f5f3ff", ic: "#7c3aed" },
       ]);
-      // Static demo data shown when API returns empty / fails
-      const DEMO = {
-        month_revenue: 125000, month_collected: 98500, month_outstanding: 26500, net_profit_mtd: 41200,
-        total_assets: 340000, overdue_count: 4,
-        top_customers: [
-          { customer: "Prasath Enterprises", invoice_count: 5, total_revenue: 52000 },
-          { customer: "Hari Industries", invoice_count: 3, total_revenue: 31500 },
-          { customer: "Digitise Pvt Ltd", invoice_count: 2, total_revenue: 18000 },
-          { customer: "Alpha Solutions", invoice_count: 2, total_revenue: 12750 },
-          { customer: "Beta Corp", invoice_count: 1, total_revenue: 10750 },
-        ],
-        overdue_invoices: [
-          { name: "INV-2026-00002", customer: "hari", customer_name: "hari", due_date: "2026-03-18", grand_total: 15000, outstanding_amount: 15000 },
-          { name: "INV-2026-00008", customer: "hari", customer_name: "hari", due_date: "2026-03-18", grand_total: 500, outstanding_amount: 500 },
-          { name: "INV-2026-00011", customer: "hari", customer_name: "hari", due_date: "2026-03-18", grand_total: 545, outstanding_amount: 545 },
-          { name: "INV-2026-00012", customer: "Prasath", customer_name: "Prasath", due_date: "2026-03-18", grand_total: 100000, outstanding_amount: 100000 },
-        ],
-        aging_buckets: { current: 26500, "1_30": 18000, "31_60": 8200, "61_90": 3100, over_90: 1450 },
+      const EMPTY = {
+        month_revenue: 0, month_collected: 0, month_outstanding: 0, net_profit_mtd: 0,
+        total_assets: 0, overdue_count: 0, top_customers: [], overdue_invoices: [],
+        aging_buckets: { current: 0, "1_30": 0, "31_60": 0, "61_90": 0, over_90: 0 },
       };
 
       async function load() {
@@ -1864,8 +1921,7 @@
         const company = await resolveCompany();
         try {
           const d = await apiGET("zoho_books_clone.api.dashboard.get_home_dashboard", { company });
-          const hasData = d && (d.month_revenue || d.month_collected || d.month_outstanding || (d.overdue_invoices && d.overdue_invoices.length) || (d.top_customers && d.top_customers.length));
-          const src = hasData ? d : DEMO;
+          const src = (d && typeof d === "object") ? d : EMPTY;
           dash.value = src;
           kpis.value = {
             month_revenue: src.month_revenue || 0,
@@ -1878,10 +1934,9 @@
           aging.value = src.aging_buckets || {};
         } catch (e) {
           console.error("[Dashboard]", e);
-          // API failed — show demo data so page is never blank
-          dash.value = DEMO;
-          kpis.value = { month_revenue: DEMO.month_revenue, month_collected: DEMO.month_collected, month_outstanding: DEMO.month_outstanding, net_profit_mtd: DEMO.net_profit_mtd, total_assets: DEMO.total_assets, overdue_count: DEMO.overdue_count };
-          aging.value = DEMO.aging_buckets;
+          dash.value = EMPTY;
+          kpis.value = { month_revenue: 0, month_collected: 0, month_outstanding: 0, net_profit_mtd: 0, total_assets: 0, overdue_count: 0 };
+          aging.value = EMPTY.aging_buckets;
         }
         finally { loading.value = false; }
       }
@@ -2282,10 +2337,247 @@
 </div>
 `});
 
+  // ══ TEMPLATE SETTINGS COMPOSABLE ════════════════════════════════════
+  function useTemplateSettings(dtype) {
+    const key = 'zb_tpl_' + dtype;
+    const DEFAULTS = {
+      template: 'standard', accentColor: '#2563EB',
+      logoUrl: '', showLogo: false, companyOverride: '',
+      addressLine1: '', phone: '', email: '', website: '',
+      termsAndConditions: '', showHSN: false, showUOM: true,
+      showDiscount: false, showSignature: true,
+      showAmountWords: true, showBankDetails: false, bankDetails: '',
+    };
+    let saved = {}; try { saved = JSON.parse(localStorage.getItem(key)||'{}'); } catch {}
+    const settings = Vue.reactive({ ...DEFAULTS, ...saved });
+    function saveSettings() { try { localStorage.setItem(key, JSON.stringify({...settings})); } catch {} toast('Template saved'); }
+    return { settings, saveSettings };
+  }
+
+  // ══ SELF-CONTAINED PDF HTML BUILDER ══════════════════════════════════
+  function buildPdfHtml(paperId, title, settings) {
+    const el = document.getElementById(paperId);
+    if (!el) return null;
+    const ac = (settings && settings.accentColor) || '#2563EB';
+    const clone = el.cloneNode(true);
+    // Remove non-print elements
+    clone.querySelectorAll('.zb-sent-ribbon,.zb-draft-ribbon,.zb-pdf-footer,.no-print').forEach(n => n.remove());
+    const inner = clone.innerHTML;
+    return `<!DOCTYPE html><html lang="en"><head>
+<meta charset="UTF-8"><title>${title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+@page{size:A4;margin:12mm}
+html,body{height:100%;background:#fff}
+body{font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;color:#374151;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.zb-pdf-paper{background:#fff;width:100%;padding:24px 28px;position:relative}
+.zb-sent-ribbon,.zb-draft-ribbon,.zb-pdf-footer,.no-print{display:none!important}
+.zb-pdf-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #111827}
+.zb-pdf-co-name{font-size:18px;font-weight:800;color:#111827;letter-spacing:-.01em}
+.zb-pdf-co-meta{font-size:11px;color:#6b7280;margin-top:2px}
+.zb-pdf-inv-title{font-size:22px;font-weight:900;color:#111827;letter-spacing:.04em;text-transform:uppercase;text-align:right}
+.zb-pdf-info-table{width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px}
+.zb-pdf-info-table th{background:#f8f9fc;padding:6px 8px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;border:1px solid #e4e8f0;white-space:nowrap}
+.zb-pdf-info-table td{padding:6px 8px;border:1px solid #e4e8f0;color:#374151;white-space:nowrap}
+.zb-pdf-bill-section{margin-bottom:16px}
+.zb-pdf-bill-label{font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px}
+.zb-pdf-bill-name{font-size:14px;font-weight:700;color:${ac}}
+.zb-pdf-items{width:100%;border-collapse:collapse;margin-bottom:0}
+.zb-pdf-th{padding:8px 10px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;background:#f8f9fc;border-bottom:2px solid #e4e8f0;text-align:left}
+.zb-pdf-item-row{border-bottom:1px solid #f1f3f7}
+.zb-pdf-td{padding:8px 10px;font-size:12px;color:#374151;vertical-align:middle}
+.zb-pdf-bottom{display:flex;border-top:2px solid #e4e8f0;margin-top:0}
+.zb-pdf-words-block{flex:1;padding:12px 10px;border-right:1px solid #e4e8f0;font-size:11px}
+.zb-pdf-words-lbl{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:3px}
+.zb-pdf-words-val{font-size:11px;color:#374151;line-height:1.5}
+.zb-pdf-totals-block{width:220px;min-width:180px;padding:8px 12px;display:flex;flex-direction:column;gap:0}
+.zb-pdf-total-row{display:flex;justify-content:space-between;font-size:12px;color:#6b7280;padding:4px 0;border-bottom:1px solid #f1f3f7}
+.zb-pdf-total-row:last-child{border-bottom:none}
+.zb-pdf-total-bold{font-weight:800;font-size:14px;color:#111827;padding:7px 0}
+.zb-pdf-balance{font-weight:800;font-size:14px;color:${ac};border-top:2px solid #111827!important;padding-top:7px}
+.zb-pdf-sig-row{display:flex;justify-content:flex-end;padding:14px 0 6px}
+.zb-pdf-sig-box{width:180px;text-align:center;border-top:1px solid #9ca3af;padding-top:5px;font-size:10px;color:#9ca3af}
+.zb-pdf-terms{border-top:1px solid #e4e8f0;padding:12px 0 0;margin-top:8px;font-size:11px;color:#6b7280;white-space:pre-wrap;line-height:1.6}
+.zb-pdf-terms-lbl{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px}
+.zb-pdf-bank{background:#f8f9fc;border:1px solid #e4e8f0;border-radius:6px;padding:10px 12px;margin-top:10px;font-size:11px;color:#374151;white-space:pre-wrap;line-height:1.6}
+.zb-pdf-bank-lbl{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px}
+/* Professional template */
+.tpl-professional .zb-pdf-head{background:${ac};padding:20px 24px;margin:-24px -28px 20px;border-bottom:none;border-top-left-radius:2px;border-top-right-radius:2px}
+.tpl-professional .zb-pdf-co-name,.tpl-professional .zb-pdf-inv-title{color:#fff}
+.tpl-professional .zb-pdf-co-meta{color:rgba(255,255,255,.8)}
+.tpl-professional .zb-pdf-bill-name{color:${ac}}
+/* Minimal template */
+.tpl-minimal .zb-pdf-head{border-bottom:1px solid #e4e8f0}
+.tpl-minimal .zb-pdf-co-name{font-size:16px;font-weight:700;color:#111827}
+.tpl-minimal .zb-pdf-inv-title{font-size:16px;font-weight:600;color:#6b7280}
+.tpl-minimal .zb-pdf-th{background:#fff;border-bottom:1px solid #374151}
+</style>
+</head><body>
+<div class="zb-pdf-paper">${inner}</div>
+<script>
+var loaded = false;
+document.fonts && document.fonts.ready ? document.fonts.ready.then(go) : setTimeout(go, 1000);
+function go() { if (loaded) return; loaded = true; window.print(); setTimeout(function(){window.close();},400); }
+window.addEventListener('load', function(){ setTimeout(go, 600); });
+<\/script>
+</body></html>`;
+  }
+
+  // ══ TEMPLATE CUSTOMIZER PANEL ════════════════════════════════════════
+  const TemplateCustomizerPanel = Vue.defineComponent({
+    name: "TemplateCustomizerPanel",
+    props: { show: Boolean, settings: Object },
+    emits: ["close", "save"],
+    setup(props, { emit }) {
+      const PALETTE = [
+        '#2563EB','#7048E8','#2F9E44','#E67700','#C92A2A','#0891B2','#D63384','#111827'
+      ];
+      const TEMPLATES = [
+        { id: 'standard',     label: 'Standard',     desc: 'Header with border' },
+        { id: 'professional', label: 'Professional', desc: 'Colored header band' },
+        { id: 'minimal',      label: 'Minimal',      desc: 'Clean & simple' },
+      ];
+      function fieldStyle(extra) {
+        return `width:100%;padding:7px 10px;border:1.5px solid #e4e8f0;border-radius:7px;font-size:12px;font-family:inherit;color:#374151;outline:none;background:#fff;${extra||''}`;
+      }
+      function labelStyle() { return 'font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:5px;display:block'; }
+      function save() { emit('save'); emit('close'); }
+      return { PALETTE, TEMPLATES, fieldStyle, labelStyle, save };
+    },
+    template: `
+<teleport to="body">
+<div v-if="show" style="position:fixed;inset:0;z-index:9500;display:flex;justify-content:flex-end" @mousedown.self="$emit('close')">
+  <div style="width:360px;background:#fff;height:100%;overflow-y:auto;box-shadow:-6px 0 32px rgba(0,0,0,.18);display:flex;flex-direction:column;flex-shrink:0">
+
+    <!-- Header -->
+    <div style="padding:18px 20px;border-bottom:1px solid #e4e8f0;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;background:#fff;position:sticky;top:0;z-index:2">
+      <div>
+        <div style="font-size:15px;font-weight:700;color:#111827">Customize Template</div>
+        <div style="font-size:11px;color:#9ca3af;margin-top:1px">Changes apply to PDF & email</div>
+      </div>
+      <button @click="$emit('close')" style="width:30px;height:30px;border:none;background:#f3f4f6;border-radius:50%;cursor:pointer;font-size:16px;color:#6b7280;display:flex;align-items:center;justify-content:center">✕</button>
+    </div>
+
+    <!-- Body -->
+    <div style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:22px">
+
+      <!-- Template Style -->
+      <div>
+        <span :style="labelStyle()">Template Style</span>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+          <div v-for="t in TEMPLATES" :key="t.id" @click="settings.template=t.id"
+            :style="{border:'2px solid '+(settings.template===t.id?settings.accentColor:'#e4e8f0'),borderRadius:'8px',padding:'10px 6px',cursor:'pointer',background:settings.template===t.id?'#f5f7ff':'#fff',transition:'all .15s',textAlign:'center'}">
+            <!-- Mini preview sketch -->
+            <div :style="{height:'44px',borderRadius:'4px',overflow:'hidden',marginBottom:'6px',border:'1px solid #e4e8f0',background:'#f8f9fc'}">
+              <div :style="{height:'14px',background:t.id==='professional'?settings.accentColor:t.id==='minimal'?'#fff':'#f8f9fc',borderBottom:t.id==='standard'?'2px solid #e4e8f0':t.id==='minimal'?'1px solid #e4e8f0':'none'}"></div>
+              <div style="padding:4px 4px;display:flex;flex-direction:column;gap:3px">
+                <div style="height:2px;background:#e4e8f0;border-radius:2px"></div>
+                <div style="height:2px;background:#e4e8f0;border-radius:2px;width:70%"></div>
+                <div style="height:2px;background:#e4e8f0;border-radius:2px;width:50%"></div>
+              </div>
+            </div>
+            <div style="font-size:10px;font-weight:700;color:#374151">{{t.label}}</div>
+            <div style="font-size:9px;color:#9ca3af;margin-top:1px">{{t.desc}}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Accent Color -->
+      <div>
+        <span :style="labelStyle()">Accent Color</span>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+          <div v-for="c in PALETTE" :key="c" @click="settings.accentColor=c"
+            :style="{width:'26px',height:'26px',borderRadius:'50%',background:c,cursor:'pointer',border:'2.5px solid '+(settings.accentColor===c?'#fff':'transparent'),boxShadow:settings.accentColor===c?'0 0 0 2px '+c:'0 0 0 1px rgba(0,0,0,.1)',transition:'all .15s',flexShrink:'0'}">
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input type="color" v-model="settings.accentColor" style="width:36px;height:36px;border:none;background:none;cursor:pointer;padding:0;border-radius:6px"/>
+          <input type="text" v-model="settings.accentColor" :style="fieldStyle('flex:1')" placeholder="#2563EB"/>
+        </div>
+      </div>
+
+      <!-- Logo -->
+      <div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <span :style="labelStyle()" style="margin-bottom:0">Company Logo</span>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#374151">
+            <input type="checkbox" v-model="settings.showLogo" style="width:15px;height:15px;cursor:pointer"/>
+            Show on document
+          </label>
+        </div>
+        <input type="text" v-model="settings.logoUrl" :style="fieldStyle()" placeholder="Paste image URL or /files/logo.png" :disabled="!settings.showLogo"/>
+        <div v-if="settings.showLogo && settings.logoUrl" style="margin-top:8px;border:1px solid #e4e8f0;border-radius:6px;padding:10px;text-align:center;background:#f8f9fc">
+          <img :src="settings.logoUrl" style="max-height:48px;max-width:100%;object-fit:contain" @error="$event.target.style.display='none'"/>
+        </div>
+      </div>
+
+      <!-- Company Info Override -->
+      <div>
+        <span :style="labelStyle()">Company Info Override</span>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <input type="text" v-model="settings.companyOverride" :style="fieldStyle()" placeholder="Company name (leave blank to use default)"/>
+          <textarea v-model="settings.addressLine1" :style="fieldStyle('resize:vertical;min-height:58px')" placeholder="Address" rows="2"></textarea>
+          <input type="text" v-model="settings.phone" :style="fieldStyle()" placeholder="Phone number"/>
+          <input type="email" v-model="settings.email" :style="fieldStyle()" placeholder="Email address"/>
+          <input type="text" v-model="settings.website" :style="fieldStyle()" placeholder="Website URL"/>
+        </div>
+      </div>
+
+      <!-- Table Columns -->
+      <div>
+        <span :style="labelStyle()">Table Columns</span>
+        <div style="display:flex;flex-direction:column;gap:1px;border:1px solid #e4e8f0;border-radius:8px;overflow:hidden">
+          <label v-for="(col,i) in [{k:'showUOM',l:'Unit of Measure (UOM)'},{k:'showHSN',l:'HSN / SAC Code'},{k:'showDiscount',l:'Discount Column'}]" :key="col.k"
+            :style="{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',cursor:'pointer',background:'#fff',borderBottom:i<2?'1px solid #f1f3f7':'none'}">
+            <input type="checkbox" v-model="settings[col.k]" style="width:15px;height:15px;cursor:pointer;accent-color:settings.accentColor"/>
+            <span style="font-size:12.5px;color:#374151">{{col.l}}</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Display Options -->
+      <div>
+        <span :style="labelStyle()">Display Options</span>
+        <div style="display:flex;flex-direction:column;gap:1px;border:1px solid #e4e8f0;border-radius:8px;overflow:hidden">
+          <label v-for="(opt,i) in [{k:'showAmountWords',l:'Amount in Words'},{k:'showSignature',l:'Authorized Signature'},{k:'showBankDetails',l:'Bank Details'}]" :key="opt.k"
+            :style="{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',cursor:'pointer',background:'#fff',borderBottom:i<2?'1px solid #f1f3f7':'none'}">
+            <input type="checkbox" v-model="settings[opt.k]" style="width:15px;height:15px;cursor:pointer"/>
+            <span style="font-size:12.5px;color:#374151">{{opt.l}}</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Bank Details -->
+      <div v-if="settings.showBankDetails">
+        <span :style="labelStyle()">Bank Details</span>
+        <textarea v-model="settings.bankDetails" :style="fieldStyle('resize:vertical;min-height:80px')" rows="4" placeholder="Bank Name: State Bank&#10;Account No: 1234567890&#10;IFSC Code: SBIN0001234&#10;Branch: Main Branch"></textarea>
+      </div>
+
+      <!-- Terms & Conditions -->
+      <div>
+        <span :style="labelStyle()">Terms &amp; Conditions</span>
+        <textarea v-model="settings.termsAndConditions" :style="fieldStyle('resize:vertical;min-height:90px')" rows="5" placeholder="1. Payment is due within the agreed terms.&#10;2. Goods once sold will not be taken back.&#10;3. Interest will be charged on late payments."></textarea>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div style="padding:14px 20px;border-top:1px solid #e4e8f0;display:flex;gap:8px;flex-shrink:0;background:#fff;position:sticky;bottom:0">
+      <button @click="$emit('close')" style="flex:1;padding:9px;border:1.5px solid #e4e8f0;border-radius:7px;background:#fff;color:#374151;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">Cancel</button>
+      <button @click="save" :style="{flex:2,padding:'9px',border:'none',borderRadius:'7px',background:settings.accentColor,color:'#fff',fontSize:'13px',fontWeight:'700',cursor:'pointer',fontFamily:'inherit'}">Save &amp; Apply</button>
+    </div>
+
+  </div>
+</div>
+</teleport>`
+  });
+
   // ══ INVOICE DETAIL PAGE ═══════════════════════════════════════════
   const InvoiceDetail = defineComponent({
     name: "InvoiceDetail",
-    components: { SendEmailModal, PaymentModal, InvoiceModal },
+    components: { SendEmailModal, PaymentModal, InvoiceModal, TemplateCustomizerPanel },
     setup() {
       const route = useRoute();
       const router = useRouter();
@@ -2293,6 +2585,22 @@
       const showSendEmail = ref(false);
       const showSendMenu = ref(false);
       const showNew = ref(false);
+      const showCustomizer = ref(false);
+      const { settings: tplSettings, saveSettings: saveTplSettings } = useTemplateSettings('invoice');
+
+      // Computed styles driven by template settings
+      const tplHeaderStyle = Vue.computed(() => {
+        if (tplSettings.template === 'professional')
+          return { background: tplSettings.accentColor, padding: '20px 24px', margin: '-24px -28px 20px', borderBottom: 'none', borderRadius: '0' };
+        if (tplSettings.template === 'minimal')
+          return { borderBottom: '1px solid #e4e8f0' };
+        return {};
+      });
+      const tplTitleStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: '#fff' } : {});
+      const tplCoNameStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: '#fff' } : {});
+      const tplCoMetaStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: 'rgba(255,255,255,.8)' } : {});
+      const tplBillNameStyle = Vue.computed(() => ({ color: tplSettings.accentColor }));
+      const tplBalanceStyle = Vue.computed(() => v => ({ color: tplSettings.accentColor, fontWeight: 700 }));
 
       function onInvoiceSaved(savedName) {
         showNew.value = false;
@@ -2454,28 +2762,11 @@
         finally { submitting.value = false; }
       }
       function printPdf() {
-        const paper = document.getElementById("zb-inv-paper");
-        if (!paper) { window.print(); return; }
-        const cssHref = Array.from(document.styleSheets)
-          .map(s => { try { return s.href; } catch { return null; } })
-          .filter(h => h && h.includes("books.css"))[0] || "";
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-          <title>Invoice</title>
-          ${cssHref ? `<link rel="stylesheet" href="${cssHref}">` : ""}
-          <style>
-            @page { margin: 12mm; }
-            body { margin:0; background:#fff; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
-            .zb-pdf-paper { box-shadow:none!important; max-width:100%!important; padding:20px!important; }
-            .zb-sent-ribbon,.zb-draft-ribbon { display:none!important; }
-          </style>
-        </head><body>
-          <div class="zb-pdf-paper">${paper.innerHTML}</div>
-          <script>window.onload=function(){window.print();window.close();}<\/script>
-        </body></html>`;
-        const w = window.open("", "_blank", "width=800,height=900");
-        if (!w) { toast("Allow pop-ups to print invoice", "error"); return; }
-        w.document.write(html);
-        w.document.close();
+        const html = buildPdfHtml("zb-inv-paper", "Invoice " + (inv.value?.name || ""), tplSettings);
+        if (!html) { toast("Nothing to print", "error"); return; }
+        const w = window.open("", "_blank", "width=860,height=1000");
+        if (!w) { toast("Allow pop-ups to print", "error"); return; }
+        w.document.write(html); w.document.close();
       }
       function toAmountWords(n) {
         const a = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
@@ -2591,7 +2882,9 @@
         statusBadgeCls, isDraft, paidAmt, paidPct, netTotal, totalTax, grandTotal,
         startEdit, saveEdit, submitInvoice, printPdf,
         addItem, removeItem, addTax, removeTax, recalc, toAmountWords,
-        fmt, fmtDate, flt, icon, openDoc
+        fmt, fmtDate, flt, icon, openDoc,
+        showCustomizer, tplSettings, saveTplSettings,
+        tplHeaderStyle, tplTitleStyle, tplCoNameStyle, tplCoMetaStyle, tplBillNameStyle, tplBalanceStyle,
       };
     },
     template: `
@@ -2937,58 +3230,29 @@
       <!-- PDF view or Edit form -->
       <div class="zb-pdf-wrap" v-if="!editing">
 
-        <!-- Sticky toolbar row with Customize button -->
+        <!-- Toolbar: Customize button -->
+        <template-customizer-panel :show="showCustomizer" :settings="tplSettings" @close="showCustomizer=false" @save="saveTplSettings"/>
         <div style="width:100%;max-width:660px;display:flex;justify-content:flex-end;margin-bottom:10px;position:sticky;top:0;z-index:50">
-          <div @mouseleave="showCustMenu=false" style="position:relative">
-            <button @click="showCustMenu=!showCustMenu"
-              style="display:inline-flex;align-items:center;gap:6px;padding:7px 16px;background:#2563EB;color:#fff;border:none;border-radius:6px;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(37,99,235,.35)">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
-              Customize ▾
-            </button>
-            <div v-if="showCustMenu"
-              style="position:absolute;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.13);min-width:210px;overflow:hidden;z-index:200">
-              <div style="padding:4px 0">
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-                  Standard Template
-                </button>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3m10 0h3a2 2 0 0 0 2-2v-3"/></svg>
-                  Change Template
-                </button>
-                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
-                <button @click="showCustMenu=false;$router.push('/template-editor')" class="zb-cust-menu-item" style="color:#2563EB;font-weight:600">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-                  Edit Template
-                </button>
-                <div style="height:1px;background:#f3f4f6;margin:4px 0"></div>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-                  Update Logo &amp; Address
-                </button>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                  Manage Custom Fields
-                </button>
-                <button @click="showCustMenu=false" class="zb-cust-menu-item">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                  Terms &amp; Conditions
-                </button>
-              </div>
-            </div>
-          </div>
+          <button @click="showCustomizer=true"
+            :style="{display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 16px',background:tplSettings.accentColor,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12.5px',fontWeight:'600',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.2)'}">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 1.41 14.14M4.93 19.07A10 10 0 0 1 3.52 4.93"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+            Customize ▾
+          </button>
         </div>
 
-        <div class="zb-pdf-paper" id="zb-inv-paper">
-          <div class="zb-sent-ribbon" v-if="!isDraft">Sent</div>
-          <div class="zb-draft-ribbon" v-else>Draft</div>
-          <div class="zb-pdf-head">
+        <div class="zb-pdf-paper" id="zb-inv-paper" :class="'tpl-'+tplSettings.template">
+          <div class="zb-sent-ribbon no-print" v-if="!isDraft">Sent</div>
+          <div class="zb-draft-ribbon no-print" v-else>Draft</div>
+          <!-- Header -->
+          <div class="zb-pdf-head" :style="tplHeaderStyle">
             <div>
-              <div class="zb-pdf-co-name">{{inv.company||'Your Company'}}</div>
-              <div class="zb-pdf-co-meta" v-if="inv.company_address">{{inv.company_address}}</div>
-              <div class="zb-pdf-co-meta" v-if="inv.company_email">{{inv.company_email}}</div>
+              <img v-if="tplSettings.showLogo && tplSettings.logoUrl" :src="tplSettings.logoUrl" style="height:44px;object-fit:contain;margin-bottom:8px;display:block" @error="$event.target.style.display='none'"/>
+              <div class="zb-pdf-co-name" :style="tplCoNameStyle">{{tplSettings.companyOverride||inv.company||'Your Company'}}</div>
+              <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="tplSettings.addressLine1||inv.company_address">{{tplSettings.addressLine1||inv.company_address}}</div>
+              <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="tplSettings.phone||tplSettings.email">{{[tplSettings.phone,tplSettings.email].filter(Boolean).join(' · ')}}</div>
+              <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="!tplSettings.email && inv.company_email">{{inv.company_email}}</div>
             </div>
-            <div class="zb-pdf-inv-title">TAX INVOICE</div>
+            <div class="zb-pdf-inv-title" :style="tplTitleStyle">TAX INVOICE</div>
           </div>
           <table class="zb-pdf-info-table">
             <thead><tr><th>#</th><th>Invoice Date</th><th>Terms</th><th>Due Date</th><th>P.O.#</th></tr></thead>
@@ -3002,14 +3266,17 @@
           </table>
           <div class="zb-pdf-bill-section">
             <div class="zb-pdf-bill-label">Bill To</div>
-            <div class="zb-pdf-bill-name">{{inv.customer_name||inv.customer}}</div>
+            <div class="zb-pdf-bill-name" :style="tplBillNameStyle">{{inv.customer_name||inv.customer}}</div>
           </div>
           <table class="zb-pdf-items">
             <thead><tr>
               <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
               <th class="zb-pdf-th">Item &amp; Description</th>
+              <th v-if="tplSettings.showHSN" class="zb-pdf-th">HSN/SAC</th>
+              <th v-if="tplSettings.showUOM" class="zb-pdf-th" style="text-align:center">UOM</th>
               <th class="zb-pdf-th" style="text-align:right">Qty</th>
               <th class="zb-pdf-th" style="text-align:right">Rate</th>
+              <th v-if="tplSettings.showDiscount" class="zb-pdf-th" style="text-align:right">Disc%</th>
               <th class="zb-pdf-th" style="text-align:right">Amount</th>
             </tr></thead>
             <tbody>
@@ -3019,19 +3286,28 @@
                   <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
                   <div v-if="item.description&&item.description!==item.item_name" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
                 </td>
-                <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}<div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div></td>
+                <td v-if="tplSettings.showHSN" class="zb-pdf-td" style="font-size:11px;color:#6b7280">{{item.gst_hsn_code||'—'}}</td>
+                <td v-if="tplSettings.showUOM" class="zb-pdf-td" style="text-align:center;font-size:11px;color:#6b7280">{{item.uom||'pcs'}}</td>
+                <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}</td>
                 <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                <td v-if="tplSettings.showDiscount" class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.discount_percentage||0).toFixed(1)}}%</td>
                 <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
               </tr>
             </tbody>
           </table>
           <div class="zb-pdf-bottom">
             <div class="zb-pdf-words-block">
-              <div class="zb-pdf-words-lbl">Total In Words</div>
-              <div class="zb-pdf-words-val"><i>{{toAmountWords(flt(inv.grand_total))}}</i></div>
+              <template v-if="tplSettings.showAmountWords">
+                <div class="zb-pdf-words-lbl">Total In Words</div>
+                <div class="zb-pdf-words-val"><i>{{toAmountWords(flt(inv.grand_total))}}</i></div>
+              </template>
               <div v-if="inv.notes" style="margin-top:10px">
                 <div class="zb-pdf-words-lbl">Notes</div>
                 <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{inv.notes}}</div>
+              </div>
+              <div v-if="tplSettings.showBankDetails && tplSettings.bankDetails" style="margin-top:10px">
+                <div class="zb-pdf-words-lbl">Bank Details</div>
+                <div style="font-size:11px;color:#374151;margin-top:3px;white-space:pre-wrap;background:#f8f9fc;padding:6px 8px;border-radius:4px;border:1px solid #e4e8f0">{{tplSettings.bankDetails}}</div>
               </div>
             </div>
             <div class="zb-pdf-totals-block">
@@ -3043,17 +3319,24 @@
               <div v-if="paidAmt>0" class="zb-pdf-total-row" style="color:#059669">
                 <span>Payment Made</span><span style="color:#e03131">(-) {{fmt(paidAmt)}}</span>
               </div>
-              <div class="zb-pdf-total-row zb-pdf-balance" :style="{color:flt(inv.outstanding_amount)<=0?'#059669':'#e03131',fontWeight:700}">
+              <div class="zb-pdf-total-row zb-pdf-balance" :style="{color:flt(inv.outstanding_amount)<=0?'#059669':tplSettings.accentColor,fontWeight:700}">
                 <span>Balance Due</span><span>{{fmt(inv.outstanding_amount)}}</span>
               </div>
             </div>
           </div>
-          <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
-          <div class="zb-pdf-footer" style="display:flex;align-items:center;justify-content:space-between">
-            <span>PDF template : <span style="color:#2563EB;font-weight:600">'Tax Invoice'</span></span>
-            <button @click="$router.push('/template-editor')" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;color:#2563EB;font-size:11px;font-weight:600;cursor:pointer">
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              Edit Template
+          <!-- Terms & Conditions -->
+          <div v-if="tplSettings.termsAndConditions" class="zb-pdf-terms">
+            <div class="zb-pdf-terms-lbl">Terms &amp; Conditions</div>
+            {{tplSettings.termsAndConditions}}
+          </div>
+          <!-- Signature -->
+          <div v-if="tplSettings.showSignature" class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+          <!-- Footer (screen only) -->
+          <div class="zb-pdf-footer no-print" style="display:flex;align-items:center;justify-content:space-between">
+            <span style="color:#9ca3af;font-size:10px">Template: <b>{{tplSettings.template}}</b> · Color: <span :style="{color:tplSettings.accentColor,fontWeight:700}">{{tplSettings.accentColor}}</span></span>
+            <button @click="showCustomizer=true" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:5px;color:#2563EB;font-size:11px;font-weight:600;cursor:pointer">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+              Customize
             </button>
           </div>
         </div>
@@ -3282,19 +3565,126 @@
         if (!activeRule.value.showPlaceOfSupply) form.place_of_supply = "";
       });
 
+      const PAN_REGEX  = /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/;
+      const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+      const URL_REGEX  = /^https?:\/\/.+\..+/;
+      const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+      const FIELD_TAB = {
+        customer_name:"overview", first_name:"overview", last_name:"overview",
+        company_name:"overview", email_id:"overview", mobile_no:"overview",
+        phone:"overview", website:"overview", credit_limit:"overview",
+        tax_id:"overview", pan_no:"overview",
+        place_of_supply:"other", opening_balance:"other",
+        pincode:"address", ship_pincode:"address",
+        bank_account_no:"bank", bank_ifsc:"bank",
+      };
+
+      function validateField(field) {
+        delete formErrors[field];
+        const rule = activeRule.value;
+        const v = form[field];
+        const s = typeof v === "string" ? v.trim() : v;
+
+        if (field === "customer_name") {
+          if (!s) formErrors.customer_name = "Display name is required";
+          else if (s.length < 2) formErrors.customer_name = "Name must be at least 2 characters";
+          else if (s.length > 100) formErrors.customer_name = "Name must not exceed 100 characters";
+        }
+        if (field === "first_name" && s && !/^[a-zA-Z\s.']+$/.test(s))
+          formErrors.first_name = "First name must contain letters only";
+        if (field === "last_name" && s && !/^[a-zA-Z\s.']+$/.test(s))
+          formErrors.last_name = "Last name must contain letters only";
+        if (field === "company_name" && form.customer_type === "Company" && !s)
+          formErrors.company_name = "Company name is required for Business customers";
+        if (field === "email_id" && s && !EMAIL_REGEX.test(s))
+          formErrors.email_id = "Invalid email address";
+        if (field === "mobile_no" && s) {
+          const digits = s.replace(/\D/g, "");
+          if (form.mobile_code === "+91" && digits.length !== 10)
+            formErrors.mobile_no = "Indian mobile numbers must be exactly 10 digits";
+          else if (form.mobile_code !== "+91" && (digits.length < 7 || digits.length > 15))
+            formErrors.mobile_no = "Enter a valid mobile number (7–15 digits)";
+        }
+        if (field === "phone" && s && s.replace(/[^\d]/g, "").length < 6)
+          formErrors.phone = "Enter a valid phone number (min 6 digits)";
+        if (field === "website" && s && !URL_REGEX.test(s))
+          formErrors.website = "Website must start with http:// or https://";
+        if (field === "credit_limit" && v < 0)
+          formErrors.credit_limit = "Credit limit cannot be negative";
+        if (field === "tax_id") {
+          if (rule.requireGstin && !s)
+            formErrors.tax_id = "GSTIN is required for " + form.gst_treatment;
+          else if (rule.showGstin && s && !GSTIN_REGEX.test(s))
+            formErrors.tax_id = "Invalid GSTIN format (e.g. 27AAPFU0939F1ZV)";
+        }
+        if (field === "pan_no" && s && !PAN_REGEX.test(s))
+          formErrors.pan_no = "Invalid PAN format (e.g. ABCDE1234F)";
+        if (field === "place_of_supply" && rule.requirePlaceOfSupply && !v)
+          formErrors.place_of_supply = "Place of Supply is required";
+        if (field === "pincode" && s && s.length !== 6)
+          formErrors.pincode = "Pincode must be exactly 6 digits";
+        if (field === "ship_pincode" && s && s.length !== 6)
+          formErrors.ship_pincode = "Pincode must be exactly 6 digits";
+        if (field === "opening_balance" && v < 0)
+          formErrors.opening_balance = "Opening balance cannot be negative";
+        if (field === "bank_account_no" && s && !/^\d{9,18}$/.test(s))
+          formErrors.bank_account_no = "Account number must be 9–18 digits";
+        if (field === "bank_ifsc" && s && !IFSC_REGEX.test(s))
+          formErrors.bank_ifsc = "Invalid IFSC code (e.g. HDFC0001234)";
+      }
+
       function validateCustomerForm() {
         Object.keys(formErrors).forEach(k => delete formErrors[k]);
         const rule = activeRule.value;
-        if (!form.customer_name.trim()) formErrors.customer_name = "Display name is required";
-        if (form.email_id && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email_id)) formErrors.email_id = "Invalid email address";
-        if (rule.requireGstin && !form.tax_id.trim()) {
+
+        // Overview
+        const cn = (form.customer_name || "").trim();
+        if (!cn) formErrors.customer_name = "Display name is required";
+        else if (cn.length < 2) formErrors.customer_name = "Name must be at least 2 characters";
+        else if (cn.length > 100) formErrors.customer_name = "Name must not exceed 100 characters";
+        if (form.customer_type === "Company" && !form.company_name.trim())
+          formErrors.company_name = "Company name is required for Business customers";
+        if (form.first_name && !/^[a-zA-Z\s.']+$/.test(form.first_name.trim()))
+          formErrors.first_name = "First name must contain letters only";
+        if (form.last_name && !/^[a-zA-Z\s.']+$/.test(form.last_name.trim()))
+          formErrors.last_name = "Last name must contain letters only";
+        if (form.email_id && !EMAIL_REGEX.test(form.email_id.trim()))
+          formErrors.email_id = "Invalid email address";
+        if (form.mobile_no) {
+          const digits = form.mobile_no.replace(/\D/g, "");
+          if (form.mobile_code === "+91" && digits.length !== 10)
+            formErrors.mobile_no = "Indian mobile numbers must be exactly 10 digits";
+          else if (form.mobile_code !== "+91" && (digits.length < 7 || digits.length > 15))
+            formErrors.mobile_no = "Enter a valid mobile number (7–15 digits)";
+        }
+        if (form.phone && form.phone.replace(/[^\d]/g, "").length < 6)
+          formErrors.phone = "Enter a valid phone number (min 6 digits)";
+        if (form.website && !URL_REGEX.test(form.website.trim()))
+          formErrors.website = "Website must start with http:// or https://";
+        if (form.credit_limit < 0) formErrors.credit_limit = "Credit limit cannot be negative";
+        if (rule.requireGstin && !form.tax_id.trim())
           formErrors.tax_id = "GSTIN is required for " + form.gst_treatment;
-        } else if (rule.showGstin && form.tax_id.trim() && !GSTIN_REGEX.test(form.tax_id.trim())) {
+        else if (rule.showGstin && form.tax_id.trim() && !GSTIN_REGEX.test(form.tax_id.trim()))
           formErrors.tax_id = "Invalid GSTIN format (e.g. 27AAPFU0939F1ZV)";
-        }
-        if (rule.requirePlaceOfSupply && !form.place_of_supply) {
+        if (form.pan_no && !PAN_REGEX.test(form.pan_no.trim()))
+          formErrors.pan_no = "Invalid PAN format (e.g. ABCDE1234F)";
+
+        // Other
+        if (rule.requirePlaceOfSupply && !form.place_of_supply)
           formErrors.place_of_supply = "Place of Supply is required";
-        }
+        if (form.opening_balance < 0) formErrors.opening_balance = "Opening balance cannot be negative";
+
+        // Address
+        if (form.pincode && form.pincode.length !== 6) formErrors.pincode = "Pincode must be exactly 6 digits";
+        if (form.ship_pincode && form.ship_pincode.length !== 6) formErrors.ship_pincode = "Pincode must be exactly 6 digits";
+
+        // Bank
+        if (form.bank_account_no && !/^\d{9,18}$/.test(form.bank_account_no.replace(/\s/g, "")))
+          formErrors.bank_account_no = "Account number must be 9–18 digits";
+        if (form.bank_ifsc && !IFSC_REGEX.test(form.bank_ifsc.trim()))
+          formErrors.bank_ifsc = "Invalid IFSC code (e.g. HDFC0001234)";
+
         return Object.keys(formErrors).length === 0;
       }
 
@@ -3411,8 +3801,9 @@
 
       async function saveCustomer() {
         if (!validateCustomerForm()) {
-          const firstErr = Object.values(formErrors)[0];
-          toast(firstErr, "error");
+          const firstErrField = Object.keys(formErrors)[0];
+          if (firstErrField && FIELD_TAB[firstErrField]) drawerTab.value = FIELD_TAB[firstErrField];
+          toast(Object.values(formErrors)[0], "error");
           return;
         }
         saving.value = true;
@@ -3507,6 +3898,7 @@
         showDelete, deleteTarget, deleting,
         selectedCustomer, activeCustomerTab, selectCustomer, closeCustomer, custInitials,
         load, openAdd, openEdit, saveCustomer, confirmDelete, doDelete,
+        validateField, PAN_REGEX, IFSC_REGEX, EMAIL_REGEX, URL_REGEX, GSTIN_REGEX,
         icon, fmt, fmtDate,
       };
     },
@@ -3847,24 +4239,47 @@
                   <option value="">Salutation</option>
                   <option>Mr.</option><option>Ms.</option><option>Mrs.</option><option>Dr.</option><option>Prof.</option>
                 </select>
-                <input v-model="form.first_name" class="nim-input" placeholder="First Name"/>
-                <input v-model="form.last_name" class="nim-input" placeholder="Last Name"/>
+                <div style="position:relative">
+                  <input v-model="form.first_name" class="nim-input" placeholder="First Name"
+                    :style="formErrors.first_name?'border-color:#dc2626;background:#fff5f5':''"
+                    @input="form.first_name=form.first_name.replace(/[^a-zA-Z\s.']/g,''); delete formErrors.first_name"
+                    @blur="validateField('first_name')"/>
+                  <div v-if="formErrors.first_name" style="position:absolute;left:0;top:100%;margin-top:3px;font-size:11.5px;color:#dc2626;white-space:nowrap">{{formErrors.first_name}}</div>
+                </div>
+                <div style="position:relative">
+                  <input v-model="form.last_name" class="nim-input" placeholder="Last Name"
+                    :style="formErrors.last_name?'border-color:#dc2626;background:#fff5f5':''"
+                    @input="form.last_name=form.last_name.replace(/[^a-zA-Z\s.']/g,''); delete formErrors.last_name"
+                    @blur="validateField('last_name')"/>
+                  <div v-if="formErrors.last_name" style="position:absolute;left:0;top:100%;margin-top:3px;font-size:11.5px;color:#dc2626;white-space:nowrap">{{formErrors.last_name}}</div>
+                </div>
               </div>
             </div>
 
             <!-- 3. Company Name -->
             <div style="margin-bottom:16px">
-              <label class="nim-label">Company Name</label>
-              <input v-model="form.company_name" class="nim-input" placeholder="Company name"/>
+              <label class="nim-label">Company Name <span v-if="form.customer_type==='Company'" class="nim-req">*</span></label>
+              <input v-model="form.company_name" class="nim-input" placeholder="Company name"
+                :style="formErrors.company_name?'border-color:#dc2626;background:#fff5f5':''"
+                @input="delete formErrors.company_name"
+                @blur="validateField('company_name')"/>
+              <div v-if="formErrors.company_name" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                {{formErrors.company_name}}
+              </div>
             </div>
 
             <!-- 5. Display Name -->
             <div style="margin-bottom:16px">
-              <label class="nim-label">Display Name <span class="nim-req">*</span></label>
-              <input v-model="form.customer_name" class="nim-input"
+              <label class="nim-label" style="display:flex;justify-content:space-between">
+                <span>Display Name <span class="nim-req">*</span></span>
+                <span :style="{fontSize:'11px',color:form.customer_name.length>90?'#dc2626':form.customer_name.length>0?'#9ca3af':'transparent'}">{{form.customer_name.length}}/100</span>
+              </label>
+              <input v-model="form.customer_name" class="nim-input" maxlength="100"
                 :style="formErrors.customer_name?'border-color:#dc2626;background:#fff5f5':''"
                 placeholder="Name shown on invoices and orders"
-                @input="delete formErrors.customer_name"/>
+                @input="form.customer_name=form.customer_name.replace(/[^a-zA-Z\s.'-]/g,''); delete formErrors.customer_name"
+                @blur="validateField('customer_name')"/>
               <div v-if="formErrors.customer_name" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
                 {{formErrors.customer_name}}
@@ -3899,9 +4314,19 @@
                 </div>
                 <div v-if="activeRule.showPan">
                   <label class="nim-label">PAN Number <span style="font-size:11px;font-weight:400;color:#9ca3af">(optional)</span></label>
-                  <input v-model="form.pan_no" class="nim-input" placeholder="ABCDE1234F"
+                  <input v-model="form.pan_no" class="nim-input" placeholder="ABCDE1234F" maxlength="10"
                     style="font-family:var(--mono);letter-spacing:.04em"
-                    @input="form.pan_no=form.pan_no.toUpperCase()"/>
+                    :style="formErrors.pan_no?'border-color:#dc2626;background:#fff5f5':''"
+                    @input="form.pan_no=form.pan_no.toUpperCase().replace(/[^A-Z0-9]/g,''); delete formErrors.pan_no"
+                    @blur="validateField('pan_no')"/>
+                  <div v-if="formErrors.pan_no" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                    {{formErrors.pan_no}}
+                  </div>
+                  <div v-else-if="form.pan_no && PAN_REGEX.test(form.pan_no)" style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                    Valid PAN
+                  </div>
                 </div>
               </div>
             </transition>
@@ -3912,26 +4337,67 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px">
               <div>
                 <label class="nim-label">Email Address</label>
-                <input v-model="form.email_id" type="email" class="nim-input" placeholder="name@company.com"/>
+                <input v-model="form.email_id" class="nim-input" placeholder="name@company.com"
+                  :style="formErrors.email_id?'border-color:#dc2626;background:#fff5f5':form.email_id&&EMAIL_REGEX.test(form.email_id)?'border-color:#2f9e44':''"
+                  @input="delete formErrors.email_id"
+                  @blur="validateField('email_id')"/>
+                <div v-if="formErrors.email_id" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.email_id}}
+                </div>
+                <div v-else-if="form.email_id&&EMAIL_REGEX.test(form.email_id)" style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  Valid email
+                </div>
               </div>
               <div>
                 <label class="nim-label">Work Phone</label>
-                <input v-model="form.phone" class="nim-input" placeholder="022-12345678"/>
+                <input v-model="form.phone" class="nim-input" placeholder="022-12345678"
+                  :style="formErrors.phone?'border-color:#dc2626;background:#fff5f5':''"
+                  @input="form.phone=form.phone.replace(/[^\d+\-\s()]/g,''); delete formErrors.phone"
+                  @blur="validateField('phone')"/>
+                <div v-if="formErrors.phone" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.phone}}
+                </div>
               </div>
               <div>
                 <label class="nim-label">Mobile</label>
                 <div style="display:flex;gap:0">
-                  <select v-model="form.mobile_code" class="nim-input" style="width:90px;border-right:none;border-radius:8px 0 0 8px;background:#f8f9fc;cursor:pointer;flex-shrink:0;padding:0 6px">
+                  <select v-model="form.mobile_code" class="nim-input" style="width:90px;border-right:none;border-radius:8px 0 0 8px;background:#f8f9fc;cursor:pointer;flex-shrink:0;padding:0 6px"
+                    @change="delete formErrors.mobile_no; validateField('mobile_no')">
                     <option value="+91">🇮🇳 +91</option><option value="+1">🇺🇸 +1</option>
                     <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
                     <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
                   </select>
-                  <input v-model="form.mobile_no" class="nim-input" style="border-radius:0 8px 8px 0;flex:1" placeholder="98765 43210"/>
+                  <input v-model="form.mobile_no" class="nim-input" style="border-radius:0 8px 8px 0;flex:1" placeholder="98765 43210"
+                    :style="formErrors.mobile_no?'border-color:#dc2626;background:#fff5f5':form.mobile_no&&!formErrors.mobile_no&&form.mobile_no.replace(/\D/g,'').length>6?'border-color:#2f9e44':''"
+                    @input="form.mobile_no=form.mobile_no.replace(/\D/g,''); delete formErrors.mobile_no"
+                    @blur="validateField('mobile_no')"/>
+                </div>
+                <div v-if="formErrors.mobile_no" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.mobile_no}}
+                </div>
+                <div v-else-if="form.mobile_no&&!formErrors.mobile_no&&(form.mobile_code==='+91'?form.mobile_no.replace(/\D/g,'').length===10:form.mobile_no.replace(/\D/g,'').length>=7)" style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  Valid mobile number
                 </div>
               </div>
               <div>
                 <label class="nim-label">Website</label>
-                <input v-model="form.website" class="nim-input" placeholder="https://company.com"/>
+                <input v-model="form.website" class="nim-input" placeholder="https://company.com"
+                  :style="formErrors.website?'border-color:#dc2626;background:#fff5f5':form.website&&URL_REGEX.test(form.website)?'border-color:#2f9e44':''"
+                  @input="delete formErrors.website"
+                  @blur="validateField('website')"/>
+                <div v-if="formErrors.website" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.website}}
+                </div>
+                <div v-else-if="form.website&&URL_REGEX.test(form.website)" style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  Valid URL
+                </div>
               </div>
             </div>
 
@@ -3956,7 +4422,14 @@
               </div>
               <div>
                 <label class="nim-label">Credit Limit ({{{'INR':'₹','USD':'$','EUR':'€','GBP':'£','AED':'د.إ','SGD':'S$'}[form.default_currency]||'₹'}})</label>
-                <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"/>
+                <input v-model.number="form.credit_limit" type="number" min="0" class="nim-input" placeholder="0 = unlimited"
+                  :style="formErrors.credit_limit?'border-color:#dc2626;background:#fff5f5':''"
+                  @input="delete formErrors.credit_limit"
+                  @blur="validateField('credit_limit')"/>
+                <div v-if="formErrors.credit_limit" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.credit_limit}}
+                </div>
               </div>
             </div>
 
@@ -3983,7 +4456,8 @@
               </div>
               <div>
                 <label class="nim-label">City</label>
-                <input v-model="form.city" class="nim-input" placeholder="Mumbai"/>
+                <input v-model="form.city" class="nim-input" placeholder="Mumbai"
+                  @input="form.city=form.city.replace(/[^a-zA-Z\s]/g,'')"/>
               </div>
               <div>
                 <label class="nim-label">State</label>
@@ -3994,7 +4468,14 @@
               </div>
               <div>
                 <label class="nim-label">Pincode</label>
-                <input v-model="form.pincode" class="nim-input" placeholder="400001"/>
+                <input v-model="form.pincode" class="nim-input" placeholder="400001" maxlength="6"
+                  :style="formErrors.pincode?'border-color:#dc2626;background:#fff5f5':form.pincode&&form.pincode.length===6?'border-color:#2f9e44':''"
+                  @input="form.pincode=form.pincode.replace(/\D/g,'').slice(0,6); delete formErrors.pincode"
+                  @blur="validateField('pincode')"/>
+                <div v-if="formErrors.pincode" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.pincode}}
+                </div>
               </div>
               <div>
                 <label class="nim-label">Country</label>
@@ -4016,7 +4497,8 @@
               </div>
               <div>
                 <label class="nim-label">City</label>
-                <input v-model="form.ship_city" class="nim-input" placeholder="Mumbai"/>
+                <input v-model="form.ship_city" class="nim-input" placeholder="Mumbai"
+                  @input="form.ship_city=form.ship_city.replace(/[^a-zA-Z\s]/g,'')"/>
               </div>
               <div>
                 <label class="nim-label">State</label>
@@ -4027,7 +4509,14 @@
               </div>
               <div>
                 <label class="nim-label">Pincode</label>
-                <input v-model="form.ship_pincode" class="nim-input" placeholder="400001"/>
+                <input v-model="form.ship_pincode" class="nim-input" placeholder="400001" maxlength="6"
+                  :style="formErrors.ship_pincode?'border-color:#dc2626;background:#fff5f5':form.ship_pincode&&form.ship_pincode.length===6?'border-color:#2f9e44':''"
+                  @input="form.ship_pincode=form.ship_pincode.replace(/\D/g,'').slice(0,6); delete formErrors.ship_pincode"
+                  @blur="validateField('ship_pincode')"/>
+                <div v-if="formErrors.ship_pincode" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.ship_pincode}}
+                </div>
               </div>
               <div>
                 <label class="nim-label">Country</label>
@@ -4087,7 +4576,14 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px">
               <div>
                 <label class="nim-label">Opening Balance (₹)</label>
-                <input v-model.number="form.opening_balance" type="number" min="0" class="nim-input" placeholder="0.00"/>
+                <input v-model.number="form.opening_balance" type="number" min="0" class="nim-input" placeholder="0.00"
+                  :style="formErrors.opening_balance?'border-color:#dc2626;background:#fff5f5':''"
+                  @input="delete formErrors.opening_balance"
+                  @blur="validateField('opening_balance')"/>
+                <div v-if="formErrors.opening_balance" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.opening_balance}}
+                </div>
               </div>
             </div>
           </template>
@@ -4101,12 +4597,34 @@
                 <input v-model="form.bank_name" class="nim-input" placeholder="HDFC Bank, SBI, ICICI…"/>
               </div>
               <div>
-                <label class="nim-label">Account Number</label>
-                <input v-model="form.bank_account_no" class="nim-input" placeholder="XXXXXXXXXXXXXXXX" style="font-family:var(--mono)" @input="form.bank_account_no=form.bank_account_no.replace(/\s/g,'')"/>
+                <label class="nim-label">Account Number <span style="font-size:11px;font-weight:400;color:#9ca3af">(9–18 digits)</span></label>
+                <input v-model="form.bank_account_no" class="nim-input" placeholder="XXXXXXXXXXXXXXXX" maxlength="18" style="font-family:var(--mono)"
+                  :style="formErrors.bank_account_no?'border-color:#dc2626;background:#fff5f5':form.bank_account_no&&!formErrors.bank_account_no&&/^\d{9,18}$/.test(form.bank_account_no)?'border-color:#2f9e44':''"
+                  @input="form.bank_account_no=form.bank_account_no.replace(/\D/g,''); delete formErrors.bank_account_no"
+                  @blur="validateField('bank_account_no')"/>
+                <div v-if="formErrors.bank_account_no" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.bank_account_no}}
+                </div>
+                <div v-else-if="form.bank_account_no&&/^\d{9,18}$/.test(form.bank_account_no)" style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  Valid account number
+                </div>
               </div>
               <div>
-                <label class="nim-label">IFSC Code</label>
-                <input v-model="form.bank_ifsc" class="nim-input" placeholder="HDFC0000001" style="font-family:var(--mono)" @input="form.bank_ifsc=form.bank_ifsc.toUpperCase()"/>
+                <label class="nim-label">IFSC Code <span style="font-size:11px;font-weight:400;color:#9ca3af">(AAAA0XXXXXX)</span></label>
+                <input v-model="form.bank_ifsc" class="nim-input" placeholder="HDFC0001234" maxlength="11" style="font-family:var(--mono)"
+                  :style="formErrors.bank_ifsc?'border-color:#dc2626;background:#fff5f5':form.bank_ifsc&&IFSC_REGEX.test(form.bank_ifsc)?'border-color:#2f9e44':''"
+                  @input="form.bank_ifsc=form.bank_ifsc.toUpperCase().replace(/[^A-Z0-9]/g,''); delete formErrors.bank_ifsc"
+                  @blur="validateField('bank_ifsc')"/>
+                <div v-if="formErrors.bank_ifsc" style="margin-top:4px;font-size:12px;color:#dc2626;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12" y2="16"/></svg>
+                  {{formErrors.bank_ifsc}}
+                </div>
+                <div v-else-if="form.bank_ifsc&&IFSC_REGEX.test(form.bank_ifsc)" style="margin-top:4px;font-size:12px;color:#2f9e44;display:flex;align-items:center;gap:4px">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+                  Valid IFSC
+                </div>
               </div>
             </div>
           </template>
@@ -4759,7 +5277,8 @@
               <div class="nim-grid-3 nim-mb">
                 <div class="nim-field" style="grid-column:span 3">
                   <label class="nim-label">Vendor Name <span class="nim-req">*</span></label>
-                  <input v-model="form.supplier_name" class="nim-input" placeholder="Company or individual name"/>
+                  <input v-model="form.supplier_name" class="nim-input" placeholder="Company or individual name"
+                    @input="form.supplier_name=form.supplier_name.replace(/[^a-zA-Z\s.'&-]/g,'')"/>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Vendor Type</label>
@@ -4801,12 +5320,14 @@
                       <option value="+44">🇬🇧 +44</option><option value="+61">🇦🇺 +61</option>
                       <option value="+971">🇦🇪 +971</option><option value="+65">🇸🇬 +65</option>
                     </select>
-                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"/>
+                    <input v-model="form.mobile_no" class="nim-input" style="border-top-left-radius:0; border-bottom-left-radius:0; flex:1;" placeholder="98765 43210"
+                      @input="form.mobile_no=form.mobile_no.replace(/\D/g,'')"/>
                   </div>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Phone</label>
-                  <input v-model="form.phone" class="nim-input" placeholder="Landline"/>
+                  <input v-model="form.phone" class="nim-input" placeholder="Landline"
+                    @input="form.phone=form.phone.replace(/[^\d+\-\s()]/g,'')"/>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Website</label>
@@ -4826,15 +5347,18 @@
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">City</label>
-                  <input v-model="form.city" class="nim-input" placeholder="Mumbai"/>
+                  <input v-model="form.city" class="nim-input" placeholder="Mumbai"
+                    @input="form.city=form.city.replace(/[^a-zA-Z\s]/g,'')"/>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">State</label>
-                  <input v-model="form.state" class="nim-input" placeholder="Maharashtra"/>
+                  <input v-model="form.state" class="nim-input" placeholder="Maharashtra"
+                    @input="form.state=form.state.replace(/[^a-zA-Z\s]/g,'')"/>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Pincode</label>
-                  <input v-model="form.pincode" class="nim-input" placeholder="400001"/>
+                  <input v-model="form.pincode" class="nim-input" placeholder="400001" maxlength="6"
+                    @input="form.pincode=form.pincode.replace(/\D/g,'').slice(0,6)"/>
                 </div>
                 <div class="nim-field">
                   <label class="nim-label">Country</label>
@@ -5124,11 +5648,34 @@
         finally { showDelete.value = false; deleting.value = false; }
       }
       function openConvert(q) { convertTarget.value = q; showConvert.value = true; }
-      function doConvert() {
+      async function doConvert() {
         const q = convertTarget.value;
-        localStorage.setItem("convert_to_invoice", JSON.stringify({ ...q, source_type:"Quote", source_name:q.name }));
-        toast("Drafting invoice — please save it to confirm", "info");
         showConvert.value = false;
+        try {
+          // Fetch the full Quotation document to get its items child table
+          const full = await apiGET("frappe.client.get", { doctype: "Quotation", name: q.name });
+          const items = (full?.items || []).map(i => ({
+            item_name: i.item_name || i.item_code || "",
+            item_code: i.item_code || i.item_name || "",
+            description: i.description || "",
+            qty: flt(i.qty) || 1,
+            rate: flt(i.rate) || 0,
+            amount: flt(i.amount) || 0,
+          }));
+          localStorage.setItem("convert_to_invoice", JSON.stringify({
+            customer: q.customer,
+            date: q.transaction_date,
+            expiry: q.valid_till,
+            items,
+            taxes: (full?.taxes || []).map(t => ({ tax_type: t.description || t.charge_type || "GST", description: t.description || "", rate: flt(t.rate), tax_amount: flt(t.tax_amount), account_head: t.account_head || "" })),
+            source_type: "Quote",
+            source_name: q.name,
+          }));
+        } catch(e) {
+          // Fallback: store header only — items will be empty
+          localStorage.setItem("convert_to_invoice", JSON.stringify({ ...q, source_type:"Quote", source_name:q.name }));
+        }
+        toast("Drafting invoice — please save it to confirm", "info");
         router.push({ name: "invoices" });
       }
 
@@ -5462,15 +6009,219 @@
 `});
 
   /* ═══════════════════════════════════════════════════════════════
+     QUOTE SEND EMAIL MODAL
+  ═══════════════════════════════════════════════════════════════ */
+  const QuoteSendEmailModal = defineComponent({
+    name: "QuoteSendEmailModal",
+    props: { show: Boolean, quoteName: { type: String, default: "" }, quot: { type: Object, default: null } },
+    emits: ["close", "sent"],
+    setup(props, { emit }) {
+      const sending = ref(false);
+      const error = ref("");
+      const toVal = ref(""); const toTags = ref([]);
+      const ccVal = ref(""); const ccTags = ref([]);
+      const subject = ref("");
+      const showCc = ref(false);
+      const editorRef = ref(null);
+      const previewRef = ref(null);
+
+      function addTag(val, tags) { const v = (val||"").trim().replace(/,$/,""); if (v && !tags.value.includes(v)) tags.value.push(v); }
+      function removeTag(tags, i) { tags.value.splice(i, 1); }
+      function onToKey(e) { if (["Enter",","," "].includes(e.key)) { e.preventDefault(); addTag(toVal.value, toTags); toVal.value=""; } }
+      function onCcKey(e) { if (["Enter",","," "].includes(e.key)) { e.preventDefault(); addTag(ccVal.value, ccTags); ccVal.value=""; } }
+      function onToBlur() { addTag(toVal.value, toTags); toVal.value=""; }
+      function onCcBlur() { addTag(ccVal.value, ccTags); ccVal.value=""; }
+      function execCmd(cmd) { document.execCommand(cmd, false, null); editorRef.value?.focus(); }
+      function syncPreview() { if (previewRef.value && editorRef.value) previewRef.value.innerHTML = editorRef.value.innerHTML; }
+
+      function buildQuoteBody(q) {
+        if (!q) return "<p style='color:#888'>Loading…</p>";
+        // Read saved template settings for quote
+        let tpl = {};
+        try { tpl = JSON.parse(localStorage.getItem('zb_tpl_quote') || '{}'); } catch {}
+        const ac = tpl.accentColor || '#7048E8';
+        const isPro = tpl.template === 'professional';
+        const fmt2 = n => "₹" + Number(n||0).toLocaleString("en-IN", {minimumFractionDigits:2, maximumFractionDigits:2});
+        const thStyle = `padding:8px 10px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;background:#f8f9fc;border-bottom:2px solid #e4e8f0;text-align:left`;
+        const tdStyle = `padding:8px 10px;font-size:12px;color:#374151;vertical-align:middle;border-bottom:1px solid #f1f3f7`;
+        const rows = (q.items||[]).map((it,i) => `<tr>
+          <td style="${tdStyle};text-align:center;color:#aaa;font-size:12px">${i+1}</td>
+          <td style="${tdStyle}"><div style="font-weight:600;color:#1a1d23">${it.item_name||it.item_code||"Item"}</div>${it.description&&it.description!==it.item_name?`<div style="font-size:11px;color:#888;margin-top:1px">${it.description}</div>`:""}</td>
+          <td style="${tdStyle};text-align:right;font-family:monospace">${Number(it.qty||0).toFixed(2)}</td>
+          <td style="${tdStyle};text-align:right;font-family:monospace">${fmt2(it.rate)}</td>
+          <td style="${tdStyle};text-align:right;font-family:monospace;font-weight:600">${fmt2(it.amount)}</td>
+        </tr>`).join("");
+        const taxRows = (q.taxes||[]).map(t => `<div style="display:flex;justify-content:space-between;font-size:12px;color:#6b7280;padding:3px 0;border-bottom:1px solid #f1f3f7"><span>${t.tax_type||t.description||"Tax"} (${Number(t.rate||0).toFixed(1)}%)</span><span>${fmt2(t.tax_amount)}</span></div>`).join("");
+        const headerBg = isPro ? `background:${ac};padding:20px 28px;margin:-28px -28px 20px` : `padding-bottom:16px;border-bottom:2px solid #111827;margin-bottom:20px`;
+        const headerTextCol = isPro ? '#fff' : '#111827';
+        const headerMetaCol = isPro ? 'rgba(255,255,255,.8)' : '#6b7280';
+        const logoHtml = tpl.showLogo && tpl.logoUrl ? `<img src="${tpl.logoUrl}" style="height:40px;object-fit:contain;margin-bottom:8px;display:block"/>` : '';
+        const termsHtml = tpl.termsAndConditions ? `<div style="border-top:1px solid #e4e8f0;padding-top:12px;margin-top:8px;font-size:11px;color:#6b7280;white-space:pre-wrap;line-height:1.6"><div style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px">Terms &amp; Conditions</div>${tpl.termsAndConditions}</div>` : '';
+        return `<div style="font-family:'Helvetica Neue',Arial,sans-serif;max-width:660px;margin:0 auto;background:#fff;padding:28px;border:1px solid #e4e8f0;border-radius:6px">
+          <div style="${headerBg}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div>${logoHtml}<div style="font-size:18px;font-weight:800;color:${headerTextCol};letter-spacing:-.01em">${tpl.companyOverride||q.company||'Your Company'}</div>${tpl.addressLine1?`<div style="font-size:11px;color:${headerMetaCol};margin-top:2px">${tpl.addressLine1}</div>`:''}</div>
+              <div style="text-align:right"><div style="font-size:20px;font-weight:900;color:${headerTextCol};letter-spacing:.04em;text-transform:uppercase">QUOTATION</div><div style="font-size:12px;color:${headerMetaCol};margin-top:4px">${q.name||''}</div></div>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12px">
+            <thead><tr><th style="background:#f8f9fc;padding:6px 8px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;border:1px solid #e4e8f0">Quote #</th><th style="background:#f8f9fc;padding:6px 8px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;border:1px solid #e4e8f0">Quote Date</th><th style="background:#f8f9fc;padding:6px 8px;font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.06em;border:1px solid #e4e8f0">Valid Until</th></tr></thead>
+            <tbody><tr><td style="padding:6px 8px;border:1px solid #e4e8f0;color:#374151">${q.name||''}</td><td style="padding:6px 8px;border:1px solid #e4e8f0;color:#374151">${q.transaction_date||''}</td><td style="padding:6px 8px;border:1px solid #e4e8f0;color:#374151">${q.valid_till||'—'}</td></tr></tbody>
+          </table>
+          <div style="margin-bottom:16px"><div style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.08em;margin-bottom:4px">Quote To</div><div style="font-size:14px;font-weight:700;color:${ac}">${q.customer_name||q.customer||''}</div></div>
+          <table style="width:100%;border-collapse:collapse;margin-bottom:0">
+            <thead><tr><th style="${thStyle};width:5%;text-align:center">#</th><th style="${thStyle}">Item &amp; Description</th><th style="${thStyle};text-align:right">Qty</th><th style="${thStyle};text-align:right">Rate</th><th style="${thStyle};text-align:right">Amount</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+          <div style="display:flex;border-top:2px solid #e4e8f0">
+            <div style="flex:1;padding:12px 10px;border-right:1px solid #e4e8f0;font-size:11px">
+              ${tpl.showAmountWords!==false?`<div style="font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:3px">Total In Words</div><div style="font-size:11px;color:#374151;line-height:1.5;font-style:italic">(see invoice for amount in words)</div>`:''}
+              ${q.notes?`<div style="margin-top:8px;font-size:11px;color:#555;white-space:pre-wrap">${q.notes}</div>`:''}
+            </div>
+            <div style="width:200px;min-width:160px;padding:8px 12px">
+              <div style="display:flex;justify-content:space-between;font-size:12px;color:#6b7280;padding:4px 0;border-bottom:1px solid #f1f3f7"><span>Sub Total</span><span>${fmt2(q.net_total)}</span></div>
+              ${taxRows}
+              <div style="display:flex;justify-content:space-between;font-weight:800;font-size:14px;color:${ac};padding:7px 0;border-top:2px solid #111827;margin-top:4px"><span>Grand Total</span><span>${fmt2(q.grand_total)}</span></div>
+            </div>
+          </div>
+          ${termsHtml}
+          ${tpl.showSignature!==false?`<div style="display:flex;justify-content:flex-end;padding:14px 0 6px"><div style="width:180px;text-align:center;border-top:1px solid #9ca3af;padding-top:5px;font-size:10px;color:#9ca3af">Authorized Signature</div></div>`:''}
+          <div style="text-align:center;font-size:11px;color:#9ca3af;border-top:1px solid #e4e8f0;padding-top:10px;margin-top:4px">This quotation is valid until <strong>${q.valid_till||'N/A'}</strong>. Please reply to accept or discuss changes.</div>
+        </div>`;
+      }
+
+      watch(() => props.show, async v => {
+        if (v && props.quoteName) {
+          toTags.value=[]; ccTags.value=[]; toVal.value=""; ccVal.value=""; error.value="";
+          try {
+            const d = await apiGET("zoho_books_clone.api.books_data.get_quote_email_defaults", { quote_name: props.quoteName });
+            if (d.to) toTags.value = [d.to];
+            subject.value = d.subject || ("Quotation " + props.quoteName);
+          } catch { subject.value = "Quotation " + props.quoteName; }
+          await nextTick();
+          const html = buildQuoteBody(props.quot);
+          if (editorRef.value) { editorRef.value.innerHTML = html; }
+          if (previewRef.value) { previewRef.value.innerHTML = html; }
+        }
+      });
+
+      watch(() => props.quot, async q => {
+        if (props.show && q) {
+          await nextTick();
+          const html = buildQuoteBody(q);
+          if (editorRef.value) { editorRef.value.innerHTML = html; }
+          if (previewRef.value) { previewRef.value.innerHTML = html; }
+        }
+      });
+
+      async function send() {
+        if (toVal.value.trim()) { addTag(toVal.value, toTags); toVal.value=""; }
+        if (!toTags.value.length) { error.value = "Please enter at least one recipient email address."; return; }
+        sending.value = true; error.value = "";
+        const bodyHtml = editorRef.value?.innerHTML || "";
+        try {
+          await apiPOST("zoho_books_clone.api.books_data.send_quote_email", {
+            quote_name: props.quoteName,
+            to: toTags.value.join(","),
+            subject: subject.value,
+            body: bodyHtml,
+            cc: ccTags.value.join(","),
+          });
+          toast("Quotation emailed to " + toTags.value.join(", "));
+          emit("sent");
+          emit("close");
+        } catch(e) {
+          const msg = e.message || "";
+          if (msg.toLowerCase().includes("email account") || msg.toLowerCase().includes("outgoing")) {
+            error.value = "No outgoing email configured. Go to Settings → Email to set up SMTP, or ask your administrator.";
+          } else {
+            error.value = msg || "Failed to send email.";
+          }
+        }
+        finally { sending.value = false; }
+      }
+
+      return { sending, error, toVal, toTags, ccVal, ccTags, subject, showCc, editorRef, previewRef, removeTag, onToKey, onCcKey, onToBlur, onCcBlur, execCmd, syncPreview, send };
+    },
+    template: `
+<teleport to="body">
+<div v-if="show" class="sem-page">
+  <div class="sem-page-header">
+    <div style="display:flex;align-items:center;gap:12px">
+      <button class="sem-back-btn" @click="$emit('close')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      </button>
+      <h2 class="sem-page-title">Email Quotation to {{quot&&(quot.customer_name||quot.customer)||'Customer'}}</h2>
+    </div>
+    <button class="sem-send-btn" @click="send" :disabled="sending">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+      {{sending?'Sending…':'Send Quotation'}}
+    </button>
+  </div>
+
+  <div class="sem-content">
+    <div v-if="error" class="sem-error">⚠ {{error}}</div>
+
+    <!-- Left: compose -->
+    <div class="sem-compose">
+      <div class="sem-row"><span class="sem-row-label">To</span>
+        <div class="sem-tags-wrap">
+          <span v-for="(t,i) in toTags" :key="i" class="sem-tag">{{t}}<button class="sem-tag-remove" @click="removeTag(toTags,i)">✕</button></span>
+          <input class="sem-tag-input" v-model="toVal" @keydown="onToKey" @blur="onToBlur" placeholder="customer@email.com"/>
+        </div>
+        <button class="sem-cc-toggle" @click="showCc=!showCc">CC</button>
+      </div>
+      <div class="sem-row" v-if="showCc"><span class="sem-row-label">CC</span>
+        <div class="sem-tags-wrap">
+          <span v-for="(t,i) in ccTags" :key="i" class="sem-tag">{{t}}<button class="sem-tag-remove" @click="removeTag(ccTags,i)">✕</button></span>
+          <input class="sem-tag-input" v-model="ccVal" @keydown="onCcKey" @blur="onCcBlur" placeholder="cc@email.com"/>
+        </div>
+      </div>
+      <div class="sem-row sem-subject-row"><span class="sem-row-label">Subject</span><input class="sem-subject-input" v-model="subject" placeholder="Quotation subject…"/></div>
+      <!-- Toolbar -->
+      <div class="sem-toolbar">
+        <button class="sem-tb-btn" @click="execCmd('bold')" title="Bold"><b>B</b></button>
+        <button class="sem-tb-btn" @click="execCmd('italic')" title="Italic"><i>I</i></button>
+        <button class="sem-tb-btn" @click="execCmd('underline')" title="Underline"><u>U</u></button>
+      </div>
+      <!-- Body editor -->
+      <div ref="editorRef" class="sem-editor qsem-editor" contenteditable="true" style="min-height:320px" @input="syncPreview"></div>
+    </div>
+
+    <!-- Right: preview -->
+    <div class="sem-preview">
+      <div class="sem-preview-label">PREVIEW</div>
+      <div class="sem-preview-frame">
+        <div ref="previewRef" class="qsem-preview" style="pointer-events:none;font-family:Arial,sans-serif"></div>
+      </div>
+    </div>
+  </div>
+</div>
+</teleport>`
+  });
+
+  /* ═══════════════════════════════════════════════════════════════
      QUOTE DETAIL COMPONENT  (two-panel — sidebar list + PDF view)
   ═══════════════════════════════════════════════════════════════ */
   const QuoteDetail = defineComponent({
     name: "QuoteDetail",
+    components: { QuoteSendEmailModal, TemplateCustomizerPanel },
     setup() {
       const route  = useRouter();
       const router = useRouter();
       const vRoute = useRoute();
       const quoteName = computed(() => vRoute.params.name);
+      const showCustomizer = ref(false);
+      const { settings: tplSettings, saveSettings: saveTplSettings } = useTemplateSettings('quote');
+      const tplHeaderStyle = Vue.computed(() => {
+        if (tplSettings.template === 'professional') return { background: tplSettings.accentColor, padding: '20px 24px', margin: '-24px -28px 20px', borderBottom: 'none' };
+        if (tplSettings.template === 'minimal') return { borderBottom: '1px solid #e4e8f0' };
+        return {};
+      });
+      const tplTitleStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: '#fff' } : {});
+      const tplCoNameStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: '#fff' } : {});
+      const tplCoMetaStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: 'rgba(255,255,255,.8)' } : {});
+      const tplBillNameStyle = Vue.computed(() => ({ color: tplSettings.accentColor }));
 
       // ── Sidebar list ──────────────────────────────────────────────
       const list        = ref([]);
@@ -5666,9 +6417,14 @@
         const q = quot.value;
         if (!q) return;
         localStorage.setItem("convert_to_invoice", JSON.stringify({
-          name: q.name, customer: q.customer, subject: q.title,
-          date: q.transaction_date, expiry: q.valid_till,
-          grand_total: q.grand_total, items: q.items||[], taxes: q.taxes||[],
+          customer: q.customer, date: q.transaction_date, expiry: q.valid_till,
+          items: (q.items||[]).map(i => ({
+            item_name: i.item_name || i.item_code || "",
+            item_code: i.item_code || i.item_name || "",
+            description: i.description || "",
+            qty: flt(i.qty) || 1, rate: flt(i.rate) || 0, amount: flt(i.amount) || 0,
+          })),
+          taxes: (q.taxes||[]).map(t => ({ tax_type: t.description||t.charge_type||"GST", description: t.description||"", rate: flt(t.rate), tax_amount: flt(t.tax_amount), account_head: t.account_head||"" })),
           source_type:"Quote", source_name: q.name,
         }));
         toast("Drafting invoice — save it to confirm","info");
@@ -5677,17 +6433,9 @@
       }
 
       function printPdf() {
-        const paper = document.getElementById("zb-quote-paper");
-        if (!paper) { window.print(); return; }
-        const cssHref = Array.from(document.styleSheets)
-          .map(s=>{ try{ return s.href; }catch{ return null; } })
-          .filter(h=>h&&h.includes("books.css"))[0]||"";
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Quote</title>
-          ${cssHref?`<link rel="stylesheet" href="${cssHref}">`:""}
-          <style>@page{margin:12mm}body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}.zb-sent-ribbon,.zb-draft-ribbon{display:none!important}</style>
-        </head><body><div class="zb-pdf-paper">${paper.innerHTML}</div>
-        <script>window.onload=function(){window.print();window.close();}<\/script></body></html>`;
-        const w = window.open("","_blank","width=800,height=900");
+        const html = buildPdfHtml("zb-quote-paper", "Quotation " + (quot.value?.name || ""), tplSettings);
+        if (!html) { toast("Nothing to print","error"); return; }
+        const w = window.open("","_blank","width=860,height=1000");
         if (!w) { toast("Allow pop-ups to print","error"); return; }
         w.document.write(html); w.document.close();
       }
@@ -5708,15 +6456,25 @@
         return "b-badge-amber";
       });
 
+      function onEmailSent() {
+        // After email sent, refresh detail so status shows "Sent"
+        if (quoteName.value) loadDetail(quoteName.value);
+        // Also update the list row
+        const row = list.value.find(r => r.name === quoteName.value);
+        if (row) row.status = "Sent";
+      }
+
       return {
         quoteName, list, listLoading, activeF, search, counts, filtered, qStatus, isExpiredQ, goQuote,
         quot, detailLoading, detailError, editing, saving, deleting,
         showDel, showConvert, showSendEmail,
         form, custSearch, showCustDrop, custDropItems,
         netTotal, taxTotal, grandTotal,
-        startEdit, saveEdit, markStatus, doDelete, doConvert, printPdf,
+        startEdit, saveEdit, markStatus, doDelete, doConvert, printPdf, onEmailSent,
         recalc, addItem, removeItem, addTax, removeTax, onItemPick, pickCustomer,
         statusBadgeCls, toWords, fmt, fmtDate, flt, icon,
+        showCustomizer, tplSettings, saveTplSettings,
+        tplHeaderStyle, tplTitleStyle, tplCoNameStyle, tplCoMetaStyle, tplBillNameStyle,
       };
     },
     template: `
@@ -5813,14 +6571,14 @@
           <template v-if="editing">
             <button class="zb-ab-btn" @click="editing=false">Cancel</button>
             <button class="zb-ab-btn" @click="saveEdit('Draft')" :disabled="saving">Save Draft</button>
-            <button class="zb-ab-btn zb-ab-primary" @click="saveEdit('Sent')" :disabled="saving">
+            <button class="zb-ab-btn zb-ab-primary" @click="saveEdit('Draft').then(()=>{showSendEmail=true})" :disabled="saving">
               <span v-if="saving" v-html="icon('refresh',12)" style="animation:spin 1s linear infinite"></span>
               {{saving?'Saving…':'Save & Send'}}
             </button>
           </template>
           <template v-else>
             <button class="zb-ab-btn" @click="startEdit"><span v-html="icon('edit',12)"></span> Edit</button>
-            <button class="zb-ab-btn" @click="markStatus('Sent')" :disabled="saving" title="Mark as Sent">
+            <button class="zb-ab-btn zb-ab-primary" @click="showSendEmail=true" title="Send Quotation by Email" style="background:#7048E8;color:#fff;border-color:#7048E8">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               Send
             </button>
@@ -5875,17 +6633,26 @@
 
         <!-- ── PDF VIEW ── -->
         <div class="zb-pdf-wrap" v-if="!editing">
-          <div class="zb-pdf-paper" id="zb-quote-paper">
-            <div v-if="quot.status==='Sent'||quot.status==='Accepted'" class="zb-sent-ribbon">{{quot.status}}</div>
-            <div v-else class="zb-draft-ribbon">{{quot.status||'Draft'}}</div>
-
-            <div class="zb-pdf-head">
+          <template-customizer-panel :show="showCustomizer" :settings="tplSettings" @close="showCustomizer=false" @save="saveTplSettings"/>
+          <div style="width:100%;max-width:660px;display:flex;justify-content:flex-end;margin-bottom:10px;position:sticky;top:0;z-index:50">
+            <button @click="showCustomizer=true"
+              :style="{display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 16px',background:tplSettings.accentColor,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12.5px',fontWeight:'600',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.2)'}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+              Customize ▾
+            </button>
+          </div>
+          <div class="zb-pdf-paper" id="zb-quote-paper" :class="'tpl-'+tplSettings.template">
+            <div v-if="quot.status==='Sent'||quot.status==='Accepted'" class="zb-sent-ribbon no-print">{{quot.status}}</div>
+            <div v-else class="zb-draft-ribbon no-print">{{quot.status||'Draft'}}</div>
+            <div class="zb-pdf-head" :style="tplHeaderStyle">
               <div>
-                <div class="zb-pdf-co-name">{{quot.company||'Your Company'}}</div>
+                <img v-if="tplSettings.showLogo && tplSettings.logoUrl" :src="tplSettings.logoUrl" style="height:44px;object-fit:contain;margin-bottom:8px;display:block" @error="$event.target.style.display='none'"/>
+                <div class="zb-pdf-co-name" :style="tplCoNameStyle">{{tplSettings.companyOverride||quot.company||'Your Company'}}</div>
+                <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="tplSettings.addressLine1">{{tplSettings.addressLine1}}</div>
+                <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="tplSettings.phone||tplSettings.email">{{[tplSettings.phone,tplSettings.email].filter(Boolean).join(' · ')}}</div>
               </div>
-              <div class="zb-pdf-inv-title">QUOTATION</div>
+              <div class="zb-pdf-inv-title" :style="tplTitleStyle">QUOTATION</div>
             </div>
-
             <table class="zb-pdf-info-table">
               <thead><tr><th>Quote #</th><th>Quote Date</th><th>Valid Until</th><th>Subject</th></tr></thead>
               <tbody><tr>
@@ -5895,18 +6662,19 @@
                 <td>{{quot.title||'—'}}</td>
               </tr></tbody>
             </table>
-
             <div class="zb-pdf-bill-section">
               <div class="zb-pdf-bill-label">Quote To</div>
-              <div class="zb-pdf-bill-name">{{quot.customer_name||quot.customer}}</div>
+              <div class="zb-pdf-bill-name" :style="tplBillNameStyle">{{quot.customer_name||quot.customer}}</div>
             </div>
-
             <table class="zb-pdf-items">
               <thead><tr>
                 <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
                 <th class="zb-pdf-th">Item &amp; Description</th>
+                <th v-if="tplSettings.showHSN" class="zb-pdf-th">HSN/SAC</th>
+                <th v-if="tplSettings.showUOM" class="zb-pdf-th" style="text-align:center">UOM</th>
                 <th class="zb-pdf-th" style="text-align:right">Qty</th>
                 <th class="zb-pdf-th" style="text-align:right">Rate</th>
+                <th v-if="tplSettings.showDiscount" class="zb-pdf-th" style="text-align:right">Disc%</th>
                 <th class="zb-pdf-th" style="text-align:right">Amount</th>
               </tr></thead>
               <tbody>
@@ -5916,24 +6684,28 @@
                     <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
                     <div v-if="item.description&&item.description!==item.item_name" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
                   </td>
-                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}<div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div></td>
+                  <td v-if="tplSettings.showHSN" class="zb-pdf-td" style="font-size:11px;color:#6b7280">{{item.gst_hsn_code||'—'}}</td>
+                  <td v-if="tplSettings.showUOM" class="zb-pdf-td" style="text-align:center;font-size:11px;color:#6b7280">{{item.uom||'pcs'}}</td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}</td>
                   <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                  <td v-if="tplSettings.showDiscount" class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.discount_percentage||0).toFixed(1)}}%</td>
                   <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
                 </tr>
               </tbody>
             </table>
-
             <div class="zb-pdf-bottom">
               <div class="zb-pdf-words-block">
-                <div class="zb-pdf-words-lbl">Total In Words</div>
-                <div class="zb-pdf-words-val"><i>{{toWords(flt(quot.grand_total))}}</i></div>
+                <template v-if="tplSettings.showAmountWords">
+                  <div class="zb-pdf-words-lbl">Total In Words</div>
+                  <div class="zb-pdf-words-val"><i>{{toWords(flt(quot.grand_total))}}</i></div>
+                </template>
                 <div v-if="quot.notes" style="margin-top:10px">
                   <div class="zb-pdf-words-lbl">Notes</div>
                   <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{quot.notes}}</div>
                 </div>
-                <div v-if="quot.terms" style="margin-top:10px">
-                  <div class="zb-pdf-words-lbl">Terms &amp; Conditions</div>
-                  <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{quot.terms}}</div>
+                <div v-if="tplSettings.showBankDetails && tplSettings.bankDetails" style="margin-top:10px">
+                  <div class="zb-pdf-words-lbl">Bank Details</div>
+                  <div style="font-size:11px;color:#374151;margin-top:3px;white-space:pre-wrap;background:#f8f9fc;padding:6px 8px;border-radius:4px;border:1px solid #e4e8f0">{{tplSettings.bankDetails}}</div>
                 </div>
               </div>
               <div class="zb-pdf-totals-block">
@@ -5941,13 +6713,17 @@
                 <div class="zb-pdf-total-row" v-for="tax in (quot.taxes||[])" :key="tax.tax_type">
                   <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
                 </div>
-                <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Grand Total</span><span>{{fmt(quot.grand_total)}}</span></div>
+                <div class="zb-pdf-total-row zb-pdf-total-bold" :style="{color:tplSettings.accentColor}"><span>Grand Total</span><span>{{fmt(quot.grand_total)}}</span></div>
               </div>
             </div>
-            <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
-            <div class="zb-pdf-footer">
-              <span>QUOTATION</span>
-              <span style="color:#9ca3af;font-size:11px">Valid until: {{fmtDate(quot.valid_till)||'—'}}</span>
+            <div v-if="tplSettings.termsAndConditions" class="zb-pdf-terms">
+              <div class="zb-pdf-terms-lbl">Terms &amp; Conditions</div>
+              {{tplSettings.termsAndConditions}}
+            </div>
+            <div v-if="tplSettings.showSignature" class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+            <div class="zb-pdf-footer no-print" style="display:flex;align-items:center;justify-content:space-between">
+              <span style="color:#9ca3af;font-size:10px">Valid until: {{fmtDate(quot.valid_till)||'—'}}</span>
+              <button @click="showCustomizer=true" style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;background:#f3f0ff;border:1px solid #d3c6fb;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer" :style="{color:tplSettings.accentColor}">Customize</button>
             </div>
           </div>
         </div>
@@ -5960,7 +6736,8 @@
               <div class="zb-form-field" style="position:relative">
                 <label class="zb-form-label">Customer *</label>
                 <input v-model="custSearch" class="zb-form-input" placeholder="Search customer…" autocomplete="off"
-                  @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                  @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)"
+                  @input="custSearch=custSearch.replace(/[^a-zA-Z\s.'\-]/g,''); showCustDrop=true"/>
                 <div v-if="showCustDrop&&custDropItems.length" class="qt-cust-drop" style="z-index:200">
                   <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
                     <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
@@ -6092,6 +6869,15 @@
       </div>
     </div>
   </teleport>
+
+  <!-- ── Send Email Modal ── -->
+  <quote-send-email-modal
+    :show="showSendEmail"
+    :quote-name="quoteName"
+    :quot="quot"
+    @close="showSendEmail=false"
+    @sent="onEmailSent"
+  />
 
 </div>
 `});
@@ -6838,10 +7624,22 @@
   ═══════════════════════════════════════════════════════════════ */
   const SalesOrderDetail = defineComponent({
     name: "SalesOrderDetail",
+    components: { TemplateCustomizerPanel },
     setup() {
       const router = useRouter();
       const vRoute = useRoute();
       const soName = computed(() => vRoute.params.name);
+      const showCustomizer = ref(false);
+      const { settings: tplSettings, saveSettings: saveTplSettings } = useTemplateSettings('sales-order');
+      const tplHeaderStyle = Vue.computed(() => {
+        if (tplSettings.template === 'professional') return { background: tplSettings.accentColor, padding: '20px 24px', margin: '-24px -28px 20px', borderBottom: 'none' };
+        if (tplSettings.template === 'minimal') return { borderBottom: '1px solid #e4e8f0' };
+        return {};
+      });
+      const tplTitleStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: '#fff' } : {});
+      const tplCoNameStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: '#fff' } : {});
+      const tplCoMetaStyle = Vue.computed(() => tplSettings.template === 'professional' ? { color: 'rgba(255,255,255,.8)' } : {});
+      const tplBillNameStyle = Vue.computed(() => ({ color: tplSettings.accentColor }));
 
       // ── Sidebar list ─────────────────────────────────────────────
       const list        = ref([]);
@@ -7052,12 +7850,9 @@
       function printPdf() {
         const paper = document.getElementById("zb-so-paper");
         if (!paper) { window.print(); return; }
-        const cssHref = Array.from(document.styleSheets).map(s=>{ try{ return s.href; }catch{ return null; } }).filter(h=>h&&h.includes("books.css"))[0]||"";
-        const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Sales Order</title>${cssHref?`<link rel="stylesheet" href="${cssHref}">`:""}
-          <style>@page{margin:12mm}body{margin:0;background:#fff;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}.zb-pdf-paper{box-shadow:none!important;max-width:100%!important;padding:20px!important}.zb-sent-ribbon,.zb-draft-ribbon{display:none!important}</style>
-        </head><body><div class="zb-pdf-paper">${paper.innerHTML}</div>
-        <script>window.onload=function(){window.print();window.close();}<\/script></body></html>`;
-        const w = window.open("","_blank","width=800,height=900");
+        const html = buildPdfHtml("zb-so-paper", "Sales Order " + (order.value?.name || ""), tplSettings);
+        if (!html) { toast("Nothing to print","error"); return; }
+        const w = window.open("","_blank","width=860,height=1000");
         if (!w) { toast("Allow pop-ups to print","error"); return; }
         w.document.write(html); w.document.close();
       }
@@ -7087,6 +7882,8 @@
         startEdit, saveEdit, advanceStatus, doDeliver, doConvert, doDelete, printPdf,
         recalc, addItem, removeItem, addTax, removeTax, onItemPick, pickCustomer,
         statusBadgeCls, toWords, fmt, fmtDate, flt, icon,
+        showCustomizer, tplSettings, saveTplSettings,
+        tplHeaderStyle, tplTitleStyle, tplCoNameStyle, tplCoMetaStyle, tplBillNameStyle,
       };
     },
     template: `
@@ -7248,17 +8045,26 @@
 
         <!-- ── PDF VIEW ── -->
         <div class="zb-pdf-wrap" v-if="!editing">
-          <div class="zb-pdf-paper" id="zb-so-paper">
-            <div v-if="order.status==='Invoiced'||order.status==='Ready'" class="zb-sent-ribbon">{{order.status}}</div>
-            <div v-else class="zb-draft-ribbon">{{order.status||'Draft'}}</div>
-
-            <div class="zb-pdf-head">
+          <template-customizer-panel :show="showCustomizer" :settings="tplSettings" @close="showCustomizer=false" @save="saveTplSettings"/>
+          <div style="width:100%;max-width:660px;display:flex;justify-content:flex-end;margin-bottom:10px;position:sticky;top:0;z-index:50">
+            <button @click="showCustomizer=true"
+              :style="{display:'inline-flex',alignItems:'center',gap:'6px',padding:'7px 16px',background:tplSettings.accentColor,color:'#fff',border:'none',borderRadius:'6px',fontSize:'12.5px',fontWeight:'600',cursor:'pointer',boxShadow:'0 2px 8px rgba(0,0,0,.2)'}">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2"/></svg>
+              Customize ▾
+            </button>
+          </div>
+          <div class="zb-pdf-paper" id="zb-so-paper" :class="'tpl-'+tplSettings.template">
+            <div v-if="order.status==='Invoiced'||order.status==='Ready'" class="zb-sent-ribbon no-print">{{order.status}}</div>
+            <div v-else class="zb-draft-ribbon no-print">{{order.status||'Draft'}}</div>
+            <div class="zb-pdf-head" :style="tplHeaderStyle">
               <div>
-                <div class="zb-pdf-co-name">{{order.company||'Your Company'}}</div>
+                <img v-if="tplSettings.showLogo && tplSettings.logoUrl" :src="tplSettings.logoUrl" style="height:44px;object-fit:contain;margin-bottom:8px;display:block" @error="$event.target.style.display='none'"/>
+                <div class="zb-pdf-co-name" :style="tplCoNameStyle">{{tplSettings.companyOverride||order.company||'Your Company'}}</div>
+                <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="tplSettings.addressLine1">{{tplSettings.addressLine1}}</div>
+                <div class="zb-pdf-co-meta" :style="tplCoMetaStyle" v-if="tplSettings.phone||tplSettings.email">{{[tplSettings.phone,tplSettings.email].filter(Boolean).join(' · ')}}</div>
               </div>
-              <div class="zb-pdf-inv-title">SALES ORDER</div>
+              <div class="zb-pdf-inv-title" :style="tplTitleStyle">SALES ORDER</div>
             </div>
-
             <table class="zb-pdf-info-table">
               <thead><tr><th>Sales Order #</th><th>Order Date</th><th>Delivery Date</th><th v-if="order.po_number">Customer PO#</th></tr></thead>
               <tbody><tr>
@@ -7268,19 +8074,20 @@
                 <td v-if="order.po_number">{{order.po_number}}</td>
               </tr></tbody>
             </table>
-
             <div class="zb-pdf-bill-section">
               <div class="zb-pdf-bill-label">Bill To</div>
-              <div class="zb-pdf-bill-name">{{order.customer_name||order.customer}}</div>
+              <div class="zb-pdf-bill-name" :style="tplBillNameStyle">{{order.customer_name||order.customer}}</div>
               <div v-if="order.shipping_address" style="font-size:12px;color:#555;margin-top:4px;white-space:pre-wrap">{{order.shipping_address}}</div>
             </div>
-
             <table class="zb-pdf-items">
               <thead><tr>
                 <th class="zb-pdf-th" style="width:5%;text-align:center">#</th>
                 <th class="zb-pdf-th">Item &amp; Description</th>
+                <th v-if="tplSettings.showHSN" class="zb-pdf-th">HSN/SAC</th>
+                <th v-if="tplSettings.showUOM" class="zb-pdf-th" style="text-align:center">UOM</th>
                 <th class="zb-pdf-th" style="text-align:right">Qty</th>
                 <th class="zb-pdf-th" style="text-align:right">Rate</th>
+                <th v-if="tplSettings.showDiscount" class="zb-pdf-th" style="text-align:right">Disc%</th>
                 <th class="zb-pdf-th" style="text-align:right">Amount</th>
               </tr></thead>
               <tbody>
@@ -7290,20 +8097,24 @@
                     <div style="font-weight:600;color:#1a1d23">{{item.item_name||item.item_code}}</div>
                     <div v-if="item.description&&item.description!==item.item_name" style="font-size:11px;color:#888;margin-top:1px">{{item.description}}</div>
                   </td>
-                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}<div style="font-size:10px;color:#aaa">{{item.uom||'pcs'}}</div></td>
+                  <td v-if="tplSettings.showHSN" class="zb-pdf-td" style="font-size:11px;color:#6b7280">{{item.gst_hsn_code||'—'}}</td>
+                  <td v-if="tplSettings.showUOM" class="zb-pdf-td" style="text-align:center;font-size:11px;color:#6b7280">{{item.uom||'pcs'}}</td>
+                  <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.qty).toFixed(2)}}</td>
                   <td class="zb-pdf-td" style="text-align:right;font-family:monospace">{{fmt(item.rate)}}</td>
+                  <td v-if="tplSettings.showDiscount" class="zb-pdf-td" style="text-align:right;font-family:monospace">{{flt(item.discount_percentage||0).toFixed(1)}}%</td>
                   <td class="zb-pdf-td" style="text-align:right;font-family:monospace;font-weight:600">{{fmt(item.amount)}}</td>
                 </tr>
               </tbody>
             </table>
-
             <div class="zb-pdf-bottom">
               <div class="zb-pdf-words-block">
-                <div class="zb-pdf-words-lbl">Total In Words</div>
-                <div class="zb-pdf-words-val"><i>{{toWords(flt(order.grand_total))}}</i></div>
-                <div v-if="order.terms" style="margin-top:10px">
-                  <div class="zb-pdf-words-lbl">Terms &amp; Conditions</div>
-                  <div style="font-size:12px;color:#555;margin-top:3px;white-space:pre-wrap">{{order.terms}}</div>
+                <template v-if="tplSettings.showAmountWords">
+                  <div class="zb-pdf-words-lbl">Total In Words</div>
+                  <div class="zb-pdf-words-val"><i>{{toWords(flt(order.grand_total))}}</i></div>
+                </template>
+                <div v-if="tplSettings.showBankDetails && tplSettings.bankDetails" style="margin-top:10px">
+                  <div class="zb-pdf-words-lbl">Bank Details</div>
+                  <div style="font-size:11px;color:#374151;margin-top:3px;white-space:pre-wrap;background:#f8f9fc;padding:6px 8px;border-radius:4px;border:1px solid #e4e8f0">{{tplSettings.bankDetails}}</div>
                 </div>
               </div>
               <div class="zb-pdf-totals-block">
@@ -7311,13 +8122,17 @@
                 <div class="zb-pdf-total-row" v-for="tax in (order.taxes||[])" :key="tax.tax_type">
                   <span>{{tax.tax_type}} ({{flt(tax.rate)}}%)</span><span>{{fmt(tax.tax_amount)}}</span>
                 </div>
-                <div class="zb-pdf-total-row zb-pdf-total-bold"><span>Total</span><span>{{fmt(order.grand_total)}}</span></div>
+                <div class="zb-pdf-total-row zb-pdf-total-bold" :style="{color:tplSettings.accentColor}"><span>Total</span><span>{{fmt(order.grand_total)}}</span></div>
               </div>
             </div>
-            <div class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
-            <div class="zb-pdf-footer">
-              <span>SALES ORDER</span>
-              <span style="color:#9ca3af;font-size:11px">Order Date: {{fmtDate(order.transaction_date)}}</span>
+            <div v-if="tplSettings.termsAndConditions" class="zb-pdf-terms">
+              <div class="zb-pdf-terms-lbl">Terms &amp; Conditions</div>
+              {{tplSettings.termsAndConditions}}
+            </div>
+            <div v-if="tplSettings.showSignature" class="zb-pdf-sig-row"><div></div><div class="zb-pdf-sig-box">Authorized Signature</div></div>
+            <div class="zb-pdf-footer no-print" style="display:flex;align-items:center;justify-content:space-between">
+              <span style="color:#9ca3af;font-size:10px">Order Date: {{fmtDate(order.transaction_date)}}</span>
+              <button @click="showCustomizer=true" :style="{display:'inline-flex',alignItems:'center',gap:'5px',padding:'4px 12px',background:'#f5f7ff',border:'1px solid #bfdbfe',borderRadius:'5px',color:tplSettings.accentColor,fontSize:'11px',fontWeight:'600',cursor:'pointer'}">Customize</button>
             </div>
           </div>
         </div>
@@ -7330,7 +8145,8 @@
               <div class="zb-form-field" style="position:relative">
                 <label class="zb-form-label">Customer *</label>
                 <input v-model="custSearch" class="zb-form-input" placeholder="Search customer…" autocomplete="off"
-                  @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)" @input="showCustDrop=true"/>
+                  @focus="showCustDrop=true" @blur="setTimeout(()=>showCustDrop=false,200)"
+                  @input="custSearch=custSearch.replace(/[^a-zA-Z\s.'\-]/g,''); showCustDrop=true"/>
                 <div v-if="showCustDrop&&custDropItems.length" class="qt-cust-drop" style="z-index:200">
                   <div v-for="c in custDropItems" :key="c.name" class="qt-drop-item" @mousedown.prevent="pickCustomer(c)">
                     <div style="font-weight:600;font-size:13px">{{c.customer_name||c.name}}</div>
@@ -8761,6 +9577,23 @@
                   <div class="nim-total-grand" style="color:#dc2626"><span>Credit Total</span><span>{{fmt(viewNote.grand_total)}}</span></div>
                 </div>
               </div>
+              <!-- What's Next banner for Credit Notes -->
+              <div v-if="viewNote.status==='Draft'||viewNote.status==='Submitted'"
+                style="margin-top:16px;background:linear-gradient(135deg,#1971C211,#1864AB11);border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+                <span style="font-size:16px;color:#1971C2">✦</span>
+                <div style="flex:1">
+                  <div style="font-size:11px;font-weight:700;color:#1971C2;letter-spacing:0.5px;margin-bottom:2px">WHAT'S NEXT?</div>
+                  <div style="font-size:12.5px;color:#374151">Apply this credit note to an outstanding invoice or issue a refund to the customer.</div>
+                </div>
+              </div>
+              <div v-else-if="viewNote.status==='Applied'"
+                style="margin-top:16px;background:linear-gradient(135deg,#2F9E4411,#2B8A3E11);border:1px solid #b2f2bb;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+                <span style="font-size:16px;color:#2F9E44">✓</span>
+                <div style="flex:1">
+                  <div style="font-size:11px;font-weight:700;color:#2F9E44;letter-spacing:0.5px;margin-bottom:2px">CREDIT APPLIED</div>
+                  <div style="font-size:12.5px;color:#374151">This credit note has been applied. The customer's balance has been adjusted.</div>
+                </div>
+              </div>
               <div v-if="viewNote.notes" class="nim-field" style="margin-top:16px"><label class="nim-label">Notes</label><div style="font-size:13px;color:#6b7280;line-height:1.6">{{viewNote.notes}}</div></div>
             </div>
             <!-- Add/Edit -->
@@ -10129,15 +10962,44 @@
         </button>
       </div>
 
-      <!-- What's Next banner -->
-      <div v-if="!['Billed','Cancelled','Received'].includes(selectedPO.status)"
+      <!-- What's Next banners -->
+      <div v-if="selectedPO.status==='Draft'"
+        style="background:linear-gradient(135deg,#1971C211,#1864AB11);border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#1971C2">✦</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#1971C2;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+          <div style="font-size:13px;color:#374151">Send this Purchase Order to your vendor for acknowledgement, then await delivery of goods.</div>
+        </div>
+        <button class="nim-btn" style="background:#1971C2;color:#fff;border:none;font-size:12.5px;white-space:nowrap">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:-1px"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+          Email to Vendor
+        </button>
+      </div>
+      <div v-else-if="selectedPO.status==='Confirmed'"
+        style="background:linear-gradient(135deg,#E6770011,#C9620011);border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#E67700">✦</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#E67700;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+          <div style="font-size:13px;color:#374151">Order confirmed. Once goods are received, convert this order to a Purchase Bill to record your payable.</div>
+        </div>
+        <button class="nim-btn" style="background:#E67700;color:#fff;border:none;font-size:12.5px;white-space:nowrap" @click="openConvert(selectedPO.name)">Convert to Bill</button>
+      </div>
+      <div v-else-if="!['Billed','Cancelled'].includes(selectedPO.status)"
         style="background:linear-gradient(135deg,#7C3AED11,#9333EA11);border:1px solid #DDD6FE;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
         <span style="font-size:18px;color:#7C3AED">✦</span>
         <div style="flex:1">
           <div style="font-size:12px;font-weight:700;color:#7C3AED;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
-          <div style="font-size:13px;color:#374151">Convert this to a bill to complete your purchase.</div>
+          <div style="font-size:13px;color:#374151">Goods received. Convert this purchase order to a bill to create your payable accounting entry.</div>
         </div>
         <button class="nim-btn" style="background:#7C3AED;color:#fff;border:none;font-size:12.5px;white-space:nowrap" @click="openConvert(selectedPO.name)">Convert to Bill</button>
+      </div>
+      <div v-else-if="selectedPO.status==='Billed'"
+        style="background:linear-gradient(135deg,#2F9E4411,#2B8A3E11);border:1px solid #b2f2bb;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#2F9E44">✓</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#2F9E44;letter-spacing:0.5px;margin-bottom:3px">ORDER COMPLETE</div>
+          <div style="font-size:13px;color:#374151">Purchase order has been billed. Check the linked bill for payment status.</div>
+        </div>
       </div>
 
       <!-- Status row -->
@@ -10976,15 +11838,41 @@
         <button v-if="selectedBill.status==='Draft'" class="nim-btn" style="background:#fff;color:#DC2626;border:1px solid #FECACA;font-size:13px" @click="confirmCancel(selectedBill.name)">···</button>
       </div>
 
-      <!-- What's next banner -->
+      <!-- What's next banners -->
       <div v-if="selectedBill.status==='Draft'"
         style="background:linear-gradient(135deg,#7C3AED11,#9333EA11);border:1px solid #DDD6FE;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
         <span style="font-size:18px;color:#7C3AED">✦</span>
         <div style="flex:1">
           <div style="font-size:12px;font-weight:700;color:#7C3AED;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
-          <div style="font-size:13px;color:#374151">Bill has been created. Convert the bill to open status to record payment.</div>
+          <div style="font-size:13px;color:#374151">Bill saved as draft. Submit it to create the payable accounting entry and prepare for payment.</div>
         </div>
-        <button class="nim-btn" style="background:#7C3AED;color:#fff;border:none;font-size:12.5px;white-space:nowrap">Convert to Open</button>
+        <button class="nim-btn" style="background:#7C3AED;color:#fff;border:none;font-size:12.5px;white-space:nowrap">Submit Bill</button>
+      </div>
+      <div v-else-if="isOverdue(selectedBill) && flt(selectedBill.outstanding_amount)>0"
+        style="background:linear-gradient(135deg,#dc262611,#b91c1c11);border:1px solid #fecaca;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#dc2626">⚠</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#dc2626;letter-spacing:0.5px;margin-bottom:3px">OVERDUE PAYMENT!</div>
+          <div style="font-size:13px;color:#374151">This bill was due on <strong>{{fmtDate(selectedBill.due_date)}}</strong>. Pay your vendor immediately to maintain good relations and avoid penalties.</div>
+        </div>
+        <button class="nim-btn" style="background:#dc2626;color:#fff;border:none;font-size:12.5px;white-space:nowrap">Record Payment</button>
+      </div>
+      <div v-else-if="['Submitted','Unpaid','Partly Paid'].includes(selectedBill.status)"
+        style="background:linear-gradient(135deg,#E6770011,#C9620011);border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#E67700">✦</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#E67700;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+          <div style="font-size:13px;color:#374151">Bill is awaiting payment. Record your payment to the vendor to clear <strong>{{fmt(selectedBill.outstanding_amount)}}</strong> outstanding.</div>
+        </div>
+        <button class="nim-btn" style="background:#E67700;color:#fff;border:none;font-size:12.5px;white-space:nowrap">Record Payment</button>
+      </div>
+      <div v-else-if="selectedBill.status==='Paid'"
+        style="background:linear-gradient(135deg,#2F9E4411,#2B8A3E11);border:1px solid #b2f2bb;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:14px">
+        <span style="font-size:18px;color:#2F9E44">✓</span>
+        <div style="flex:1">
+          <div style="font-size:12px;font-weight:700;color:#2F9E44;letter-spacing:0.5px;margin-bottom:3px">FULLY PAID</div>
+          <div style="font-size:13px;color:#374151">This bill has been completely paid. The payable is cleared. No further action required.</div>
+        </div>
       </div>
 
       <!-- Status row -->
@@ -11386,6 +12274,31 @@
                 <div style="display:flex;justify-content:flex-end;margin-top:16px">
                   <div class="dn-totals" style="min-width:240px">
                     <div class="dn-t-row"><span>Total Amount</span><span class="fw-700">{{fmt(viewNote.debit_amount)}}</span></div>
+                  </div>
+                </div>
+                <!-- What's Next banner for Debit Notes -->
+                <div v-if="viewNote.status==='Draft'"
+                  style="margin-top:16px;background:linear-gradient(135deg,#E6770011,#C9620011);border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+                  <span style="font-size:16px;color:#E67700">✦</span>
+                  <div style="flex:1">
+                    <div style="font-size:11px;font-weight:700;color:#E67700;letter-spacing:0.5px;margin-bottom:2px">WHAT'S NEXT?</div>
+                    <div style="font-size:12.5px;color:#374151">Submit this debit note to credit the vendor's account and reduce your payable.</div>
+                  </div>
+                </div>
+                <div v-else-if="viewNote.status==='Submitted'"
+                  style="margin-top:16px;background:linear-gradient(135deg,#7C3AED11,#9333EA11);border:1px solid #DDD6FE;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+                  <span style="font-size:16px;color:#7C3AED">✦</span>
+                  <div style="flex:1">
+                    <div style="font-size:11px;font-weight:700;color:#7C3AED;letter-spacing:0.5px;margin-bottom:2px">WHAT'S NEXT?</div>
+                    <div style="font-size:12.5px;color:#374151">Debit note submitted. Apply it against an open vendor bill to reduce the outstanding balance.</div>
+                  </div>
+                </div>
+                <div v-else-if="viewNote.status==='Applied'"
+                  style="margin-top:16px;background:linear-gradient(135deg,#2F9E4411,#2B8A3E11);border:1px solid #b2f2bb;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+                  <span style="font-size:16px;color:#2F9E44">✓</span>
+                  <div style="flex:1">
+                    <div style="font-size:11px;font-weight:700;color:#2F9E44;letter-spacing:0.5px;margin-bottom:2px">DEBIT APPLIED</div>
+                    <div style="font-size:12.5px;color:#374151">Debit note has been applied against the vendor bill. Your payable is reduced accordingly.</div>
                   </div>
                 </div>
               </template>
@@ -11819,7 +12732,7 @@
                 </select>
               </div>
               <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px">
-                <div><label class="bk-fl">Account Number</label><input class="bk-fi" v-model="form.acct_no" placeholder="XXXXXXXXXXXX" style="font-family:var(--mono)"/></div>
+                <div><label class="bk-fl">Account Number</label><input class="bk-fi" v-model="form.acct_no" placeholder="XXXXXXXXXXXX" style="font-family:var(--mono)" @input="form.acct_no=form.acct_no.replace(/\D/g,'')"/></div>
                 <div><label class="bk-fl">IFSC Code</label><input class="bk-fi" v-model="form.ifsc" placeholder="HDFC0000001" style="font-family:var(--mono)" @input="form.ifsc=form.ifsc.toUpperCase()"/></div>
                 <div><label class="bk-fl">Branch</label><input class="bk-fi" v-model="form.branch" placeholder="Koramangala"/></div>
               </div>
@@ -16570,6 +17483,34 @@
             </div>
           </div>
 
+          <!-- What's Next banner -->
+          <div v-if="selectedExp.status==='Draft'"
+            style="background:linear-gradient(135deg,#E6770011,#C9620011);border:1px solid #fed7aa;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
+            <span style="font-size:18px;color:#E67700">✦</span>
+            <div style="flex:1">
+              <div style="font-size:12px;font-weight:700;color:#E67700;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+              <div style="font-size:13px;color:#374151">Submit this expense to post the GL entry. The reimbursement can be marked paid once approved.</div>
+            </div>
+            <button class="nim-btn" style="background:#E67700;color:#fff;border:none;font-size:12.5px;white-space:nowrap" @click="openView(selectedExp.name)">Submit &amp; Post GL</button>
+          </div>
+          <div v-else-if="selectedExp.status==='Submitted'"
+            style="background:linear-gradient(135deg,#2F9E4411,#2B8A3E11);border:1px solid #b2f2bb;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
+            <span style="font-size:18px;color:#2F9E44">✦</span>
+            <div style="flex:1">
+              <div style="font-size:12px;font-weight:700;color:#2F9E44;letter-spacing:0.5px;margin-bottom:3px">WHAT'S NEXT?</div>
+              <div style="font-size:13px;color:#374151">Expense submitted. Review and mark it as paid once the employee has been reimbursed.</div>
+            </div>
+            <button class="nim-btn" style="background:#2F9E44;color:#fff;border:none;font-size:12.5px;white-space:nowrap" @click="markPaid(selectedExp.name)">Mark Paid</button>
+          </div>
+          <div v-else-if="selectedExp.status==='Paid'"
+            style="background:linear-gradient(135deg,#1971C211,#1864AB11);border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
+            <span style="font-size:18px;color:#1971C2">✓</span>
+            <div style="flex:1">
+              <div style="font-size:12px;font-weight:700;color:#1971C2;letter-spacing:0.5px;margin-bottom:3px">REIMBURSED</div>
+              <div style="font-size:13px;color:#374151">Employee has been reimbursed for this expense. No further action needed.</div>
+            </div>
+          </div>
+
           <!-- Action row -->
           <div style="display:flex;gap:8px">
             <button v-if="selectedExp.status==='Draft'" class="nim-btn nim-btn-primary" style="background:#E67700;border-color:#E67700" @click="openView(selectedExp.name)">
@@ -17178,6 +18119,39 @@
                 </div>
               </div>
             </div>
+            <!-- What's Next banner for Expense Claims -->
+            <div v-if="form.status==='Draft'"
+              style="margin-top:16px;background:linear-gradient(135deg,#E6770011,#C9620011);border:1px solid #fed7aa;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+              <span style="font-size:16px;color:#E67700">✦</span>
+              <div style="flex:1">
+                <div style="font-size:11px;font-weight:700;color:#E67700;letter-spacing:0.5px;margin-bottom:2px">WHAT'S NEXT?</div>
+                <div style="font-size:12.5px;color:#374151">Submit this expense claim so that it can be reviewed and approved by the finance team.</div>
+              </div>
+            </div>
+            <div v-else-if="form.status==='Submitted'"
+              style="margin-top:16px;background:linear-gradient(135deg,#1971C211,#1864AB11);border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+              <span style="font-size:16px;color:#1971C2">✦</span>
+              <div style="flex:1">
+                <div style="font-size:11px;font-weight:700;color:#1971C2;letter-spacing:0.5px;margin-bottom:2px">WHAT'S NEXT?</div>
+                <div style="font-size:12.5px;color:#374151">Claim is pending approval. Approve it to post GL entries, or reject with a reason.</div>
+              </div>
+            </div>
+            <div v-else-if="form.status==='Approved'"
+              style="margin-top:16px;background:linear-gradient(135deg,#2F9E4411,#2B8A3E11);border:1px solid #b2f2bb;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+              <span style="font-size:16px;color:#2F9E44">✦</span>
+              <div style="flex:1">
+                <div style="font-size:11px;font-weight:700;color:#2F9E44;letter-spacing:0.5px;margin-bottom:2px">WHAT'S NEXT?</div>
+                <div style="font-size:12.5px;color:#374151">Claim approved! Process the payment to reimburse the employee and mark the claim as Paid.</div>
+              </div>
+            </div>
+            <div v-else-if="form.status==='Paid'"
+              style="margin-top:16px;background:linear-gradient(135deg,#7C3AED11,#9333EA11);border:1px solid #DDD6FE;border-radius:8px;padding:12px 14px;display:flex;align-items:center;gap:12px">
+              <span style="font-size:16px;color:#7C3AED">✓</span>
+              <div style="flex:1">
+                <div style="font-size:11px;font-weight:700;color:#7C3AED;letter-spacing:0.5px;margin-bottom:2px">REIMBURSED</div>
+                <div style="font-size:12.5px;color:#374151">Employee has been reimbursed. This claim is fully settled.</div>
+              </div>
+            </div>
           </template>
 
           <!-- Add / Edit form -->
@@ -17186,7 +18160,8 @@
             <div class="nim-grid-3 nim-mb">
               <div>
                 <label class="nim-label">Employee Name <span class="nim-req">*</span></label>
-                <input class="nim-input" v-model="form.employee_name" placeholder="Full name"/>
+                <input class="nim-input" v-model="form.employee_name" placeholder="Full name"
+                  @input="form.employee_name=form.employee_name.replace(/[^a-zA-Z\s.'-]/g,'')"/>
               </div>
               <div>
                 <label class="nim-label">Employee Email</label>
@@ -20202,6 +21177,7 @@
           salesList.value = s||[]; purchList.value = p||[];
           fillFromData();
           filingStatus.value = "Not Filed";
+          toast("GSTR-3B data refreshed", "success");
         } catch(e) { toast("Failed to load data","error"); }
         finally { loading.value = false; }
       }
@@ -20263,6 +21239,7 @@
         } catch { bankAccounts3B.value = []; }
       }
 
+      watch(() => [period.month, period.year], () => load());
       onMounted(async () => { await load(); await loadBankAccounts3B(); });
       return { salesList, purchList, loading, saving, period, openSecs, showPayModal, payRef, filingStatus, bankAccounts3B, payBankAccount, payFiling,
                MONTHS, YEARS, outward, itc, interest, lateFee,
@@ -20285,7 +21262,7 @@
       </span>
     </div>
     <div style="display:flex;gap:8px">
-      <button class="nim-btn nim-btn-ghost" @click="load" :disabled="loading"><span v-html="icon('refresh',14)" style="vertical-align:-3px;margin-right:4px"/>Refresh</button>
+      <button class="nim-btn nim-btn-ghost" @click="load" :disabled="loading"><span v-html="icon('refresh',14)" style="vertical-align:-3px;margin-right:4px"/>{{loading?'Loading…':'Refresh'}}</button>
       <button class="nim-btn nim-btn-ghost" @click="exportJson"><span v-html="icon('download',14)" style="vertical-align:-3px;margin-right:4px"/>Export JSON</button>
       <button class="nim-btn nim-btn-primary" @click="showPayModal=true" :disabled="filingStatus==='Filed'">Pay &amp; File</button>
     </div>
@@ -21581,11 +22558,21 @@
         { to: "/gst/tds",      lbl: "TDS Management",   icon: "percent"  },
       ]
     },
+    {
+      section: "SETTINGS & MASTERS", items: [
+        { to: "/settings/company",            lbl: "Company Setup",        icon: "building" },
+        { to: "/settings/users",              lbl: "Users & Roles",        icon: "users"    },
+        { to: "/settings/email-templates",    lbl: "Email Templates",      icon: "mail"     },
+        { to: "/settings/number-series",      lbl: "Number Series",        icon: "hash"     },
+        { to: "/settings/payment-terms",      lbl: "Payment Terms",        icon: "calendar" },
+        { to: "/settings/currency-exchange",  lbl: "Currency & Exchange",  icon: "currency" },
+      ]
+    },
   ];
   // Pre-built Set of every exact nav path — used to prevent parent routes from
   // stealing the "active" highlight when a child route has its own nav entry.
   const ALL_NAV_PATHS = new Set(NAV.flatMap(g => g.items.map(i => i.to)));
-  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", "so-detail": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "bank-transfers": "Bank Transfers", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Accounts", "template-editor": "Invoice Template", reports: "Reports", "balance-sheet": "Balance Sheet", "cash-flow": "Cash Flow", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "gst-summary": "GST Summary", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management" };
+  const TITLES = { dashboard: "Dashboard", customers: "Customers", quotes: "Quotes", "sales-orders": "Sales Orders", "so-detail": "Sales Orders", invoices: "Sales Invoices", "invoice-detail": "Sales Invoices", recurring: "Recurring Invoices", "credit-notes": "Credit Notes", "payments-received": "Payments Received", "eway-bills": "E-Way Bills", vendors: "Vendors", "purchase-orders": "Purchase Orders", purchases: "Purchase Bills", "debit-notes": "Debit Notes", payments: "Payments", "bank-accounts": "Bank Accounts", "bank-transactions": "Bank Transactions", "bank-reconciliation": "Bank Reconciliation", "bank-transfers": "Bank Transfers", "cheque-management": "Cheque Management", "cash-management": "Cash Management", accounts: "Accounts", "template-editor": "Invoice Template", reports: "Reports", "balance-sheet": "Balance Sheet", "cash-flow": "Cash Flow", "trial-balance": "Trial Balance", "ar-aging": "AR Aging", "gst-summary": "GST Summary", "chart-of-accounts": "Chart of Accounts", "journal-entries": "Journal Entries", "opening-balances": "Opening Balances", "cost-centers": "Cost Centers", "fiscal-years": "Fiscal Years", "inventory-items": "Items / Products", "inventory-item-groups": "Item Groups", "inventory-warehouses": "Warehouses", "inventory-stock-entries": "Stock Entries", "inventory-stock-ledger": "Stock Ledger", "inventory-valuation": "Stock Valuation", "inventory-reorder-alerts": "Reorder Alerts", "expenses": "Expenses", "expense-claims": "Expense Claims", "gst-gstr1": "GSTR-1 Return", "gst-gstr3b": "GSTR-3B Return", "gst-einvoice": "e-Invoice (IRN)", "gst-tds": "TDS Management", "settings-users": "Users & Roles", "settings-company": "Company Setup", "settings-email-templates": "Email Templates", "settings-number-series": "Number Series", "settings-payment-terms": "Payment Terms", "settings-currency-exchange": "Currency & Exchange" };
 
   const App = defineComponent({
     name: "BooksApp",
@@ -21793,17 +22780,104 @@
 
       function onAIKey(e) { if (e.key === "Enter") { e.preventDefault(); runAI(); } }
 
-      function logout() {
-        if (window.frappe && window.frappe.call) {
-          window.frappe.call({ method: "logout", callback: () => { window.location.href = "/login"; } });
-        } else { window.location.href = "/login"; }
+      async function logout() {
+        try {
+          const csrf = window.frappe?.csrf_token || "";
+          await fetch("/api/method/logout", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+              "X-Frappe-CSRF-Token": csrf,
+              "Accept": "application/json",
+            },
+          });
+        } catch { /* best-effort — always redirect */ }
+        window.location.href = "/login";
       }
       function closeMobile() { mobileOpen.value = false; }
+
+      // ── P1-4: Notification Bell ──────────────────────────────────────────
+      const notifOpen = ref(false);
+      const notifs = ref([]);
+      const notifLoading = ref(false);
+      const unreadCount = computed(() => notifs.value.length);
+
+      async function loadNotifs() {
+        notifLoading.value = true;
+        try { notifs.value = await apiGET("zoho_books_clone.api.admin.get_notifications") || []; }
+        catch { notifs.value = []; }
+        notifLoading.value = false;
+      }
+
+      function toggleNotif() {
+        notifOpen.value = !notifOpen.value;
+        if (notifOpen.value) loadNotifs();
+      }
+
+      function dismissNotif(idx) { notifs.value.splice(idx, 1); }
+
+      // Poll every 5 minutes
+      onMounted(() => { loadNotifs(); setInterval(loadNotifs, 300000); });
+
+      // ── First-login tutorial ──────────────────────────────────────────────
+      const tutorialStep = ref(0);
+      const showTutorial = ref(false);
+      const TUTORIAL_STEPS = [
+        {
+          icon: "🎉",
+          title: "Welcome to Books!",
+          body: "Books is your all-in-one accounting and business management platform. Let's take a quick look at what you can do.",
+        },
+        {
+          icon: "📊",
+          title: "Accounting & Invoicing",
+          body: "Create invoices, record payments, manage your Chart of Accounts, and track every rupee — all in one place.",
+        },
+        {
+          icon: "📦",
+          title: "Inventory Management",
+          body: "Track stock across warehouses, monitor stock levels, and manage purchase orders seamlessly.",
+        },
+        {
+          icon: "🏦",
+          title: "Banking & Reports",
+          body: "Reconcile bank statements, generate P&L, Balance Sheet, and GST reports with a single click.",
+        },
+        {
+          icon: "⚡",
+          title: "AI Automator",
+          body: "Use the AI button (bottom-right) to create invoices, record payments, and get insights just by typing naturally.",
+        },
+      ];
+      onMounted(() => {
+        const usr = window.frappe?.session?.user || "";
+        const localKey = usr ? "books_tut_done:" + usr : null;
+        const alreadyDone = localKey && localStorage.getItem(localKey);
+        if (window.__booksIsNewUser && !alreadyDone) {
+          setTimeout(() => { showTutorial.value = true; }, 600);
+        }
+      });
+      async function closeTutorial() {
+        showTutorial.value = false;
+        const usr = window.frappe?.session?.user || "";
+        if (usr) localStorage.setItem("books_tut_done:" + usr, "1");
+        try {
+          await apiPOST("zoho_books_clone.api.session.mark_tutorial_done", {});
+        } catch {}
+        window.__booksIsNewUser = false;
+      }
+      function tutorialNext() {
+        if (tutorialStep.value < TUTORIAL_STEPS.length - 1) tutorialStep.value++;
+        else closeTutorial();
+      }
 
       return {
         cname, initials, fullname, title, NAV, icon, collapsed, mobileOpen, logout, closeMobile,
         expandedGroups, toggleGroup, isGroupActive,
-        aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt, route, router, ALL_NAV_PATHS
+        aiOpen, aiInput, aiRunning, aiResult, COMMANDS, filteredCommands, fillCommand, runAI, onAIKey, aiIcon, fmtDate, fmt, route, router, ALL_NAV_PATHS,
+        notifOpen, notifs, notifLoading, unreadCount, toggleNotif, dismissNotif,
+        showTutorial, tutorialStep, TUTORIAL_STEPS, closeTutorial, tutorialNext,
       };
     },
     template: `
@@ -21868,7 +22942,45 @@
       </div>
       <div class="b-topbar-right">
         <div class="b-search"><span class="b-search-ico" v-html="icon('search',14)"></span><input placeholder="Search invoices…"/></div>
-        <div class="b-topbar-avatar" :title="fullname">{{initials}}</div>
+        <!-- Notification Bell -->
+        <div style="position:relative">
+          <button @click="toggleNotif" style="position:relative;background:none;border:none;cursor:pointer;padding:6px;border-radius:8px;color:#6b7db3;display:flex;align-items:center" :style="notifOpen?'background:#f0f4ff;color:#7048E8':''">
+            <span v-html="icon('bell',18)"></span>
+            <span v-if="unreadCount>0" style="position:absolute;top:2px;right:2px;background:#e94560;color:#fff;border-radius:50%;width:16px;height:16px;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;line-height:1">{{unreadCount>9?'9+':unreadCount}}</span>
+          </button>
+          <!-- Dropdown -->
+          <div v-if="notifOpen" style="position:absolute;top:calc(100% + 8px);right:0;width:360px;background:#fff;border:1px solid #e4e8f0;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.12);z-index:2000;overflow:hidden">
+            <div style="padding:14px 16px;border-bottom:1px solid #e4e8f0;display:flex;justify-content:space-between;align-items:center">
+              <span style="font-weight:700;font-size:14px;color:#1a1a2e">Notifications</span>
+              <button @click="notifOpen=false" style="background:none;border:none;cursor:pointer;color:#868e96;font-size:16px;line-height:1">✕</button>
+            </div>
+            <div v-if="notifLoading" style="padding:20px;text-align:center;color:#868e96;font-size:13px">Loading…</div>
+            <div v-else-if="!notifs.length" style="padding:30px;text-align:center">
+              <div style="font-size:28px;margin-bottom:8px">🎉</div>
+              <div style="font-size:13px;font-weight:600;color:#1a1a2e">All caught up!</div>
+              <div style="font-size:12px;color:#868e96;margin-top:4px">No pending alerts</div>
+            </div>
+            <div v-else style="max-height:380px;overflow-y:auto">
+              <div v-for="(n, i) in notifs" :key="i" style="padding:12px 16px;border-bottom:1px solid #f0f2f7;display:flex;gap:10px;align-items:flex-start">
+                <div :style="'width:32px;height:32px;border-radius:8px;background:'+n.bg+';display:flex;align-items:center;justify-content:center;flex-shrink:0'" v-html="icon(n.icon,15)"></div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;font-weight:700;color:#1a1a2e">{{n.title}}</div>
+                  <div style="font-size:11.5px;color:#4a5568;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{n.body}}</div>
+                  <div style="font-size:11px;color:#868e96;margin-top:3px">{{n.date}}</div>
+                </div>
+                <button @click="dismissNotif(i)" style="background:none;border:none;cursor:pointer;color:#c5c9d6;font-size:14px;flex-shrink:0;padding:2px">✕</button>
+              </div>
+            </div>
+            <div style="padding:10px 16px;text-align:center;border-top:1px solid #e4e8f0">
+              <a href="#/settings/audit-log" @click="notifOpen=false" style="font-size:12px;color:#7048E8;text-decoration:none;font-weight:600">View Audit Log →</a>
+            </div>
+          </div>
+        </div>
+        <!-- Settings shortcut -->
+        <button @click="router.push('/settings/company')" style="background:none;border:none;cursor:pointer;padding:6px;border-radius:8px;color:#6b7db3;display:flex;align-items:center" title="Settings">
+          <span v-html="icon('gear',18)"></span>
+        </button>
+        <div class="b-topbar-avatar" :title="fullname" @click="router.push('/settings/profile')" style="cursor:pointer">{{initials}}</div>
       </div>
     </header>
     <main class="b-main"><router-view></router-view></main>
@@ -22037,6 +23149,40 @@
           </button>
         </div>
 
+      </div>
+    </transition>
+  </teleport>
+
+  <!-- ── First-login Tutorial Overlay ── -->
+  <teleport to="body">
+    <transition name="tut-fade">
+      <div v-if="showTutorial" style="position:fixed;inset:0;z-index:9999;background:rgba(10,15,30,0.72);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px)">
+        <div style="background:#fff;border-radius:20px;width:440px;max-width:calc(100vw - 32px);box-shadow:0 24px 80px rgba(0,0,0,0.22);overflow:hidden">
+          <!-- Progress bar -->
+          <div style="height:4px;background:#E8ECF0">
+            <div :style="'height:4px;background:linear-gradient(90deg,#3B5BDB,#7048E8);border-radius:4px;transition:width .4s ease;width:'+Math.round((tutorialStep+1)/TUTORIAL_STEPS.length*100)+'%'"></div>
+          </div>
+          <!-- Body -->
+          <div style="padding:40px 36px 28px">
+            <div style="font-size:52px;text-align:center;margin-bottom:16px">{{TUTORIAL_STEPS[tutorialStep].icon}}</div>
+            <h2 style="font-size:22px;font-weight:700;color:#0D1117;text-align:center;margin-bottom:12px">{{TUTORIAL_STEPS[tutorialStep].title}}</h2>
+            <p style="font-size:15px;color:#555;text-align:center;line-height:1.65;margin-bottom:28px">{{TUTORIAL_STEPS[tutorialStep].body}}</p>
+            <!-- Step dots -->
+            <div style="display:flex;justify-content:center;gap:8px;margin-bottom:28px">
+              <div v-for="(s,i) in TUTORIAL_STEPS" :key="i"
+                :style="'width:'+(i===tutorialStep?24:8)+'px;height:8px;border-radius:4px;transition:all .3s;background:'+(i===tutorialStep?'#3B5BDB':i<tutorialStep?'#7048E8':'#D0D5E8')">
+              </div>
+            </div>
+            <!-- Actions -->
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <button @click="closeTutorial" style="background:none;border:none;color:#9AA3B2;font-size:14px;cursor:pointer;padding:8px">Skip tour</button>
+              <button @click="tutorialNext"
+                style="background:linear-gradient(135deg,#3B5BDB,#7048E8);color:#fff;border:none;border-radius:10px;padding:11px 28px;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 14px rgba(59,91,219,.35)">
+                {{tutorialStep < TUTORIAL_STEPS.length - 1 ? 'Next →' : "Let's go! 🚀"}}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </transition>
   </teleport>
@@ -22479,6 +23625,8 @@ body:has(.fy-drawer-open) .ai-panel {
 }
 .ai-slide-enter-active,.ai-slide-leave-active{transition:all .22s cubic-bezier(.34,1.4,.64,1);}
 .ai-slide-enter-from,.ai-slide-leave-to{opacity:0;transform:translateY(12px) scale(.97);}
+.tut-fade-enter-active,.tut-fade-leave-active{transition:opacity .3s ease;}
+.tut-fade-enter-from,.tut-fade-leave-to{opacity:0;}
 
 .ai-panel-header{
   display:flex;align-items:center;justify-content:space-between;
@@ -22694,7 +23842,7 @@ body:has(.fy-drawer-open) .ai-panel {
 .b-badge-purple{background:#f3f0ff;color:#7048e8}
 /* PDF view */
 .zb-pdf-wrap{flex:1;overflow-y:auto;overflow-x:hidden;background:#f4f6fa;padding:16px;display:flex;flex-direction:column;align-items:center;gap:0;min-width:0}
-.zb-pdf-paper{background:#fff;width:100%;max-width:640px;padding:24px 28px;box-shadow:0 2px 16px rgba(0,0,0,.1);border-radius:4px;overflow-x:auto}
+.zb-pdf-paper{background:#fff;width:100%;max-width:640px;padding:24px 28px;box-shadow:0 2px 16px rgba(0,0,0,.1);border-radius:4px;overflow:hidden;position:relative}
 .zb-sent-ribbon{position:absolute;top:12px;right:-28px;background:#059669;color:#fff;font-size:10px;font-weight:800;padding:4px 32px;transform:rotate(45deg);letter-spacing:.08em}
 .zb-draft-ribbon{position:absolute;top:12px;right:-28px;background:#9ca3af;color:#fff;font-size:10px;font-weight:800;padding:4px 32px;transform:rotate(45deg);letter-spacing:.08em}
 .zb-pdf-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:20px;padding-bottom:16px;border-bottom:2px solid #111827}
@@ -22722,7 +23870,17 @@ body:has(.fy-drawer-open) .ai-panel {
 .zb-pdf-balance{font-weight:800;font-size:14px;color:#2563eb;border-top:2px solid #111827!important;padding-top:7px}
 .zb-pdf-sig-row{display:flex;justify-content:flex-end;padding:14px 0 6px}
 .zb-pdf-sig-box{width:180px;text-align:center;border-top:1px solid #9ca3af;padding-top:5px;font-size:10px;color:#9ca3af}
-.zb-pdf-footer{text-align:right;font-size:10px;color:#9ca3af;border-top:1px solid #e4e8f0;padding-top:8px;margin-top:2px}
+.zb-pdf-footer{font-size:10px;color:#9ca3af;border-top:1px solid #e4e8f0;padding-top:8px;margin-top:2px}
+.zb-pdf-terms{border-top:1px solid #e4e8f0;padding:12px 0 0;margin-top:8px;font-size:11px;color:#6b7280;white-space:pre-wrap;line-height:1.6}
+.zb-pdf-terms-lbl{font-size:9px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:4px}
+/* Template variants */
+.tpl-professional .zb-pdf-head{background:var(--tpl-accent,#2563EB)}
+.tpl-professional .zb-pdf-co-name,.tpl-professional .zb-pdf-inv-title{color:#fff!important}
+.tpl-professional .zb-pdf-co-meta{color:rgba(255,255,255,.8)!important}
+.tpl-minimal .zb-pdf-head{border-bottom:1px solid #e4e8f0}
+.tpl-minimal .zb-pdf-inv-title{font-size:17px;font-weight:600;color:#6b7280}
+.tpl-minimal .zb-pdf-th{background:#fff;border-bottom:1px solid #374151}
+@media print{.no-print{display:none!important}}
 /* Right panel */
 .zb-right-panel{width:220px;flex-shrink:0;border-left:1px solid #e4e8f0;background:#fafbfd;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:10px}
 .zb-panel-card{border:1px solid #e4e8f0;border-radius:8px;padding:12px;background:#fff}
@@ -23702,6 +24860,1780 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
 </div>`
   });
 
+  /* ══════════════════════════════════════════════════════════════════════════
+     SETTINGS MODULE — P1/P2/P3
+     ══════════════════════════════════════════════════════════════════════════ */
+
+  /* ── P1-1: User Management ─────────────────────────────────────────────── */
+  const SettingsUsers = defineComponent({ name: "SettingsUsers",
+    setup() {
+      const users = ref([]);
+      const loading = ref(false);
+      const saving = ref(false);
+      const showInvite = ref(false);
+      const inviteForm = reactive({ email:"", first_name:"", last_name:"", role:"Books Viewer" });
+      const editUser = ref(null);
+      const editRole = ref("");
+      const ROLES = ["Books Admin","Accountant","Books Manager","Books Viewer"];
+      const ROLE_COLORS = { "Books Admin":"#7048E8", "Accountant":"#1971C2", "Books Manager":"#2F9E44", "Books Viewer":"#868E96" };
+      const ROLE_BG = { "Books Admin":"#F3F0FF", "Accountant":"#E7F5FF", "Books Manager":"#EBFBEE", "Books Viewer":"#F8F9FA" };
+
+      async function load() {
+        loading.value = true;
+        try { users.value = await apiGET("zoho_books_clone.api.admin.get_users_list") || []; }
+        catch(e) { toast("Could not load users: " + e.message, "error"); }
+        loading.value = false;
+      }
+
+      async function sendInvite() {
+        if (!inviteForm.email || !inviteForm.first_name) return toast("Email and first name are required", "error");
+        saving.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.invite_user", { ...inviteForm });
+          toast("Invite sent to " + inviteForm.email);
+          showInvite.value = false;
+          Object.assign(inviteForm, { email:"", first_name:"", last_name:"", role:"Books Viewer" });
+          load();
+        } catch(e) { toast(e.message, "error"); }
+        saving.value = false;
+      }
+
+      async function changeRole() {
+        try {
+          await apiPOST("zoho_books_clone.api.admin.update_user_role", { user: editUser.value.name, role: editRole.value });
+          toast("Role updated");
+          editUser.value = null;
+          load();
+        } catch(e) { toast(e.message, "error"); }
+      }
+
+      async function toggleActive(u) {
+        try {
+          await apiPOST("zoho_books_clone.api.admin.toggle_user_active", { user: u.name, enabled: u.enabled ? 0 : 1 });
+          toast(u.enabled ? "User deactivated" : "User activated");
+          load();
+        } catch(e) { toast(e.message, "error"); }
+      }
+
+      function userInitials(name) { return (name||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2); }
+
+      onMounted(load);
+      return { users, loading, saving, showInvite, inviteForm, editUser, editRole, ROLES, ROLE_COLORS, ROLE_BG, sendInvite, changeRole, toggleActive, userInitials, load };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;font-weight:700;color:#1a1a2e">Users &amp; Access</span>
+      <span style="background:#F3F0FF;color:#7048E8;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">{{users.length}} users</span>
+    </div>
+    <button class="nim-btn nim-btn-primary" @click="showInvite=true"><span v-html="icon('plus',13)" style="vertical-align:-2px;margin-right:4px"/>Invite User</button>
+  </div>
+
+  <!-- Users table -->
+  <div class="cust-table-card" style="margin-top:0">
+    <div v-if="loading" style="padding:40px;text-align:center;color:#868E96">Loading users…</div>
+    <table v-else style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#f8f9fc;border-bottom:2px solid #e4e8f0">
+        <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">User</th>
+        <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Email</th>
+        <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Role</th>
+        <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Status</th>
+        <th style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Last Login</th>
+        <th style="padding:10px 14px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Actions</th>
+      </tr></thead>
+      <tbody>
+        <tr v-for="u in users" :key="u.name" style="border-bottom:1px solid #f0f2f7">
+          <td style="padding:12px 14px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div v-if="u.user_image" style="width:34px;height:34px;border-radius:50%;overflow:hidden;flex-shrink:0">
+                <img :src="u.user_image" style="width:100%;height:100%;object-fit:cover"/>
+              </div>
+              <div v-else style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,#7048E8,#5e3dc7);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:700;flex-shrink:0">{{userInitials(u.full_name||u.name)}}</div>
+              <span style="font-weight:600;color:#1a1a2e">{{u.full_name||u.name}}</span>
+            </div>
+          </td>
+          <td style="padding:12px 14px;color:#4a5568">{{u.name}}</td>
+          <td style="padding:12px 14px">
+            <span :style="'background:'+ROLE_BG[u.books_role]+';color:'+ROLE_COLORS[u.books_role]+';padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600'">{{u.books_role||'—'}}</span>
+          </td>
+          <td style="padding:12px 14px">
+            <span :style="u.enabled ? 'background:#ebfbee;color:#2f9e44;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600' : 'background:#f8f9fa;color:#868e96;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600'">{{u.enabled ? 'Active' : 'Inactive'}}</span>
+          </td>
+          <td style="padding:12px 14px;color:#868e96;font-size:12px">{{u.last_login ? fmtDate(u.last_login) : 'Never'}}</td>
+          <td style="padding:12px 14px;text-align:right">
+            <div style="display:flex;gap:6px;justify-content:flex-end">
+              <button class="nim-btn nim-btn-ghost" style="padding:4px 10px;font-size:12px" @click="editUser=u;editRole=u.books_role">Change Role</button>
+              <button class="nim-btn nim-btn-ghost" style="padding:4px 10px;font-size:12px" @click="toggleActive(u)">{{u.enabled ? 'Deactivate' : 'Activate'}}</button>
+            </div>
+          </td>
+        </tr>
+        <tr v-if="!users.length"><td colspan="6" style="padding:40px;text-align:center;color:#868e96">No users found</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Invite drawer -->
+  <teleport to="body">
+    <div v-if="showInvite" class="nim-overlay" @click.self="showInvite=false">
+      <div class="nim-dialog" style="width:480px">
+        <div class="nim-header"><span style="font-weight:700;font-size:15px">Invite New User</span><button class="nim-close" @click="showInvite=false">✕</button></div>
+        <div class="nim-body" style="display:grid;gap:14px">
+          <div class="nim-field"><label class="nim-label">Email Address *</label><input class="nim-input" v-model="inviteForm.email" type="email" placeholder="colleague@company.com"/></div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div class="nim-field"><label class="nim-label">First Name *</label><input class="nim-input" v-model="inviteForm.first_name" placeholder="First"/></div>
+            <div class="nim-field"><label class="nim-label">Last Name</label><input class="nim-input" v-model="inviteForm.last_name" placeholder="Last"/></div>
+          </div>
+          <div class="nim-field"><label class="nim-label">Role</label>
+            <select class="nim-input" v-model="inviteForm.role">
+              <option v-for="r in ROLES" :key="r" :value="r">{{r}}</option>
+            </select>
+          </div>
+          <div style="background:#f0f4ff;border-radius:8px;padding:12px;font-size:12px;color:#3b4a7a">
+            <strong>Role guide:</strong> Books Admin = full access · Accountant = create/edit · Books Manager = read-only · Books Viewer = read-only
+          </div>
+        </div>
+        <div class="nim-footer"><button class="nim-btn" @click="showInvite=false">Cancel</button><button class="nim-btn nim-btn-primary" @click="sendInvite" :disabled="saving">{{saving?'Sending…':'Send Invite'}}</button></div>
+      </div>
+    </div>
+    <!-- Change role modal -->
+    <div v-if="editUser" class="nim-overlay" @click.self="editUser=null">
+      <div class="nim-dialog" style="width:400px">
+        <div class="nim-header"><span style="font-weight:700">Change Role — {{editUser.full_name||editUser.name}}</span><button class="nim-close" @click="editUser=null">✕</button></div>
+        <div class="nim-body">
+          <div class="nim-field"><label class="nim-label">Assign Role</label>
+            <select class="nim-input" v-model="editRole">
+              <option v-for="r in ROLES" :key="r" :value="r">{{r}}</option>
+            </select>
+          </div>
+        </div>
+        <div class="nim-footer"><button class="nim-btn" @click="editUser=null">Cancel</button><button class="nim-btn nim-btn-primary" @click="changeRole">Save Role</button></div>
+      </div>
+    </div>
+  </teleport>
+</div>`
+  });
+
+  /* ── P1-2: Profile & Password ───────────────────────────────────────────── */
+  const SettingsProfile = defineComponent({ name: "SettingsProfile",
+    setup() {
+      const profile = reactive({ email:"", first_name:"", last_name:"", phone:"", mobile_no:"", user_image:"" });
+      const pwForm = reactive({ old_password:"", new_password:"", confirm_password:"" });
+      const saving = ref(false);
+      const savingPw = ref(false);
+      const activeTab = ref("profile");
+
+      async function loadProfile() {
+        try { const p = await apiGET("zoho_books_clone.api.admin.get_profile"); Object.assign(profile, p); }
+        catch(e) { toast("Could not load profile", "error"); }
+      }
+
+      async function saveProfile() {
+        saving.value = true;
+        try {
+          const r = await apiPOST("zoho_books_clone.api.admin.update_profile", {
+            first_name: profile.first_name, last_name: profile.last_name,
+            phone: profile.phone, mobile_no: profile.mobile_no
+          });
+          if (r?.full_name) { window.frappe.session.user_fullname = r.full_name; }
+          toast("Profile updated");
+        } catch(e) { toast(e.message, "error"); }
+        saving.value = false;
+      }
+
+      async function changePassword() {
+        if (!pwForm.old_password || !pwForm.new_password) return toast("All fields required", "error");
+        if (pwForm.new_password !== pwForm.confirm_password) return toast("New passwords do not match", "error");
+        if (pwForm.new_password.length < 8) return toast("Password must be at least 8 characters", "error");
+        savingPw.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.change_password", { old_password: pwForm.old_password, new_password: pwForm.new_password });
+          toast("Password changed successfully");
+          Object.assign(pwForm, { old_password:"", new_password:"", confirm_password:"" });
+        } catch(e) { toast(e.message, "error"); }
+        savingPw.value = false;
+      }
+
+      function initials() { return ((profile.first_name||""+" "+(profile.last_name||"")).trim()||profile.email||"U").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2); }
+
+      onMounted(loadProfile);
+      return { profile, pwForm, saving, savingPw, activeTab, saveProfile, changePassword, initials };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <span style="font-size:18px;font-weight:700;color:#1a1a2e">My Account</span>
+  </div>
+  <!-- Tabs -->
+  <div style="display:flex;gap:0;border-bottom:2px solid #e4e8f0;margin-bottom:24px">
+    <button v-for="t in [{k:'profile',l:'Profile'},{k:'security',l:'Security'}]" :key="t.k"
+      @click="activeTab=t.k"
+      :style="'padding:10px 20px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;'+(activeTab===t.k?'color:#7048E8;border-bottom:2px solid #7048E8;margin-bottom:-2px':'color:#868E96')">
+      {{t.l}}
+    </button>
+  </div>
+
+  <!-- Profile tab -->
+  <div v-if="activeTab==='profile'" style="max-width:600px">
+    <div style="display:flex;align-items:center;gap:20px;margin-bottom:28px;padding:20px;background:#f8f9fc;border-radius:12px;border:1px solid #e4e8f0">
+      <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#7048E8,#5e3dc7);display:flex;align-items:center;justify-content:center;color:#fff;font-size:22px;font-weight:700;flex-shrink:0">{{initials()}}</div>
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#1a1a2e">{{profile.first_name}} {{profile.last_name}}</div>
+        <div style="font-size:13px;color:#868e96;margin-top:2px">{{profile.email}}</div>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+      <div class="nim-field"><label class="nim-label">First Name</label><input class="nim-input" v-model="profile.first_name"/></div>
+      <div class="nim-field"><label class="nim-label">Last Name</label><input class="nim-input" v-model="profile.last_name"/></div>
+      <div class="nim-field"><label class="nim-label">Email</label><input class="nim-input" :value="profile.email" disabled style="background:#f8f9fc;color:#868e96"/></div>
+      <div class="nim-field"><label class="nim-label">Phone</label><input class="nim-input" v-model="profile.phone"/></div>
+      <div class="nim-field"><label class="nim-label">Mobile</label><input class="nim-input" v-model="profile.mobile_no"/></div>
+    </div>
+    <div style="margin-top:20px">
+      <button class="nim-btn nim-btn-primary" @click="saveProfile" :disabled="saving">{{saving?'Saving…':'Save Profile'}}</button>
+    </div>
+  </div>
+
+  <!-- Security tab -->
+  <div v-else style="max-width:480px">
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px;margin-bottom:20px">
+      <div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:4px">Change Password</div>
+      <div style="font-size:12.5px;color:#868e96;margin-bottom:20px">Use at least 8 characters with a mix of letters and numbers.</div>
+      <div style="display:grid;gap:14px">
+        <div class="nim-field"><label class="nim-label">Current Password</label><input class="nim-input" type="password" v-model="pwForm.old_password"/></div>
+        <div class="nim-field"><label class="nim-label">New Password</label><input class="nim-input" type="password" v-model="pwForm.new_password"/></div>
+        <div class="nim-field"><label class="nim-label">Confirm New Password</label><input class="nim-input" type="password" v-model="pwForm.confirm_password"/></div>
+      </div>
+      <div style="margin-top:18px">
+        <button class="nim-btn nim-btn-primary" @click="changePassword" :disabled="savingPw">{{savingPw?'Changing…':'Change Password'}}</button>
+      </div>
+    </div>
+    <div style="background:#f0f4ff;border:1px solid #c5d0fa;border-radius:12px;padding:20px">
+      <div style="font-size:14px;font-weight:700;color:#3b4a7a;margin-bottom:8px">Two-Factor Authentication</div>
+      <div style="font-size:12.5px;color:#4a5568;margin-bottom:12px">Add an extra layer of security to your account using an authenticator app.</div>
+      <span style="background:#fff8f0;color:#e67700;padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:600;border:1px solid #ffe8a3">Coming Soon (P2)</span>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── P1-3: Company Settings ─────────────────────────────────────────────── */
+  const SettingsCompany = defineComponent({ name: "SettingsCompany",
+    setup() {
+      const form = reactive({ default_company:"", default_currency:"INR", fiscal_year_start_month:"April",
+        invoice_prefix:"INV", gstin:"", gst_state:"", logo_url:"",
+        company_address:"", company_city:"", company_state:"", company_pincode:"",
+        company_phone:"", company_email:"", company_website:"",
+        auto_send_invoice:0, send_payment_reminders:0,
+        reminder_days_before:3, reminder_days_after:7, auto_reconcile:0 });
+      const saving = ref(false);
+      const activeTab = ref("profile");
+
+      async function load() {
+        try { const d = await apiGET("zoho_books_clone.api.admin.get_company_settings"); Object.assign(form, d); }
+        catch(e) { toast("Could not load settings", "error"); }
+      }
+
+      async function save() {
+        saving.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.save_company_settings", { ...form });
+          toast("Settings saved");
+        } catch(e) { toast(e.message, "error"); }
+        saving.value = false;
+      }
+
+      function handleLogoUpload(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("doctype", "Books Settings");
+        fd.append("docname", "Books Settings");
+        fd.append("fieldname", "logo_url");
+        fd.append("csrf_token", window.frappe?.csrf_token || "");
+        fetch("/api/method/upload_file", { method:"POST", credentials:"same-origin", body:fd })
+          .then(r=>r.json()).then(d=>{ if(d.message?.file_url){ form.logo_url = d.message.file_url; toast("Logo uploaded"); } })
+          .catch(()=>toast("Upload failed","error"));
+      }
+
+      const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+      onMounted(load);
+      return { form, saving, activeTab, save, handleLogoUpload, MONTHS };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <span style="font-size:18px;font-weight:700;color:#1a1a2e">Company Settings</span>
+    <button class="nim-btn nim-btn-primary" @click="save" :disabled="saving">{{saving?'Saving…':'Save Changes'}}</button>
+  </div>
+  <!-- Tabs -->
+  <div style="display:flex;gap:0;border-bottom:2px solid #e4e8f0;margin-bottom:24px">
+    <button v-for="t in [{k:'profile',l:'Company Profile'},{k:'invoices',l:'Invoices'},{k:'tax',l:'Tax'},{k:'reminders',l:'Reminders'}]" :key="t.k"
+      @click="activeTab=t.k"
+      :style="'padding:10px 20px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;'+(activeTab===t.k?'color:#7048E8;border-bottom:2px solid #7048E8;margin-bottom:-2px':'color:#868E96')">
+      {{t.l}}
+    </button>
+  </div>
+
+  <!-- Company Profile tab -->
+  <div v-if="activeTab==='profile'" style="max-width:680px;display:grid;gap:20px">
+    <!-- Logo upload -->
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:16px">Company Logo</div>
+      <div style="display:flex;align-items:center;gap:20px">
+        <div style="width:80px;height:80px;border:2px dashed #c5d0fa;border-radius:10px;display:flex;align-items:center;justify-content:center;overflow:hidden;background:#f8f9fc">
+          <img v-if="form.logo_url" :src="form.logo_url" style="width:100%;height:100%;object-fit:contain"/>
+          <span v-else style="font-size:28px">🏢</span>
+        </div>
+        <div>
+          <label style="cursor:pointer" class="nim-btn nim-btn-ghost">
+            Upload Logo<input type="file" accept="image/*" style="display:none" @change="handleLogoUpload"/>
+          </label>
+          <div style="font-size:11px;color:#868e96;margin-top:6px">PNG, JPG up to 2MB. Appears on PDF invoices.</div>
+          <div v-if="form.logo_url" style="margin-top:4px"><button class="nim-btn" style="font-size:11px;padding:2px 8px" @click="form.logo_url=''">Remove</button></div>
+        </div>
+      </div>
+    </div>
+    <!-- Company info -->
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:16px">Company Information</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+        <div class="nim-field" style="grid-column:1/-1"><label class="nim-label">Company Name</label><input class="nim-input" v-model="form.default_company"/></div>
+        <div class="nim-field"><label class="nim-label">Phone</label><input class="nim-input" v-model="form.company_phone"/></div>
+        <div class="nim-field"><label class="nim-label">Email</label><input class="nim-input" v-model="form.company_email"/></div>
+        <div class="nim-field" style="grid-column:1/-1"><label class="nim-label">Website</label><input class="nim-input" v-model="form.company_website"/></div>
+        <div class="nim-field" style="grid-column:1/-1"><label class="nim-label">Address</label><input class="nim-input" v-model="form.company_address"/></div>
+        <div class="nim-field"><label class="nim-label">City</label><input class="nim-input" v-model="form.company_city"/></div>
+        <div class="nim-field"><label class="nim-label">State</label><input class="nim-input" v-model="form.company_state"/></div>
+        <div class="nim-field"><label class="nim-label">Pincode</label><input class="nim-input" v-model="form.company_pincode"/></div>
+        <div class="nim-field"><label class="nim-label">Currency</label><input class="nim-input" v-model="form.default_currency"/></div>
+        <div class="nim-field"><label class="nim-label">Fiscal Year Start</label>
+          <select class="nim-input" v-model="form.fiscal_year_start_month">
+            <option v-for="m in MONTHS" :key="m" :value="m">{{m}}</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Invoices tab -->
+  <div v-else-if="activeTab==='invoices'" style="max-width:560px;display:grid;gap:16px">
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:16px">Invoice Settings</div>
+      <div style="display:grid;gap:14px">
+        <div class="nim-field"><label class="nim-label">Invoice Number Prefix</label><input class="nim-input" v-model="form.invoice_prefix" placeholder="INV"/></div>
+        <div style="display:flex;align-items:center;gap:10px;padding:12px;background:#f8f9fc;border-radius:8px;cursor:pointer" @click="form.auto_send_invoice=form.auto_send_invoice?0:1">
+          <div :style="'width:36px;height:20px;border-radius:10px;transition:.2s;position:relative;background:'+(form.auto_send_invoice?'#7048E8':'#cbd5e0')">
+            <div :style="'width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;transition:.2s;left:'+(form.auto_send_invoice?'18px':'2px')"></div>
+          </div>
+          <div><div style="font-size:13px;font-weight:600">Auto-Send Invoice on Submit</div><div style="font-size:11.5px;color:#868e96">Email invoice to customer automatically when submitted</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tax tab -->
+  <div v-else-if="activeTab==='tax'" style="max-width:560px">
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:16px">Tax Configuration</div>
+      <div style="display:grid;gap:14px">
+        <div class="nim-field"><label class="nim-label">GSTIN</label><input class="nim-input" v-model="form.gstin" placeholder="22AAAAA0000A1Z5"/></div>
+        <div class="nim-field"><label class="nim-label">GST State</label><input class="nim-input" v-model="form.gst_state" placeholder="Maharashtra"/></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reminders tab -->
+  <div v-else style="max-width:560px">
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:16px">Payment Reminders</div>
+      <div style="display:grid;gap:14px">
+        <div style="display:flex;align-items:center;gap:10px;padding:12px;background:#f8f9fc;border-radius:8px;cursor:pointer" @click="form.send_payment_reminders=form.send_payment_reminders?0:1">
+          <div :style="'width:36px;height:20px;border-radius:10px;transition:.2s;position:relative;background:'+(form.send_payment_reminders?'#7048E8':'#cbd5e0')">
+            <div :style="'width:16px;height:16px;border-radius:50%;background:#fff;position:absolute;top:2px;transition:.2s;left:'+(form.send_payment_reminders?'18px':'2px')"></div>
+          </div>
+          <div><div style="font-size:13px;font-weight:600">Send Overdue Payment Reminders</div><div style="font-size:11.5px;color:#868e96">Automatically email overdue invoice reminders</div></div>
+        </div>
+        <div v-if="form.send_payment_reminders" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="nim-field"><label class="nim-label">Remind N days before due</label><input class="nim-input" type="number" v-model="form.reminder_days_before" min="0"/></div>
+          <div class="nim-field"><label class="nim-label">Remind N days after due</label><input class="nim-input" type="number" v-model="form.reminder_days_after" min="1"/></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── P2-1: Custom Role Builder ──────────────────────────────────────────── */
+  const SettingsRoles = defineComponent({ name: "SettingsRoles",
+    setup() {
+      const BUILTIN = [
+        { name:"Books Admin", desc:"Full access — can manage users, settings, all transactions", color:"#7048E8", bg:"#F3F0FF",
+          perms:{ sales:true,purchases:true,banking:true,reports:true,settings:true,users:true } },
+        { name:"Accountant", desc:"Create & edit transactions, view reports. Cannot manage users or settings", color:"#1971C2", bg:"#E7F5FF",
+          perms:{ sales:true,purchases:true,banking:true,reports:true,settings:false,users:false } },
+        { name:"Books Manager", desc:"Read-only access to all modules", color:"#2F9E44", bg:"#EBFBEE",
+          perms:{ sales:false,purchases:false,banking:false,reports:true,settings:false,users:false } },
+        { name:"Books Viewer", desc:"View reports and read documents only", color:"#868E96", bg:"#F8F9FA",
+          perms:{ sales:false,purchases:false,banking:false,reports:true,settings:false,users:false } },
+      ];
+      const MODULES = [
+        { key:"sales", lbl:"Sales & Invoicing" }, { key:"purchases", lbl:"Purchases & Expenses" },
+        { key:"banking", lbl:"Banking" }, { key:"reports", lbl:"Reports" },
+        { key:"settings", lbl:"Settings" }, { key:"users", lbl:"User Management" },
+      ];
+      return { BUILTIN, MODULES };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <span style="font-size:18px;font-weight:700;color:#1a1a2e">Roles &amp; Permissions</span>
+    <span style="background:#fff8f0;color:#e67700;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #ffe8a3">Custom roles — Coming Soon (P2)</span>
+  </div>
+  <div style="display:grid;gap:14px;max-width:800px">
+    <div v-for="role in BUILTIN" :key="role.name" style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:20px">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span :style="'background:'+role.bg+';color:'+role.color+';padding:4px 12px;border-radius:20px;font-size:12.5px;font-weight:700'">{{role.name}}</span>
+          <span style="font-size:12.5px;color:#4a5568">{{role.desc}}</span>
+        </div>
+        <span style="font-size:11px;color:#868e96;background:#f8f9fa;padding:2px 8px;border-radius:6px">Built-in</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+        <div v-for="m in MODULES" :key="m.key" :style="'display:flex;align-items:center;gap:6px;padding:6px 10px;border-radius:6px;font-size:12px;'+(role.perms[m.key]?'background:#ebfbee;color:#2f9e44':'background:#f8f9fa;color:#868e96')">
+          <span :style="'font-size:12px'">{{role.perms[m.key]?'✅':'🔒'}}</span> {{m.lbl}}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── P2-2: Audit Log ────────────────────────────────────────────────────── */
+  const SettingsAuditLog = defineComponent({ name: "SettingsAuditLog",
+    setup() {
+      const logs = ref([]);
+      const loading = ref(false);
+      const page = ref(0);
+
+      async function load() {
+        loading.value = true;
+        try { logs.value = await apiGET("zoho_books_clone.api.admin.get_audit_log", { page: page.value, page_len: 50 }) || []; }
+        catch(e) { toast("Could not load audit log: " + e.message, "error"); }
+        loading.value = false;
+      }
+
+      function exportCSV() {
+        const header = ["Date","User","DocType","Document","Action","Status"];
+        const rows = logs.value.map(l => [l.creation, l.user, l.doctype||"", l.doc_name||"", l.operation||"", l.status||""].map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","));
+        const csv = [header.join(","), ...rows].join("\n");
+        const a = document.createElement("a");
+        a.href = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
+        a.download = "audit_log.csv";
+        a.click();
+      }
+
+      const OP_COLORS = { "Login":"#2F9E44", "Logout":"#868E96", "Created":"#1971C2", "Submitted":"#2F9E44", "Cancelled":"#C92A2A", "Amended":"#E67700" };
+
+      onMounted(load);
+      return { logs, loading, page, load, exportCSV, OP_COLORS };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <span style="font-size:18px;font-weight:700;color:#1a1a2e">Audit Log</span>
+    <div style="display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" @click="exportCSV" :disabled="!logs.length"><span v-html="icon('download',13)" style="vertical-align:-2px;margin-right:4px"/>Export CSV</button>
+      <button class="nim-btn nim-btn-primary" @click="load"><span v-html="icon('refresh',13)" style="vertical-align:-2px;margin-right:4px"/>Refresh</button>
+    </div>
+  </div>
+  <div class="cust-table-card" style="margin-top:0">
+    <div v-if="loading" style="padding:40px;text-align:center;color:#868e96">Loading audit log…</div>
+    <table v-else style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="background:#f8f9fc;border-bottom:2px solid #e4e8f0">
+        <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Date / Time</th>
+        <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">User</th>
+        <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Document Type</th>
+        <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Document</th>
+        <th style="padding:9px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Action</th>
+      </tr></thead>
+      <tbody>
+        <tr v-for="l in logs" :key="l.name" style="border-bottom:1px solid #f0f2f7">
+          <td style="padding:9px 14px;color:#868e96">{{l.creation}}</td>
+          <td style="padding:9px 14px;color:#4a5568">{{l.user}}</td>
+          <td style="padding:9px 14px;color:#4a5568">{{l.doctype||'—'}}</td>
+          <td style="padding:9px 14px;font-weight:600;color:#1a1a2e">{{l.doc_name||'—'}}</td>
+          <td style="padding:9px 14px">
+            <span :style="'background:'+(OP_COLORS[l.operation]||'#f8f9fa')+'22;color:'+(OP_COLORS[l.operation]||'#868e96')+';padding:2px 8px;border-radius:20px;font-size:11.5px;font-weight:600'">{{l.operation||'—'}}</span>
+          </td>
+        </tr>
+        <tr v-if="!logs.length && !loading"><td colspan="5" style="padding:40px;text-align:center;color:#868e96">No audit log entries found</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>`
+  });
+
+  /* ── P2-3: Organization / Multi-Company ─────────────────────────────────── */
+  const SettingsOrganization = defineComponent({ name: "SettingsOrganization",
+    setup() {
+      const companies = ref([]);
+      async function load() {
+        try { companies.value = await apiList("Company", { fields:["name","company_name","default_currency","country"], limit:50 }); }
+        catch { }
+      }
+      onMounted(load);
+      return { companies };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <span style="font-size:18px;font-weight:700;color:#1a1a2e">Organizations</span>
+    <span style="background:#fff8f0;color:#e67700;padding:3px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid #ffe8a3">Multi-org switcher — Coming Soon (P2)</span>
+  </div>
+  <div style="max-width:700px;display:grid;gap:12px">
+    <div style="background:#f0f4ff;border:1px solid #c5d0fa;border-radius:10px;padding:16px;font-size:12.5px;color:#3b4a7a">
+      Multi-organization switching allows you to manage multiple companies from one login. Currently your system has the companies listed below. Full switcher UI is coming in P2.
+    </div>
+    <div v-for="c in companies" :key="c.name" style="background:#fff;border:1px solid #e4e8f0;border-radius:10px;padding:16px;display:flex;align-items:center;justify-content:space-between">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:40px;height:40px;border-radius:8px;background:#F3F0FF;display:flex;align-items:center;justify-content:center;font-size:18px">🏢</div>
+        <div><div style="font-weight:700;color:#1a1a2e">{{c.company_name||c.name}}</div><div style="font-size:12px;color:#868e96">{{c.default_currency}} · {{c.country}}</div></div>
+      </div>
+      <span style="background:#ebfbee;color:#2f9e44;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Active</span>
+    </div>
+    <div v-if="!companies.length" style="background:#fff;border:1px dashed #e4e8f0;border-radius:10px;padding:30px;text-align:center;color:#868e96">No companies found</div>
+  </div>
+</div>`
+  });
+
+  /* ── P2-4: Security / 2FA ───────────────────────────────────────────────── */
+  const SettingsSecurity = defineComponent({ name: "SettingsSecurity",
+    template: `<div class="cust-page">
+  <div class="cust-toolbar"><span style="font-size:18px;font-weight:700;color:#1a1a2e">Security</span></div>
+  <div style="max-width:600px;display:grid;gap:16px">
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:4px">Two-Factor Authentication (2FA)</div>
+      <div style="font-size:12.5px;color:#868e96;margin-bottom:16px">Require a one-time code from an authenticator app on every login.</div>
+      <div style="display:flex;align-items:center;gap:14px;padding:14px;background:#f8f9fc;border-radius:8px;margin-bottom:12px">
+        <span style="font-size:28px">🔐</span>
+        <div><div style="font-size:13px;font-weight:600;color:#1a1a2e">Authenticator App (TOTP)</div><div style="font-size:12px;color:#868e96">Google Authenticator, Authy, 1Password</div></div>
+        <span style="background:#fff8f0;color:#e67700;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600;border:1px solid #ffe8a3;margin-left:auto">Coming Soon</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:14px;padding:14px;background:#f8f9fc;border-radius:8px">
+        <span style="font-size:28px">📱</span>
+        <div><div style="font-size:13px;font-weight:600;color:#1a1a2e">SMS OTP</div><div style="font-size:12px;color:#868e96">One-time code sent to your mobile number</div></div>
+        <span style="background:#fff8f0;color:#e67700;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600;border:1px solid #ffe8a3;margin-left:auto">Coming Soon</span>
+      </div>
+    </div>
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:15px;font-weight:700;color:#1a1a2e;margin-bottom:4px">Active Sessions</div>
+      <div style="font-size:12.5px;color:#868e96;margin-bottom:12px">Devices currently logged into your account.</div>
+      <div style="padding:14px;background:#f8f9fc;border-radius:8px;display:flex;align-items:center;gap:12px">
+        <span style="font-size:22px">💻</span>
+        <div><div style="font-size:13px;font-weight:600">This device</div><div style="font-size:12px;color:#868e96">Current session · Browser</div></div>
+        <span style="background:#ebfbee;color:#2f9e44;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600;margin-left:auto">Active</span>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── P2-5: Email / SMTP ─────────────────────────────────────────────────── */
+  const SettingsEmail = defineComponent({ name: "SettingsEmail",
+    setup() {
+      const accounts = ref([]);
+      const testEmail = ref("");
+      const testing = ref(false);
+
+      async function load() {
+        try { const d = await apiGET("zoho_books_clone.api.admin.get_email_settings"); accounts.value = d.accounts || []; }
+        catch { }
+      }
+
+      async function sendTest() {
+        if (!testEmail.value) return toast("Enter a recipient email", "error");
+        testing.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.send_test_email", { to_email: testEmail.value });
+          toast("Test email sent to " + testEmail.value);
+        } catch(e) { toast(e.message, "error"); }
+        testing.value = false;
+      }
+
+      onMounted(load);
+      return { accounts, testEmail, testing, sendTest };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar"><span style="font-size:18px;font-weight:700;color:#1a1a2e">Email Settings</span></div>
+  <div style="max-width:680px;display:grid;gap:16px">
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:4px">Outgoing Email Accounts</div>
+      <div style="font-size:12.5px;color:#868e96;margin-bottom:16px">Configured in Frappe Email Account settings. Manage via <a href="/app/email-account" target="_blank" style="color:#7048E8">Frappe Desk → Email Account</a></div>
+      <div v-if="!accounts.length" style="padding:20px;text-align:center;color:#868e96;background:#f8f9fc;border-radius:8px">No outgoing email accounts configured</div>
+      <div v-for="a in accounts" :key="a.name" style="padding:14px;background:#f8f9fc;border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
+        <div><div style="font-weight:600;font-size:13px">{{a.email_account_name||a.name}}</div><div style="font-size:12px;color:#868e96">{{a.email_id}} · {{a.smtp_server}}:{{a.smtp_port}}</div></div>
+        <span style="background:#ebfbee;color:#2f9e44;padding:2px 10px;border-radius:20px;font-size:11.5px;font-weight:600">Active</span>
+      </div>
+    </div>
+    <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:24px">
+      <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:12px">Send Test Email</div>
+      <div style="display:flex;gap:10px">
+        <input class="nim-input" v-model="testEmail" placeholder="recipient@example.com" style="flex:1"/>
+        <button class="nim-btn nim-btn-primary" @click="sendTest" :disabled="testing">{{testing?'Sending…':'Send Test'}}</button>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── Email Templates ────────────────────────────────────────────────────── */
+  const SettingsEmailTemplates = defineComponent({ name: "SettingsEmailTemplates",
+    setup() {
+      const list = ref([]);
+      const loading = ref(false);
+      const saving = ref(false);
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const showDel = ref(false);
+      const delTarget = ref(null);
+      const search = ref("");
+      const form = reactive({ name:"", subject:"", response:"", use_html:0 });
+      const preview = ref(false);
+
+      const BUILTIN_VARS = [
+        { key:"{{customer_name}}", desc:"Customer / contact name" },
+        { key:"{{invoice_no}}", desc:"Invoice number" },
+        { key:"{{amount}}", desc:"Total amount" },
+        { key:"{{due_date}}", desc:"Due date" },
+        { key:"{{company}}", desc:"Your company name" },
+      ];
+
+      const filtered = computed(() => {
+        const q = search.value.toLowerCase();
+        return list.value.filter(t => !q || (t.name||"").toLowerCase().includes(q) || (t.subject||"").toLowerCase().includes(q));
+      });
+
+      async function load() {
+        loading.value = true;
+        try { list.value = await apiGET("zoho_books_clone.api.admin.get_email_templates") || []; }
+        catch(e) { toast("Could not load templates: "+e.message, "error"); }
+        loading.value = false;
+      }
+
+      function openAdd() {
+        drawerMode.value = "add";
+        Object.assign(form, { name:"", subject:"", response:"", use_html:0 });
+        preview.value = false;
+        showDrawer.value = true;
+      }
+
+      async function openEdit(t) {
+        drawerMode.value = "edit";
+        try {
+          const d = await apiGET("zoho_books_clone.api.admin.get_email_template", { name:t.name });
+          Object.assign(form, { name:d.name, subject:d.subject||"", response:d.response||"", use_html:d.use_html||0 });
+        } catch { Object.assign(form, { name:t.name, subject:t.subject||"", response:"", use_html:t.use_html||0 }); }
+        preview.value = false;
+        showDrawer.value = true;
+      }
+
+      async function save() {
+        if (!form.name.trim()) return toast("Template name is required", "error");
+        if (!form.subject.trim()) return toast("Subject is required", "error");
+        saving.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.save_email_template", { name:form.name, subject:form.subject, response:form.response, use_html:form.use_html });
+          toast(drawerMode.value==="add"?"Template created":"Template updated");
+          showDrawer.value = false;
+          load();
+        } catch(e) { toast(e.message, "error"); }
+        saving.value = false;
+      }
+
+      async function confirmDel() {
+        try { await apiPOST("zoho_books_clone.api.admin.delete_email_template", { name:delTarget.value }); toast("Template deleted"); showDel.value = false; load(); }
+        catch(e) { toast(e.message, "error"); }
+      }
+
+      function insertVar(v) { form.response += v; }
+
+      onMounted(load);
+      return { list, filtered, loading, saving, showDrawer, drawerMode, form, showDel, delTarget, search, preview, BUILTIN_VARS, openAdd, openEdit, save, confirmDel, insertVar };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;font-weight:700;color:#1a1a2e">Email Templates</span>
+      <span style="background:#F3F0FF;color:#7048E8;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">{{list.length}}</span>
+    </div>
+    <button class="nim-btn nim-btn-primary" @click="openAdd"><span v-html="icon('plus',13)" style="vertical-align:-2px;margin-right:4px"/>New Template</button>
+  </div>
+
+  <!-- Info banner -->
+  <div style="background:linear-gradient(135deg,#E7F5FF,#D0EBFF);border:1px solid #a5d8ff;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:center">
+    <span style="font-size:20px">📧</span>
+    <div style="font-size:12.5px;color:#1971C2">Email templates are used for automated payment reminders, invoice emails, and other customer communications. Use <b>{{variable}}</b> syntax to insert dynamic data.</div>
+  </div>
+
+  <!-- Search -->
+  <div style="margin-bottom:14px;display:flex;gap:10px">
+    <div style="position:relative;flex:1;max-width:360px">
+      <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);opacity:.5" v-html="icon('search',14)"></span>
+      <input class="nim-input" v-model="search" placeholder="Search templates…" style="padding-left:32px"/>
+    </div>
+  </div>
+
+  <!-- Loading -->
+  <div v-if="loading" style="padding:60px;text-align:center;color:#868e96">Loading templates…</div>
+
+  <!-- Empty -->
+  <div v-else-if="!filtered.length" style="padding:60px;text-align:center;color:#868e96;background:#fff;border:1px dashed #e4e8f0;border-radius:12px">
+    <div style="font-size:36px;margin-bottom:10px">📭</div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">No templates yet</div>
+    <div style="font-size:12.5px">Create your first email template to automate customer communications</div>
+    <button class="nim-btn nim-btn-primary" @click="openAdd" style="margin-top:16px">Create Template</button>
+  </div>
+
+  <!-- Template cards -->
+  <div v-else style="display:grid;gap:10px">
+    <div v-for="t in filtered" :key="t.name" style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:14px">
+      <div style="width:44px;height:44px;border-radius:10px;background:#F3F0FF;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📧</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13.5px;font-weight:700;color:#1a1a2e">{{t.name}}</div>
+        <div style="font-size:12px;color:#868e96;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{t.subject||'No subject'}}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span v-if="t.use_html" style="background:#E7F5FF;color:#1971C2;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">HTML</span>
+        <span v-else style="background:#F8F9FA;color:#868E96;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600">Plain</span>
+        <button class="nim-btn nim-btn-ghost" @click="openEdit(t)" style="padding:5px 10px;font-size:12px"><span v-html="icon('edit',12)" style="vertical-align:-2px;margin-right:3px"/>Edit</button>
+        <button class="nim-btn" @click="delTarget=t.name;showDel=true" style="padding:5px 10px;font-size:12px;color:#c92a2a;border-color:#ffc9c9;background:#fff5f5"><span v-html="icon('trash',12)" style="vertical-align:-2px"/></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Drawer -->
+  <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+    <div class="nim-dialog" style="width:640px;max-width:95vw">
+      <div class="nim-header">
+        <span style="font-size:15px;font-weight:700">{{drawerMode==='add'?'New Email Template':'Edit Template'}}</span>
+        <button class="nim-btn nim-btn-ghost" @click="showDrawer=false"><span v-html="icon('x',14)"/></button>
+      </div>
+      <div class="nim-body" style="display:grid;gap:14px">
+        <!-- Template name -->
+        <div class="nim-field">
+          <label class="nim-label">Template Name <span style="color:#c92a2a">*</span></label>
+          <input class="nim-input" v-model="form.name" :readonly="drawerMode==='edit'" placeholder="e.g. Payment Reminder" :style="drawerMode==='edit'?'background:#f8f9fc;color:#868e96':''"/>
+          <div style="font-size:11px;color:#868e96;margin-top:3px">Used as a reference key — no spaces</div>
+        </div>
+        <!-- Subject -->
+        <div class="nim-field">
+          <label class="nim-label">Subject <span style="color:#c92a2a">*</span></label>
+          <input class="nim-input" v-model="form.subject" placeholder="e.g. Invoice {{invoice_no}} is due on {{due_date}}"/>
+        </div>
+        <!-- Format toggle -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:#f8f9fc;border-radius:8px;cursor:pointer" @click="form.use_html=form.use_html?0:1">
+          <div :style="'width:34px;height:18px;border-radius:9px;transition:.2s;position:relative;background:'+(form.use_html?'#7048E8':'#cbd5e0')">
+            <div :style="'width:14px;height:14px;border-radius:50%;background:#fff;position:absolute;top:2px;transition:.2s;left:'+(form.use_html?'18px':'2px')"></div>
+          </div>
+          <span style="font-size:13px;font-weight:600">HTML format</span>
+          <span style="font-size:12px;color:#868e96">(use for rich text with formatting)</span>
+        </div>
+        <!-- Variables quick-insert -->
+        <div>
+          <div style="font-size:11.5px;font-weight:600;color:#6b7db3;margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Quick insert variables</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <button v-for="v in BUILTIN_VARS" :key="v.key" class="nim-btn nim-btn-ghost" @click="insertVar(v.key)" :title="v.desc" style="padding:3px 8px;font-size:11.5px;font-family:monospace">{{v.key}}</button>
+          </div>
+        </div>
+        <!-- Body -->
+        <div class="nim-field">
+          <label class="nim-label">Email Body <span style="color:#c92a2a">*</span></label>
+          <textarea class="nim-input" v-model="form.response" rows="10" placeholder="Dear {{customer_name}},&#10;&#10;Your invoice {{invoice_no}} of ₹{{amount}} is due on {{due_date}}." style="font-family:monospace;font-size:12.5px;resize:vertical"></textarea>
+        </div>
+        <!-- Preview toggle -->
+        <div v-if="form.use_html && form.response">
+          <button class="nim-btn nim-btn-ghost" @click="preview=!preview" style="font-size:12px">{{preview?'Hide Preview':'Show HTML Preview'}}</button>
+          <div v-if="preview" style="margin-top:10px;padding:16px;border:1px solid #e4e8f0;border-radius:8px;background:#fff;font-size:13px" v-html="form.response"></div>
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="save" :disabled="saving">{{saving?'Saving…':'Save Template'}}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete confirm -->
+  <div v-if="showDel" class="nim-overlay" @click.self="showDel=false">
+    <div class="nim-dialog" style="width:400px">
+      <div class="nim-header"><span style="font-weight:700">Delete Template?</span></div>
+      <div class="nim-body"><p style="font-size:13.5px;color:#4a5568">Delete "<b>{{delTarget}}</b>"? This cannot be undone and any automation using this template will stop working.</p></div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showDel=false">Cancel</button>
+        <button class="nim-btn" style="background:#c92a2a;color:#fff;border-color:#c92a2a" @click="confirmDel">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── Number Series ───────────────────────────────────────────────────────── */
+  const SettingsNumberSeries = defineComponent({ name: "SettingsNumberSeries",
+    setup() {
+      const loading = ref(false);
+      const saving = ref(false);
+      const series = ref([]);
+      const showDrawer = ref(false);
+      const form = reactive({ prefix:"", current:0, padding:4, doctype:"" });
+
+      const DOCTYPE_OPTIONS = [
+        "Sales Invoice","Purchase Invoice","Sales Order","Purchase Order",
+        "Quotation","Payment Entry","Journal Entry","Stock Entry",
+        "Expense Claim","Delivery Note","Purchase Receipt",
+      ];
+
+      async function load() {
+        loading.value = true;
+        try {
+          const raw = await apiGET("zoho_books_clone.api.admin.get_number_series") || [];
+          series.value = raw;
+        } catch {
+          // fallback: build from doctype list
+          series.value = [
+            { prefix:"INV-", current:1, padding:4, doctype:"Sales Invoice" },
+            { prefix:"PUR-", current:1, padding:4, doctype:"Purchase Invoice" },
+            { prefix:"SO-",  current:1, padding:4, doctype:"Sales Order" },
+            { prefix:"PO-",  current:1, padding:4, doctype:"Purchase Order" },
+            { prefix:"QTN-", current:1, padding:4, doctype:"Quotation" },
+            { prefix:"PAY-", current:1, padding:4, doctype:"Payment Entry" },
+            { prefix:"JE-",  current:1, padding:4, doctype:"Journal Entry" },
+          ];
+        }
+        loading.value = false;
+      }
+
+      function preview(s) {
+        const num = String((s.current||1)+1).padStart(s.padding||4, "0");
+        return (s.prefix||"") + num;
+      }
+
+      function openAdd() {
+        Object.assign(form, { prefix:"", current:0, padding:4, doctype:"" });
+        showDrawer.value = true;
+      }
+
+      async function save() {
+        if (!form.prefix.trim()) return toast("Prefix is required","error");
+        if (!form.doctype) return toast("Document type is required","error");
+        saving.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.save_number_series", { ...form });
+          toast("Number series saved");
+          showDrawer.value = false;
+          load();
+        } catch(e) { toast(e.message,"error"); }
+        saving.value = false;
+      }
+
+      async function resetSeries(s) {
+        try {
+          await apiPOST("zoho_books_clone.api.admin.reset_number_series", { prefix: s.prefix, doctype: s.doctype });
+          toast("Series reset to 1");
+          load();
+        } catch(e) { toast(e.message,"error"); }
+      }
+
+      onMounted(load);
+      return { series, loading, saving, showDrawer, form, DOCTYPE_OPTIONS, preview, openAdd, save, resetSeries };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;font-weight:700;color:#1a1a2e">Number Series</span>
+      <span style="background:#EBFBEE;color:#2F9E44;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">{{series.length}} series</span>
+    </div>
+    <button class="nim-btn nim-btn-primary" @click="openAdd"><span v-html="icon('plus',13)" style="vertical-align:-2px;margin-right:4px"/>Add Series</button>
+  </div>
+
+  <!-- Info card -->
+  <div style="background:linear-gradient(135deg,#EBFBEE,#D3F9D8);border:1px solid #8CE99A;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:center">
+    <span style="font-size:20px">🔢</span>
+    <div style="font-size:12.5px;color:#2F9E44">Number series control the auto-numbering of your documents. The next number is generated as <b>PREFIX + padded sequence</b>. For example: <b>INV-0001</b>, <b>INV-0002</b>, etc.</div>
+  </div>
+
+  <div v-if="loading" style="padding:60px;text-align:center;color:#868e96">Loading…</div>
+
+  <!-- Series table -->
+  <div v-else class="cust-table-card" style="margin-top:0">
+    <table style="width:100%;border-collapse:collapse;font-size:13px">
+      <thead><tr style="background:#f8f9fc;border-bottom:2px solid #e4e8f0">
+        <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Document Type</th>
+        <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Prefix</th>
+        <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Padding</th>
+        <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Current</th>
+        <th style="padding:10px 16px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Next Preview</th>
+        <th style="padding:10px 16px;text-align:right;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#6b7db3">Actions</th>
+      </tr></thead>
+      <tbody>
+        <tr v-for="s in series" :key="s.prefix" style="border-bottom:1px solid #f0f2f7">
+          <td style="padding:12px 16px">
+            <span style="background:#F3F0FF;color:#7048E8;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">{{s.doctype}}</span>
+          </td>
+          <td style="padding:12px 16px;font-family:monospace;font-weight:700;color:#1a1a2e;font-size:13.5px">{{s.prefix}}</td>
+          <td style="padding:12px 16px;color:#4a5568;text-align:center">{{s.padding||4}}</td>
+          <td style="padding:12px 16px;color:#4a5568;text-align:center">{{s.current||0}}</td>
+          <td style="padding:12px 16px;font-family:monospace;color:#2F9E44;font-weight:600">{{preview(s)}}</td>
+          <td style="padding:12px 16px;text-align:right">
+            <button class="nim-btn nim-btn-ghost" @click="resetSeries(s)" style="font-size:12px;color:#c92a2a">Reset to 1</button>
+          </td>
+        </tr>
+        <tr v-if="!series.length"><td colspan="6" style="padding:40px;text-align:center;color:#868e96">No number series configured</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Add drawer -->
+  <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+    <div class="nim-dialog" style="width:480px">
+      <div class="nim-header">
+        <span style="font-size:15px;font-weight:700">Add Number Series</span>
+        <button class="nim-btn nim-btn-ghost" @click="showDrawer=false"><span v-html="icon('x',14)"/></button>
+      </div>
+      <div class="nim-body" style="display:grid;gap:14px">
+        <div class="nim-field">
+          <label class="nim-label">Document Type <span style="color:#c92a2a">*</span></label>
+          <select class="nim-input" v-model="form.doctype">
+            <option value="">-- Select --</option>
+            <option v-for="d in DOCTYPE_OPTIONS" :key="d" :value="d">{{d}}</option>
+          </select>
+        </div>
+        <div class="nim-field">
+          <label class="nim-label">Prefix <span style="color:#c92a2a">*</span></label>
+          <input class="nim-input" v-model="form.prefix" placeholder="e.g. INV-" style="font-family:monospace"/>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="nim-field">
+            <label class="nim-label">Start From</label>
+            <input class="nim-input" type="number" v-model="form.current" min="0"/>
+          </div>
+          <div class="nim-field">
+            <label class="nim-label">Padding (digits)</label>
+            <input class="nim-input" type="number" v-model="form.padding" min="1" max="10"/>
+          </div>
+        </div>
+        <div v-if="form.prefix" style="background:#f8f9fc;border-radius:8px;padding:12px;font-size:12.5px">
+          Preview: <b style="font-family:monospace;color:#2F9E44">{{form.prefix}}{{String((form.current||0)+1).padStart(form.padding||4,'0')}}</b>
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="save" :disabled="saving">{{saving?'Saving…':'Save'}}</button>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── Payment Terms ───────────────────────────────────────────────────────── */
+  const SettingsPaymentTerms = defineComponent({ name: "SettingsPaymentTerms",
+    setup() {
+      const list = ref([]);
+      const loading = ref(false);
+      const saving = ref(false);
+      const showDrawer = ref(false);
+      const drawerMode = ref("add");
+      const showDel = ref(false);
+      const delTarget = ref(null);
+      const form = reactive({ name:"", due_date_based_on:"Day(s) after invoice date", payment_days:0, discount_days:0, discount_percentage:0, description:"" });
+
+      const DUE_OPTIONS = [
+        "Day(s) after invoice date",
+        "Day(s) after end of invoice month",
+        "Month(s) after end of invoice month",
+      ];
+
+      const TYPE_COLOR = {
+        "Day(s) after invoice date":       { c:"#1971C2", bg:"#E7F5FF" },
+        "Day(s) after end of invoice month": { c:"#E67700", bg:"#FFF3BF" },
+        "Month(s) after end of invoice month": { c:"#2F9E44", bg:"#EBFBEE" },
+      };
+
+      function termMeta(t) { return TYPE_COLOR[t.due_date_based_on] || { c:"#868E96", bg:"#F8F9FA" }; }
+
+      function summaryLabel(t) {
+        const base = t.due_date_based_on === "Day(s) after invoice date"
+          ? `${t.payment_days} days from invoice`
+          : t.due_date_based_on === "Day(s) after end of invoice month"
+          ? `${t.payment_days} days after month-end`
+          : `${t.payment_days} months after month-end`;
+        return base + (t.discount_percentage > 0 ? ` · ${t.discount_percentage}% discount if paid within ${t.discount_days}d` : "");
+      }
+
+      async function load() {
+        loading.value = true;
+        try { list.value = await apiGET("zoho_books_clone.api.admin.get_payment_terms") || []; }
+        catch(e) { toast("Could not load payment terms: "+e.message, "error"); }
+        loading.value = false;
+      }
+
+      function openAdd() {
+        drawerMode.value = "add";
+        Object.assign(form, { name:"", due_date_based_on:"Day(s) after invoice date", payment_days:30, discount_days:0, discount_percentage:0, description:"" });
+        showDrawer.value = true;
+      }
+
+      function openEdit(t) {
+        drawerMode.value = "edit";
+        Object.assign(form, { name:t.name, due_date_based_on:t.due_date_based_on, payment_days:t.payment_days||0, discount_days:t.discount_days||0, discount_percentage:t.discount_percentage||0, description:t.description||"" });
+        showDrawer.value = true;
+      }
+
+      async function save() {
+        if (!form.name.trim()) return toast("Term name is required","error");
+        saving.value = true;
+        try {
+          await apiPOST("zoho_books_clone.api.admin.save_payment_term", { name:form.name, due_date_based_on:form.due_date_based_on, payment_days:form.payment_days, discount_days:form.discount_days, discount_percentage:form.discount_percentage, description:form.description });
+          toast(drawerMode.value==="add"?"Payment term created":"Payment term updated");
+          showDrawer.value = false;
+          load();
+        } catch(e) { toast(e.message,"error"); }
+        saving.value = false;
+      }
+
+      async function confirmDel() {
+        try { await apiPOST("zoho_books_clone.api.admin.delete_payment_term", { name:delTarget.value }); toast("Payment term deleted"); showDel.value = false; load(); }
+        catch(e) { toast(e.message,"error"); }
+      }
+
+      onMounted(load);
+      return { list, loading, saving, showDrawer, drawerMode, form, showDel, delTarget, DUE_OPTIONS, termMeta, summaryLabel, openAdd, openEdit, save, confirmDel };
+    },
+    template: `<div class="cust-page">
+  <div class="cust-toolbar">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;font-weight:700;color:#1a1a2e">Payment Terms</span>
+      <span style="background:#FFF3BF;color:#E67700;padding:2px 10px;border-radius:20px;font-size:12px;font-weight:600">{{list.length}} terms</span>
+    </div>
+    <button class="nim-btn nim-btn-primary" @click="openAdd"><span v-html="icon('plus',13)" style="vertical-align:-2px;margin-right:4px"/>New Term</button>
+  </div>
+
+  <!-- Info banner -->
+  <div style="background:linear-gradient(135deg,#FFF9DB,#FFF3BF);border:1px solid #FFD43B;border-radius:10px;padding:14px 18px;margin-bottom:16px;display:flex;gap:12px;align-items:center">
+    <span style="font-size:20px">💳</span>
+    <div style="font-size:12.5px;color:#876800">Payment terms define <b>when</b> a payment is due. Once created here, they appear in the Payment Terms dropdown on Invoices and Purchase Bills and automatically set the due date.</div>
+  </div>
+
+  <div v-if="loading" style="padding:60px;text-align:center;color:#868e96">Loading…</div>
+
+  <!-- Empty state -->
+  <div v-else-if="!list.length" style="padding:60px;text-align:center;color:#868e96;background:#fff;border:1px dashed #e4e8f0;border-radius:12px">
+    <div style="font-size:36px;margin-bottom:10px">💳</div>
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">No payment terms yet</div>
+    <div style="font-size:12.5px">Create payment terms like "Net 30", "Immediate" or "2/10 Net 30"</div>
+    <button class="nim-btn nim-btn-primary" @click="openAdd" style="margin-top:16px">Create First Term</button>
+  </div>
+
+  <!-- Terms list -->
+  <div v-else style="display:grid;gap:10px">
+    <div v-for="t in list" :key="t.name" style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:18px 20px;display:flex;align-items:center;gap:14px">
+      <div :style="'width:46px;height:46px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0;background:'+termMeta(t).bg">💳</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13.5px;font-weight:700;color:#1a1a2e">{{t.name}}</div>
+        <div style="font-size:12px;color:#868e96;margin-top:2px">{{summaryLabel(t)}}</div>
+        <div v-if="t.description" style="font-size:11.5px;color:#adb5bd;margin-top:2px">{{t.description}}</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span :style="'background:'+termMeta(t).bg+';color:'+termMeta(t).c+';padding:3px 10px;border-radius:20px;font-size:11.5px;font-weight:600'">{{t.payment_days}} days</span>
+        <button class="nim-btn nim-btn-ghost" @click="openEdit(t)" style="padding:5px 10px;font-size:12px"><span v-html="icon('edit',12)" style="vertical-align:-2px;margin-right:3px"/>Edit</button>
+        <button class="nim-btn" @click="delTarget=t.name;showDel=true" style="padding:5px 10px;font-size:12px;color:#c92a2a;border-color:#ffc9c9;background:#fff5f5"><span v-html="icon('trash',12)" style="vertical-align:-2px"/></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/Edit Drawer -->
+  <div v-if="showDrawer" class="nim-overlay" @click.self="showDrawer=false">
+    <div class="nim-dialog" style="width:520px">
+      <div class="nim-header">
+        <span style="font-size:15px;font-weight:700">{{drawerMode==='add'?'New Payment Term':'Edit Payment Term'}}</span>
+        <button class="nim-btn nim-btn-ghost" @click="showDrawer=false"><span v-html="icon('x',14)"/></button>
+      </div>
+      <div class="nim-body" style="display:grid;gap:14px">
+        <div class="nim-field">
+          <label class="nim-label">Term Name <span style="color:#c92a2a">*</span></label>
+          <input class="nim-input" v-model="form.name" :readonly="drawerMode==='edit'" placeholder="e.g. Net 30, Immediate, 2/10 Net 30" :style="drawerMode==='edit'?'background:#f8f9fc;color:#868e96':''"/>
+        </div>
+        <div class="nim-field">
+          <label class="nim-label">Due Date Based On</label>
+          <select class="nim-input" v-model="form.due_date_based_on">
+            <option v-for="o in DUE_OPTIONS" :key="o" :value="o">{{o}}</option>
+          </select>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="nim-field">
+            <label class="nim-label">Payment Days</label>
+            <input class="nim-input" type="number" v-model="form.payment_days" min="0"/>
+          </div>
+          <div class="nim-field">
+            <label class="nim-label">Discount Days (early pay)</label>
+            <input class="nim-input" type="number" v-model="form.discount_days" min="0"/>
+          </div>
+        </div>
+        <div class="nim-field">
+          <label class="nim-label">Early Payment Discount %</label>
+          <input class="nim-input" type="number" v-model="form.discount_percentage" min="0" max="100" step="0.01" placeholder="0"/>
+          <div style="font-size:11px;color:#868e96;margin-top:3px">Leave 0 for no early-pay discount</div>
+        </div>
+        <div class="nim-field">
+          <label class="nim-label">Description</label>
+          <input class="nim-input" v-model="form.description" placeholder="e.g. Payment due 30 days from invoice date"/>
+        </div>
+        <!-- Live preview -->
+        <div v-if="form.name" style="background:#f0f9f4;border:1px solid #8CE99A;border-radius:8px;padding:12px;font-size:12.5px;color:#2F9E44">
+          <b>Preview:</b> {{summaryLabel(form)}}
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showDrawer=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="save" :disabled="saving">{{saving?'Saving…':'Save Term'}}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete confirm -->
+  <div v-if="showDel" class="nim-overlay" @click.self="showDel=false">
+    <div class="nim-dialog" style="width:400px">
+      <div class="nim-header"><span style="font-weight:700">Delete Payment Term?</span></div>
+      <div class="nim-body"><p style="font-size:13.5px;color:#4a5568">Delete "<b>{{delTarget}}</b>"? Any invoices using this term will not be affected but the term will no longer be available in new documents.</p></div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showDel=false">Cancel</button>
+        <button class="nim-btn" style="background:#c92a2a;color:#fff;border-color:#c92a2a" @click="confirmDel">Delete</button>
+      </div>
+    </div>
+  </div>
+</div>`
+  });
+
+  /* ── P3-1: Integrations (Webhooks / Google SSO) ─────────────────────────── */
+  const SettingsIntegrations = defineComponent({ name: "SettingsIntegrations",
+    template: `<div class="cust-page">
+  <div class="cust-toolbar"><span style="font-size:18px;font-weight:700;color:#1a1a2e">Integrations</span></div>
+  <div style="max-width:700px;display:grid;gap:14px">
+    <div v-for="intg in integrations" :key="intg.name" style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:20px;display:flex;align-items:center;gap:16px">
+      <div style="width:48px;height:48px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0" :style="'background:'+intg.bg">{{intg.icon}}</div>
+      <div style="flex:1"><div style="font-size:14px;font-weight:700;color:#1a1a2e">{{intg.name}}</div><div style="font-size:12.5px;color:#868e96;margin-top:2px">{{intg.desc}}</div></div>
+      <span :style="'padding:3px 12px;border-radius:20px;font-size:12px;font-weight:600;border:1px solid;'+intg.badgeStyle">{{intg.status}}</span>
+    </div>
+  </div>
+</div>`,
+    setup() {
+      const integrations = [
+        { name:"Google Sign-In (SSO)", icon:"🔑", bg:"#FFF3BF", desc:"Allow users to log in with their Google account", status:"P3 — Planned", badgeStyle:"background:#e7f5ff;color:#1971c2;border-color:#a5d8ff" },
+        { name:"Slack Notifications", icon:"💬", bg:"#F3F0FF", desc:"Send invoice and payment events to Slack channels via webhook", status:"P3 — Planned", badgeStyle:"background:#e7f5ff;color:#1971c2;border-color:#a5d8ff" },
+        { name:"Webhooks", icon:"🔗", bg:"#EBFBEE", desc:"Push real-time events to any HTTP endpoint when invoices, payments, or expenses are created", status:"P3 — Planned", badgeStyle:"background:#e7f5ff;color:#1971c2;border-color:#a5d8ff" },
+        { name:"Client Portal", icon:"🌐", bg:"#FFF5F5", desc:"Let customers log in to view their invoices and make payments online", status:"P3 — Planned", badgeStyle:"background:#e7f5ff;color:#1971c2;border-color:#a5d8ff" },
+        { name:"Microsoft SSO", icon:"🏢", bg:"#F8F9FA", desc:"Azure Active Directory single sign-on for enterprise users", status:"P3 — Planned", badgeStyle:"background:#e7f5ff;color:#1971c2;border-color:#a5d8ff" },
+      ];
+      return { integrations };
+    }
+  });
+
+  /* ── Currency & Exchange ──────────────────────────────────────────────────── */
+  const SettingsCurrencyExchange = defineComponent({ name: "SettingsCurrencyExchange",
+    template: `<div class="cust-page" style="padding:0">
+  <!-- Toolbar -->
+  <div class="cust-toolbar" style="background:#1A237E;color:#fff;border-radius:0;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <div style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:22px">💱</span>
+      <div>
+        <div style="font-size:17px;font-weight:700;letter-spacing:.3px">Currency &amp; Exchange</div>
+        <div style="font-size:12px;opacity:.75">Manage currencies, exchange rates &amp; forex P&amp;L</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="nim-btn nim-btn-ghost" style="color:#fff;border-color:rgba(255,255,255,.35)" @click="refreshRates" :disabled="refreshing">
+        <span v-if="refreshing">⟳</span><span v-else>↺</span> Refresh Rates
+      </button>
+      <button class="nim-btn nim-btn-primary" style="background:#fff;color:#1A237E;border-color:#fff" @click="openAddCurrency">+ Add Currency</button>
+    </div>
+  </div>
+
+  <!-- Tab bar -->
+  <div style="background:#fff;border-bottom:1px solid #e4e8f0;padding:0 24px;display:flex;gap:0">
+    <button v-for="t in tabs" :key="t.id" @click="activeTab=t.id"
+      :style="'padding:12px 20px;border:none;background:none;cursor:pointer;font-size:13px;font-weight:600;white-space:nowrap;transition:all .15s;color:'+(activeTab===t.id?'#1A237E':'#666')+';border-bottom:2px solid '+(activeTab===t.id?'#1A237E':'transparent')">
+      {{t.label}}
+    </button>
+  </div>
+
+  <div style="padding:24px;overflow-y:auto;height:calc(100vh - 130px)">
+
+    <!-- ═══ TAB: CURRENCIES ═══ -->
+    <div v-if="activeTab==='currencies'">
+      <!-- Summary strip -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+        <div v-for="s in currencySummary" :key="s.label"
+          :style="'background:'+s.bg+';border:1px solid '+s.border+';border-radius:12px;padding:16px 20px'">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#666;margin-bottom:6px">{{s.label}}</div>
+          <div :style="'font-size:22px;font-weight:800;color:'+s.color">{{s.value}}</div>
+          <div style="font-size:11px;color:#999;margin-top:2px">{{s.sub}}</div>
+        </div>
+      </div>
+
+      <!-- Currency cards grid -->
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">
+        <div v-for="c in filteredCurrencies" :key="c.code"
+          :style="'background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:18px;cursor:pointer;transition:box-shadow .15s;position:relative;overflow:hidden'"
+          @mouseenter="e=>e.currentTarget.style.boxShadow='0 4px 18px rgba(0,0,0,.1)'"
+          @mouseleave="e=>e.currentTarget.style.boxShadow='none'">
+          <!-- Top row -->
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px">
+              <div :style="'width:42px;height:42px;border-radius:10px;background:'+c.bg+';display:flex;align-items:center;justify-content:center;font-size:20px'">{{c.flag}}</div>
+              <div>
+                <div style="font-size:14px;font-weight:700;color:#1a1a2e">{{c.code}}</div>
+                <div style="font-size:11px;color:#888">{{c.name}}</div>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+              <span :style="'font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;background:'+(c.change>=0?'#EBFBEE':'#FFF5F5')+';color:'+(c.change>=0?'#2F9E44':'#C92A2A')">
+                {{c.change>=0?'+':''}}{{c.change}}%
+              </span>
+              <span :style="'font-size:10px;padding:1px 6px;border-radius:10px;background:'+(c.active?'#E8EAF6':'#F1F3F5')+';color:'+(c.active?'#1A237E':'#868E96')">
+                {{c.active?'Active':'Inactive'}}
+              </span>
+            </div>
+          </div>
+          <!-- Rate rows -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px">
+            <div v-for="r in [{l:'Buy',k:'buy'},{l:'Mid',k:'mid'},{l:'Sell',k:'sell'}]" :key="r.k"
+              style="background:#f8f9fa;border-radius:8px;padding:6px 8px;text-align:center">
+              <div style="font-size:10px;color:#888;margin-bottom:2px">{{r.l}}</div>
+              <div style="font-size:13px;font-weight:700;color:#1a1a2e">{{c[r.k].toFixed(4)}}</div>
+            </div>
+          </div>
+          <!-- Sparkline -->
+          <div style="height:36px;display:flex;align-items:flex-end;gap:2px">
+            <div v-for="(v,i) in c.spark" :key="i"
+              :style="'flex:1;border-radius:2px 2px 0 0;background:'+(c.change>=0?'#2F9E44':'#C92A2A')+';opacity:'+(0.4+i*0.07)+';height:'+sparkH(v,c.spark)+'px'">
+            </div>
+          </div>
+          <!-- Actions -->
+          <div style="display:flex;gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid #f0f0f0">
+            <button class="nim-btn nim-btn-ghost" style="flex:1;font-size:12px;padding:5px 10px" @click.stop="openEditCurrency(c)">✏️ Edit</button>
+            <button class="nim-btn nim-btn-ghost" style="flex:1;font-size:12px;padding:5px 10px" @click.stop="openAddRate(c.code)">📊 Add Rate</button>
+          </div>
+        </div>
+
+        <!-- Add new card -->
+        <div @click="openAddCurrency"
+          style="background:#F8F9FA;border:2px dashed #dee2e6;border-radius:12px;padding:18px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;cursor:pointer;min-height:180px;transition:all .15s"
+          @mouseenter="e=>{e.currentTarget.style.borderColor='#1A237E';e.currentTarget.style.background='#E8EAF6'}"
+          @mouseleave="e=>{e.currentTarget.style.borderColor='#dee2e6';e.currentTarget.style.background='#F8F9FA'}">
+          <div style="font-size:28px">💱</div>
+          <div style="font-size:13px;font-weight:600;color:#495057">Add Currency</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: RATE HISTORY ═══ -->
+    <div v-if="activeTab==='history'">
+      <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;overflow:hidden">
+        <!-- Toolbar -->
+        <div style="padding:16px 20px;border-bottom:1px solid #e4e8f0;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+          <select v-model="histFilter.currency" style="border:1px solid #dee2e6;border-radius:8px;padding:7px 12px;font-size:13px;background:#fff">
+            <option value="">All Currencies</option>
+            <option v-for="c in currencies" :key="c.code" :value="c.code">{{c.code}} — {{c.name}}</option>
+          </select>
+          <input type="date" v-model="histFilter.from" style="border:1px solid #dee2e6;border-radius:8px;padding:7px 12px;font-size:13px">
+          <input type="date" v-model="histFilter.to" style="border:1px solid #dee2e6;border-radius:8px;padding:7px 12px;font-size:13px">
+          <div style="margin-left:auto;display:flex;gap:8px">
+            <button class="nim-btn nim-btn-ghost" style="font-size:12px" @click="exportHistoryCSV">⬇ Export CSV</button>
+            <button class="nim-btn nim-btn-primary" style="font-size:13px" @click="openAddRate('')">+ Add Rate</button>
+          </div>
+        </div>
+        <!-- Table -->
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:#F8F9FA">
+              <th v-for="h in ['Date','Currency','Buy Rate','Mid Rate','Sell Rate','Source','Change']" :key="h"
+                style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #e4e8f0">{{h}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in filteredHistory" :key="r.id"
+              style="border-bottom:1px solid #f5f5f5;transition:background .1s"
+              @mouseenter="e=>e.currentTarget.style.background='#F8F9FA'"
+              @mouseleave="e=>e.currentTarget.style.background=''">
+              <td style="padding:10px 14px;color:#555">{{r.date}}</td>
+              <td style="padding:10px 14px"><span style="font-weight:700;color:#1A237E">{{r.currency}}</span></td>
+              <td style="padding:10px 14px;font-weight:600;color:#1a1a2e">{{r.buy.toFixed(4)}}</td>
+              <td style="padding:10px 14px;font-weight:600;color:#1a1a2e">{{r.mid.toFixed(4)}}</td>
+              <td style="padding:10px 14px;font-weight:600;color:#1a1a2e">{{r.sell.toFixed(4)}}</td>
+              <td style="padding:10px 14px;color:#888">{{r.source}}</td>
+              <td style="padding:10px 14px">
+                <span :style="'font-size:12px;font-weight:600;color:'+(r.chg>=0?'#2F9E44':'#C92A2A')">
+                  {{r.chg>=0?'▲':'▼'}} {{Math.abs(r.chg).toFixed(2)}}%
+                </span>
+              </td>
+            </tr>
+            <tr v-if="!filteredHistory.length">
+              <td colspan="7" style="padding:32px;text-align:center;color:#aaa;font-size:13px">No rate history found</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: CONVERTER ═══ -->
+    <div v-if="activeTab==='converter'" style="max-width:700px;margin:0 auto">
+      <div style="background:#fff;border:1px solid #e4e8f0;border-radius:16px;padding:28px;margin-bottom:20px">
+        <div style="font-size:16px;font-weight:700;color:#1a1a2e;margin-bottom:20px">⇋ Currency Converter</div>
+        <!-- From / To -->
+        <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:end;margin-bottom:20px">
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#666;display:block;margin-bottom:6px">FROM</label>
+            <select v-model="conv.from" @change="calcConv" style="width:100%;border:1px solid #dee2e6;border-radius:8px;padding:8px 12px;font-size:14px;font-weight:600;color:#1A237E;background:#E8EAF6;margin-bottom:6px">
+              <option v-for="c in allConvCurrencies" :key="c.code" :value="c.code">{{c.code}} — {{c.name}}</option>
+            </select>
+            <input type="number" v-model.number="conv.amount" @input="calcConv" style="width:100%;border:1px solid #dee2e6;border-radius:8px;padding:10px 14px;font-size:18px;font-weight:700;color:#1a1a2e">
+          </div>
+          <button @click="swapConv" style="background:#1A237E;color:#fff;border:none;border-radius:50%;width:40px;height:40px;font-size:18px;cursor:pointer;display:flex;align-items:center;justify-content:center;margin-bottom:6px">⇋</button>
+          <div>
+            <label style="font-size:12px;font-weight:600;color:#666;display:block;margin-bottom:6px">TO</label>
+            <select v-model="conv.to" @change="calcConv" style="width:100%;border:1px solid #dee2e6;border-radius:8px;padding:8px 12px;font-size:14px;font-weight:600;color:#1a1a2e;margin-bottom:6px">
+              <option v-for="c in allConvCurrencies" :key="c.code" :value="c.code">{{c.code}} — {{c.name}}</option>
+            </select>
+            <div style="border:2px solid #1A237E;border-radius:8px;padding:10px 14px;font-size:18px;font-weight:700;color:#1A237E;background:#F8F9FA;min-height:48px">
+              {{conv.result.toFixed(4)}}
+            </div>
+          </div>
+        </div>
+        <!-- Rate info -->
+        <div style="background:#E8EAF6;border-radius:8px;padding:12px 16px;font-size:13px;color:#3949AB;margin-bottom:18px;text-align:center">
+          1 {{conv.from}} = <strong>{{convRate.toFixed(6)}}</strong> {{conv.to}} &nbsp;|&nbsp; 1 {{conv.to}} = <strong>{{(1/convRate).toFixed(6)}}</strong> {{conv.from}}
+        </div>
+        <!-- Quick chips -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button v-for="q in [100,500,1000,5000,10000,50000]" :key="q" @click="conv.amount=q;calcConv()"
+            :style="'border:1px solid '+(conv.amount===q?'#1A237E':'#dee2e6')+';background:'+(conv.amount===q?'#E8EAF6':'#fff')+';color:'+(conv.amount===q?'#1A237E':'#555')+';border-radius:20px;padding:5px 14px;font-size:12px;font-weight:600;cursor:pointer'">
+            {{q.toLocaleString()}}
+          </button>
+        </div>
+      </div>
+      <!-- Quick reference grid -->
+      <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;padding:20px">
+        <div style="font-size:14px;font-weight:700;color:#1a1a2e;margin-bottom:14px">Quick Reference — 1 {{conv.from}}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px">
+          <div v-for="c in quickRefCurrencies" :key="c.code"
+            style="background:#F8F9FA;border-radius:8px;padding:10px 12px;text-align:center">
+            <div style="font-size:11px;color:#888;margin-bottom:4px">{{c.code}}</div>
+            <div style="font-size:15px;font-weight:700;color:#1A237E">{{quickRefValue(c).toFixed(4)}}</div>
+            <div style="font-size:10px;color:#aaa">{{c.name}}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══ TAB: FOREX P&L ═══ -->
+    <div v-if="activeTab==='pnl'">
+      <!-- Summary cards -->
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px">
+        <div style="background:#EBFBEE;border:1px solid #b2f2bb;border-radius:12px;padding:18px 20px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#2F9E44;margin-bottom:6px">Realised Gain</div>
+          <div style="font-size:24px;font-weight:800;color:#2F9E44">₹{{pnlSummary.gain.toLocaleString('en-IN',{minimumFractionDigits:2})}}</div>
+        </div>
+        <div style="background:#FFF5F5;border:1px solid #ffc9c9;border-radius:12px;padding:18px 20px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#C92A2A;margin-bottom:6px">Realised Loss</div>
+          <div style="font-size:24px;font-weight:800;color:#C92A2A">₹{{pnlSummary.loss.toLocaleString('en-IN',{minimumFractionDigits:2})}}</div>
+        </div>
+        <div :style="'background:'+(pnlSummary.net>=0?'#E8EAF6':'#FFF5F5')+';border:1px solid '+(pnlSummary.net>=0?'#c5cae9':'#ffc9c9')+';border-radius:12px;padding:18px 20px'">
+          <div :style="'font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:'+(pnlSummary.net>=0?'#1A237E':'#C92A2A')+';margin-bottom:6px'">Net P&amp;L</div>
+          <div :style="'font-size:24px;font-weight:800;color:'+(pnlSummary.net>=0?'#1A237E':'#C92A2A')">{{pnlSummary.net>=0?'+':''}}₹{{Math.abs(pnlSummary.net).toLocaleString('en-IN',{minimumFractionDigits:2})}}</div>
+        </div>
+        <div style="background:#FFF8F0;border:1px solid #ffd8a8;border-radius:12px;padding:18px 20px">
+          <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;color:#E67700;margin-bottom:6px">Transactions</div>
+          <div style="font-size:24px;font-weight:800;color:#E67700">{{pnlTransactions.length}}</div>
+        </div>
+      </div>
+      <!-- PnL Table -->
+      <div style="background:#fff;border:1px solid #e4e8f0;border-radius:12px;overflow:hidden">
+        <div style="padding:14px 20px;border-bottom:1px solid #e4e8f0;display:flex;align-items:center;gap:12px">
+          <span style="font-size:14px;font-weight:700;color:#1a1a2e">Forex Gain / Loss Transactions</span>
+          <button class="nim-btn nim-btn-ghost" style="margin-left:auto;font-size:12px" @click="exportPnlCSV">⬇ Export CSV</button>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead>
+            <tr style="background:#F8F9FA">
+              <th v-for="h in ['Date','Reference','Currency','Booked Rate','Market Rate','Amount (FC)','Gain / Loss']" :key="h"
+                style="padding:10px 14px;text-align:left;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#666;border-bottom:1px solid #e4e8f0">{{h}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in pnlTransactions" :key="r.id"
+              style="border-bottom:1px solid #f5f5f5"
+              @mouseenter="e=>e.currentTarget.style.background='#F8F9FA'"
+              @mouseleave="e=>e.currentTarget.style.background=''">
+              <td style="padding:10px 14px;color:#555">{{r.date}}</td>
+              <td style="padding:10px 14px;color:#1971C2;font-weight:600">{{r.ref}}</td>
+              <td style="padding:10px 14px;font-weight:700;color:#1A237E">{{r.currency}}</td>
+              <td style="padding:10px 14px">{{r.bookedRate.toFixed(4)}}</td>
+              <td style="padding:10px 14px">{{r.marketRate.toFixed(4)}}</td>
+              <td style="padding:10px 14px;font-weight:600">{{r.amountFC.toLocaleString()}}</td>
+              <td style="padding:10px 14px">
+                <span :style="'font-weight:700;color:'+(r.gainLoss>=0?'#2F9E44':'#C92A2A')">
+                  {{r.gainLoss>=0?'+':''}}₹{{Math.abs(r.gainLoss).toLocaleString('en-IN',{minimumFractionDigits:2})}}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div><!-- /padding wrapper -->
+
+  <!-- ═══ ADD/EDIT CURRENCY DRAWER ═══ -->
+  <div v-if="showCurrDrawer" class="nim-overlay" @click.self="showCurrDrawer=false">
+    <div class="nim-dialog" style="width:520px">
+      <div class="nim-header">
+        <span>{{drawerMode==='add'?'Add Currency':'Edit Currency'}}</span>
+        <button class="nim-btn nim-btn-ghost" style="padding:4px 10px" @click="showCurrDrawer=false">✕</button>
+      </div>
+      <div class="nim-body" style="display:grid;gap:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+          <div>
+            <label class="nim-label">Currency Code *</label>
+            <input v-model="currForm.code" class="nim-input" placeholder="e.g. USD" :disabled="drawerMode==='edit'">
+          </div>
+          <div>
+            <label class="nim-label">Symbol *</label>
+            <input v-model="currForm.symbol" class="nim-input" placeholder="e.g. $">
+          </div>
+        </div>
+        <div>
+          <label class="nim-label">Currency Name *</label>
+          <input v-model="currForm.name" class="nim-input" placeholder="e.g. US Dollar">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
+          <div>
+            <label class="nim-label">Buy Rate</label>
+            <input v-model.number="currForm.buy" type="number" step="0.0001" class="nim-input">
+          </div>
+          <div>
+            <label class="nim-label">Mid Rate</label>
+            <input v-model.number="currForm.mid" type="number" step="0.0001" class="nim-input">
+          </div>
+          <div>
+            <label class="nim-label">Sell Rate</label>
+            <input v-model.number="currForm.sell" type="number" step="0.0001" class="nim-input">
+          </div>
+        </div>
+        <div>
+          <label class="nim-label">Flag / Emoji</label>
+          <input v-model="currForm.flag" class="nim-input" placeholder="e.g. 🇺🇸">
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <input type="checkbox" v-model="currForm.active" id="curr-active" style="width:16px;height:16px">
+          <label for="curr-active" style="font-size:13px;color:#444;cursor:pointer">Active</label>
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showCurrDrawer=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="saveCurrency" :disabled="saving">{{saving?'Saving…':'Save Currency'}}</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ ADD RATE DRAWER ═══ -->
+  <div v-if="showRateDrawer" class="nim-overlay" @click.self="showRateDrawer=false">
+    <div class="nim-dialog" style="width:480px">
+      <div class="nim-header">
+        <span>Add Exchange Rate</span>
+        <button class="nim-btn nim-btn-ghost" style="padding:4px 10px" @click="showRateDrawer=false">✕</button>
+      </div>
+      <div class="nim-body" style="display:grid;gap:16px">
+        <div>
+          <label class="nim-label">Currency *</label>
+          <select v-model="rateForm.currency" class="nim-input">
+            <option value="">Select currency</option>
+            <option v-for="c in currencies" :key="c.code" :value="c.code">{{c.code}} — {{c.name}}</option>
+          </select>
+        </div>
+        <div>
+          <label class="nim-label">Date *</label>
+          <input type="date" v-model="rateForm.date" class="nim-input">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
+          <div>
+            <label class="nim-label">Buy Rate</label>
+            <input v-model.number="rateForm.buy" type="number" step="0.0001" class="nim-input">
+          </div>
+          <div>
+            <label class="nim-label">Mid Rate</label>
+            <input v-model.number="rateForm.mid" type="number" step="0.0001" class="nim-input">
+          </div>
+          <div>
+            <label class="nim-label">Sell Rate</label>
+            <input v-model.number="rateForm.sell" type="number" step="0.0001" class="nim-input">
+          </div>
+        </div>
+        <div>
+          <label class="nim-label">Source</label>
+          <input v-model="rateForm.source" class="nim-input" placeholder="e.g. RBI, Manual, API">
+        </div>
+      </div>
+      <div class="nim-footer">
+        <button class="nim-btn nim-btn-ghost" @click="showRateDrawer=false">Cancel</button>
+        <button class="nim-btn nim-btn-primary" @click="saveRate" :disabled="saving">{{saving?'Saving…':'Save Rate'}}</button>
+      </div>
+    </div>
+  </div>
+</div>`,
+    setup() {
+      const { ref, reactive, computed, onMounted } = Vue;
+
+      const activeTab = ref("currencies");
+      const tabs = [
+        { id: "currencies", label: "🌐 Currencies" },
+        { id: "history",    label: "📊 Rate History" },
+        { id: "converter",  label: "⇋ Converter" },
+        { id: "pnl",        label: "💵 Forex P&L" },
+      ];
+
+      const refreshing = ref(false);
+      const saving = ref(false);
+      const showCurrDrawer = ref(false);
+      const showRateDrawer = ref(false);
+      const drawerMode = ref("add");
+
+      const currForm = reactive({ code:"", symbol:"", name:"", buy:1, mid:1, sell:1, flag:"🏳️", active:true });
+      const rateForm = reactive({ currency:"", date:"", buy:1, mid:1, sell:1, source:"Manual" });
+      const histFilter = reactive({ currency:"", from:"", to:"" });
+
+      const currencies = ref([
+        { code:"USD", name:"US Dollar",         symbol:"$",  flag:"🇺🇸", buy:83.12, mid:83.25, sell:83.38, change:0.18,  active:true,  bg:"#E8EAF6",
+          spark:[82.1,82.4,82.8,83.0,83.1,82.9,83.0,83.2,83.3,83.25,83.1,83.25] },
+        { code:"EUR", name:"Euro",               symbol:"€",  flag:"🇪🇺", buy:89.45, mid:89.62, sell:89.79, change:-0.32, active:true,  bg:"#E8F5E9",
+          spark:[90.1,89.9,90.0,89.7,89.5,89.6,89.4,89.5,89.7,89.62,89.5,89.62] },
+        { code:"GBP", name:"British Pound",      symbol:"£",  flag:"🇬🇧", buy:104.2, mid:104.5, sell:104.8, change:0.55,  active:true,  bg:"#FFF3E0",
+          spark:[103.2,103.5,103.8,104.0,104.1,104.3,104.2,104.4,104.6,104.5,104.3,104.5] },
+        { code:"AED", name:"UAE Dirham",         symbol:"د.إ",flag:"🇦🇪", buy:22.63, mid:22.70, sell:22.77, change:0.09,  active:true,  bg:"#E8EAF6",
+          spark:[22.5,22.55,22.6,22.65,22.7,22.68,22.7,22.72,22.71,22.70,22.69,22.70] },
+        { code:"SGD", name:"Singapore Dollar",   symbol:"S$", flag:"🇸🇬", buy:61.35, mid:61.52, sell:61.69, change:-0.14, active:true,  bg:"#F3E5F5",
+          spark:[61.8,61.7,61.6,61.5,61.4,61.5,61.6,61.55,61.5,61.52,61.45,61.52] },
+        { code:"JPY", name:"Japanese Yen",       symbol:"¥",  flag:"🇯🇵", buy:0.548, mid:0.552, sell:0.556, change:0.73,  active:true,  bg:"#FCE4EC",
+          spark:[0.540,0.542,0.545,0.547,0.549,0.551,0.550,0.552,0.553,0.552,0.551,0.552] },
+        { code:"CNY", name:"Chinese Yuan",       symbol:"¥",  flag:"🇨🇳", buy:11.45, mid:11.51, sell:11.57, change:-0.21, active:false, bg:"#FFF8E1",
+          spark:[11.6,11.58,11.55,11.52,11.5,11.51,11.53,11.52,11.51,11.51,11.50,11.51] },
+      ]);
+
+      const rateHistory = ref([
+        { id:1, date:"2024-04-25", currency:"USD", buy:83.12, mid:83.25, sell:83.38, source:"RBI",    chg:0.18 },
+        { id:2, date:"2024-04-25", currency:"EUR", buy:89.45, mid:89.62, sell:89.79, source:"RBI",    chg:-0.32 },
+        { id:3, date:"2024-04-25", currency:"GBP", buy:104.2, mid:104.5, sell:104.8, source:"Manual", chg:0.55 },
+        { id:4, date:"2024-04-24", currency:"USD", buy:82.97, mid:83.10, sell:83.23, source:"RBI",    chg:-0.18 },
+        { id:5, date:"2024-04-24", currency:"EUR", buy:89.73, mid:89.91, sell:90.09, source:"RBI",    chg:0.22 },
+        { id:6, date:"2024-04-23", currency:"USD", buy:83.12, mid:83.28, sell:83.44, source:"API",    chg:0.05 },
+        { id:7, date:"2024-04-23", currency:"AED", buy:22.60, mid:22.67, sell:22.74, source:"Manual", chg:0.09 },
+        { id:8, date:"2024-04-22", currency:"SGD", buy:61.48, mid:61.65, sell:61.82, source:"RBI",    chg:-0.14 },
+        { id:9, date:"2024-04-22", currency:"GBP", buy:103.8, mid:104.1, sell:104.4, source:"API",    chg:-0.38 },
+        { id:10,date:"2024-04-21", currency:"JPY", buy:0.543, mid:0.547, sell:0.551, source:"RBI",    chg:0.73 },
+      ]);
+
+      const pnlTransactions = ref([
+        { id:1, date:"2024-04-22", ref:"INV-0042", currency:"USD", bookedRate:82.50, marketRate:83.25, amountFC:5000,  gainLoss:3750.00 },
+        { id:2, date:"2024-04-20", ref:"INV-0039", currency:"EUR", bookedRate:90.10, marketRate:89.62, amountFC:2000,  gainLoss:-960.00 },
+        { id:3, date:"2024-04-18", ref:"PAY-0017", currency:"GBP", bookedRate:103.8, marketRate:104.5, amountFC:1500,  gainLoss:1050.00 },
+        { id:4, date:"2024-04-15", ref:"INV-0035", currency:"AED", bookedRate:22.55, marketRate:22.70, amountFC:10000, gainLoss:1500.00 },
+        { id:5, date:"2024-04-12", ref:"PAY-0015", currency:"USD", bookedRate:83.50, marketRate:83.25, amountFC:3000,  gainLoss:-750.00 },
+        { id:6, date:"2024-04-10", ref:"INV-0031", currency:"SGD", bookedRate:61.80, marketRate:61.52, amountFC:800,   gainLoss:-224.00 },
+      ]);
+
+      const filteredCurrencies = computed(() => currencies.value);
+
+      const currencySummary = computed(() => {
+        const active = currencies.value.filter(c => c.active).length;
+        const avgChg = currencies.value.reduce((s,c) => s + c.change, 0) / (currencies.value.length || 1);
+        return [
+          { label:"Total Currencies", value: currencies.value.length,   sub:"configured",   color:"#1A237E", bg:"#E8EAF6", border:"#c5cae9" },
+          { label:"Active",           value: active,                     sub:"in use",        color:"#2F9E44", bg:"#EBFBEE", border:"#b2f2bb" },
+          { label:"Avg. Daily Change",value: (avgChg>=0?"+":"")+avgChg.toFixed(2)+"%", sub:"vs yesterday", color:avgChg>=0?"#2F9E44":"#C92A2A", bg:avgChg>=0?"#EBFBEE":"#FFF5F5", border:avgChg>=0?"#b2f2bb":"#ffc9c9" },
+          { label:"Base Currency",    value:"INR",                       sub:"Indian Rupee",  color:"#E67700", bg:"#FFF8F0", border:"#ffd8a8" },
+        ];
+      });
+
+      const filteredHistory = computed(() => {
+        return rateHistory.value.filter(r => {
+          if (histFilter.currency && r.currency !== histFilter.currency) return false;
+          if (histFilter.from && r.date < histFilter.from) return false;
+          if (histFilter.to && r.date > histFilter.to) return false;
+          return true;
+        });
+      });
+
+      const conv = reactive({ from:"USD", to:"INR", amount:1, result:83.25 });
+      const convRate = computed(() => {
+        if (conv.from === "INR") {
+          const tgt = currencies.value.find(c => c.code === conv.to);
+          return tgt ? 1/tgt.mid : 1;
+        }
+        if (conv.to === "INR") {
+          const src = currencies.value.find(c => c.code === conv.from);
+          return src ? src.mid : 1;
+        }
+        const src = currencies.value.find(c => c.code === conv.from);
+        const tgt = currencies.value.find(c => c.code === conv.to);
+        const srcMid = src ? src.mid : 1;
+        const tgtMid = tgt ? tgt.mid : 1;
+        return srcMid / tgtMid;
+      });
+
+      const allConvCurrencies = computed(() => [
+        { code:"INR", name:"Indian Rupee" },
+        ...currencies.value.map(c => ({ code:c.code, name:c.name }))
+      ]);
+
+      const quickRefCurrencies = computed(() => currencies.value.filter(c => c.code !== conv.from).slice(0, 8));
+
+      function quickRefValue(c) {
+        if (conv.from === "INR") { return c.mid ? 1/c.mid : 0; }
+        if (c.code === "INR") {
+          const src = currencies.value.find(x => x.code === conv.from);
+          return src ? src.mid : 1;
+        }
+        const src = currencies.value.find(x => x.code === conv.from);
+        return src && c.mid ? src.mid / c.mid : 1;
+      }
+
+      function calcConv() {
+        conv.result = conv.amount * convRate.value;
+      }
+
+      function swapConv() {
+        const tmp = conv.from; conv.from = conv.to; conv.to = tmp;
+        calcConv();
+      }
+
+      const pnlSummary = computed(() => {
+        let gain = 0, loss = 0;
+        pnlTransactions.value.forEach(r => { if (r.gainLoss > 0) gain += r.gainLoss; else loss += Math.abs(r.gainLoss); });
+        return { gain, loss, net: gain - loss };
+      });
+
+      function sparkH(v, arr) {
+        const mn = Math.min(...arr), mx = Math.max(...arr);
+        if (mx === mn) return 20;
+        return Math.max(4, Math.round(((v - mn) / (mx - mn)) * 32));
+      }
+
+      function openAddCurrency() {
+        drawerMode.value = "add";
+        Object.assign(currForm, { code:"", symbol:"", name:"", buy:1, mid:1, sell:1, flag:"🏳️", active:true });
+        showCurrDrawer.value = true;
+      }
+
+      function openEditCurrency(c) {
+        drawerMode.value = "edit";
+        Object.assign(currForm, { code:c.code, symbol:c.symbol, name:c.name, buy:c.buy, mid:c.mid, sell:c.sell, flag:c.flag, active:c.active });
+        showCurrDrawer.value = true;
+      }
+
+      function openAddRate(code) {
+        Object.assign(rateForm, { currency:code||"", date:"", buy:1, mid:1, sell:1, source:"Manual" });
+        showRateDrawer.value = true;
+        activeTab.value = "history";
+      }
+
+      async function saveCurrency() {
+        if (!currForm.code || !currForm.name) { toast("Currency code and name are required","error"); return; }
+        saving.value = true;
+        try {
+          if (drawerMode.value === "add") {
+            currencies.value.push({
+              code:currForm.code.toUpperCase(), name:currForm.name, symbol:currForm.symbol,
+              flag:currForm.flag, buy:currForm.buy, mid:currForm.mid, sell:currForm.sell,
+              change:0, active:currForm.active, bg:"#E8EAF6", spark:[currForm.mid]
+            });
+          } else {
+            const c = currencies.value.find(x => x.code === currForm.code);
+            if (c) Object.assign(c, { name:currForm.name, symbol:currForm.symbol, flag:currForm.flag, buy:currForm.buy, mid:currForm.mid, sell:currForm.sell, active:currForm.active });
+          }
+          try {
+            await apiSave({ doctype:"Currency Exchange", currency_code:currForm.code, buy_rate:currForm.buy, exchange_rate:currForm.mid, sell_rate:currForm.sell });
+          } catch {}
+          toast("Currency saved", "success");
+          showCurrDrawer.value = false;
+        } finally { saving.value = false; }
+      }
+
+      async function saveRate() {
+        if (!rateForm.currency || !rateForm.date) { toast("Currency and date are required","error"); return; }
+        saving.value = true;
+        try {
+          const prevEntry = rateHistory.value.find(r => r.currency === rateForm.currency);
+          const prevMid = prevEntry ? prevEntry.mid : rateForm.mid;
+          const chg = prevMid ? ((rateForm.mid - prevMid) / prevMid * 100) : 0;
+          rateHistory.value.unshift({ id:Date.now(), date:rateForm.date, currency:rateForm.currency, buy:rateForm.buy, mid:rateForm.mid, sell:rateForm.sell, source:rateForm.source, chg:parseFloat(chg.toFixed(2)) });
+          const c = currencies.value.find(x => x.code === rateForm.currency);
+          if (c) { c.buy = rateForm.buy; c.mid = rateForm.mid; c.sell = rateForm.sell; c.change = parseFloat(chg.toFixed(2)); }
+          try {
+            await apiSave({ doctype:"Currency Exchange", from_currency:rateForm.currency, to_currency:"INR", exchange_rate:rateForm.mid, date:rateForm.date });
+          } catch {}
+          toast("Rate added", "success");
+          showRateDrawer.value = false;
+        } finally { saving.value = false; }
+      }
+
+      async function refreshRates() {
+        refreshing.value = true;
+        try {
+          const res = await apiGET("zoho_books_clone.api.admin.get_currency_rates", {});
+          if (res && Array.isArray(res)) {
+            res.forEach(r => {
+              const c = currencies.value.find(x => x.code === r.currency_code || x.code === r.from_currency);
+              if (c) { c.mid = r.exchange_rate || r.mid || c.mid; c.buy = r.buy_rate || c.buy; c.sell = r.sell_rate || c.sell; }
+            });
+          }
+          toast("Rates refreshed", "success");
+        } catch { toast("Could not fetch live rates — showing cached data", "warning"); }
+        finally { refreshing.value = false; }
+      }
+
+      function exportHistoryCSV() {
+        const headers = ["Date","Currency","Buy","Mid","Sell","Source","Change%"];
+        const rows = filteredHistory.value.map(r => [r.date,r.currency,r.buy,r.mid,r.sell,r.source,r.chg]);
+        const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+        const a = document.createElement("a");
+        a.href = "data:text/csv," + encodeURIComponent(csv);
+        a.download = "rate_history.csv";
+        a.click();
+      }
+
+      function exportPnlCSV() {
+        const headers = ["Date","Reference","Currency","BookedRate","MarketRate","AmountFC","GainLoss"];
+        const rows = pnlTransactions.value.map(r => [r.date,r.ref,r.currency,r.bookedRate,r.marketRate,r.amountFC,r.gainLoss]);
+        const csv = [headers, ...rows].map(r => r.join(",")).join("\n");
+        const a = document.createElement("a");
+        a.href = "data:text/csv," + encodeURIComponent(csv);
+        a.download = "forex_pnl.csv";
+        a.click();
+      }
+
+      onMounted(() => { calcConv(); });
+
+      return {
+        activeTab, tabs, refreshing, saving,
+        showCurrDrawer, showRateDrawer, drawerMode,
+        currForm, rateForm, histFilter,
+        currencies, filteredCurrencies, currencySummary,
+        rateHistory, filteredHistory,
+        conv, convRate, allConvCurrencies, quickRefCurrencies,
+        pnlTransactions, pnlSummary,
+        sparkH, openAddCurrency, openEditCurrency, openAddRate,
+        saveCurrency, saveRate, refreshRates,
+        calcConv, swapConv, quickRefValue,
+        exportHistoryCSV, exportPnlCSV,
+      };
+    }
+  });
+
   /* ── Boot ── */
   const router = createRouter({
     history: createWebHashHistory(),
@@ -23758,9 +26690,52 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       { path: "/gst/gstr3b",   component: GSTReturnsGSTR3B,   name: "gst-gstr3b"   },
       { path: "/gst/einvoice", component: GSTReturnsEInvoice,  name: "gst-einvoice" },
       { path: "/gst/tds",      component: GSTReturnsTDS,       name: "gst-tds"      },
+      { path: "/settings/users",              component: SettingsUsers,           name: "settings-users"           },
+      { path: "/settings/profile",           component: SettingsProfile,         name: "settings-profile"         },
+      { path: "/settings/company",           component: SettingsCompany,         name: "settings-company"         },
+      { path: "/settings/roles",             component: SettingsRoles,           name: "settings-roles"           },
+      { path: "/settings/audit-log",         component: SettingsAuditLog,        name: "settings-audit-log"       },
+      { path: "/settings/organization",      component: SettingsOrganization,    name: "settings-organization"    },
+      { path: "/settings/security",          component: SettingsSecurity,        name: "settings-security"        },
+      { path: "/settings/email",             component: SettingsEmail,           name: "settings-email"           },
+      { path: "/settings/integrations",      component: SettingsIntegrations,    name: "settings-integrations"    },
+      { path: "/settings/email-templates",   component: SettingsEmailTemplates,    name: "settings-email-templates"   },
+      { path: "/settings/number-series",     component: SettingsNumberSeries,      name: "settings-number-series"     },
+      { path: "/settings/payment-terms",     component: SettingsPaymentTerms,      name: "settings-payment-terms"     },
+      { path: "/settings/currency-exchange", component: SettingsCurrencyExchange,  name: "settings-currency-exchange" },
     ]
   });
 
+
+  // ── All localStorage keys that hold per-user / per-company data ──────────
+  const USER_CACHE_KEYS = [
+    "books_coa",
+    "books_cost_centers",
+    "books_fiscal_years",
+    "books_ob",
+    "books_ob_status",
+    "books_tds_entries",
+    "books_tds_challans",
+    "bks_nav_open",
+    "zb_tpl_quote",
+    // template-editor key (dynamic — wipe by prefix below)
+  ];
+
+  function clearUserCache() {
+    // Remove known keys
+    USER_CACHE_KEYS.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    // Also wipe any key that starts with "books_" or "bks_" (catches dynamic template keys)
+    try {
+      const toRemove = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith("books_") || k.startsWith("bks_") || k.startsWith("zb_tpl_"))) {
+          toRemove.push(k);
+        }
+      }
+      toRemove.forEach(k => localStorage.removeItem(k));
+    } catch {}
+  }
 
   function getCsrfFromCookie() {
     const m = document.cookie.split(";").map(c => c.trim()).find(c => c.startsWith("csrf_token="));
@@ -23768,7 +26743,6 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
   }
 
   function getCsrfFromMeta() {
-    // Frappe injects <meta name="csrf-token" content="..."> into every page
     const meta = document.querySelector("meta[name='csrf-token']");
     return meta ? meta.getAttribute("content") : "";
   }
@@ -23776,12 +26750,12 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
   async function bootstrapCsrf() {
     if (!window.frappe) window.frappe = { session: {}, boot: { sysdefaults: { company: "" } } };
 
-    // Step 1: Already set by Frappe's own JS (most reliable — Frappe sets window.frappe.csrf_token on page load)
+    // Step 1: Already set by Frappe's own JS
     if (window.frappe.csrf_token && window.frappe.csrf_token !== "None" && window.frappe.csrf_token !== "{{ csrf_token }}") {
       return window.frappe.csrf_token;
     }
 
-    // Step 2: Meta tag — Frappe injects this on every page
+    // Step 2: Meta tag
     const fromMeta = getCsrfFromMeta();
     if (fromMeta && fromMeta !== "None") {
       window.frappe.csrf_token = fromMeta;
@@ -23810,17 +26784,30 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
       if (msg.csrf_token && msg.csrf_token !== "None") {
         window.frappe.csrf_token = msg.csrf_token;
       }
-      if (msg.user) window.frappe.session.user = msg.user;
+      if (msg.user) {
+        // ── Per-user isolation: always clear cached data on ANY user change,
+        //    including null → new user (covers fresh browser / first login). ─
+        const prevUser = localStorage.getItem("books_session_user");
+        if (prevUser !== msg.user) {
+          if (prevUser) console.info("[Books] User changed (" + prevUser + " → " + msg.user + ") — clearing local cache");
+          clearUserCache();
+        }
+        localStorage.setItem("books_session_user", msg.user);
+        window.frappe.session.user = msg.user;
+      }
       if (msg.company) {
         window.__booksCompany = msg.company;
         window.frappe.boot.sysdefaults.company = msg.company;
       }
+      // Flag for tutorial overlay — localStorage wins if user already dismissed it
+      const _tutKey = msg.user ? "books_tut_done:" + msg.user : null;
+      window.__booksIsNewUser = !!msg.is_new_user && !(_tutKey && localStorage.getItem(_tutKey));
       if (window.frappe.csrf_token && window.frappe.csrf_token !== "None") {
         return window.frappe.csrf_token;
       }
     } catch (e) { console.warn("[Books] Session fetch failed:", e.message); }
 
-    // Step 5: Try Frappe's built-in /api/method/frappe.auth.get_logged_user as a last resort
+    // Step 5: Last resort — grab CSRF from response header
     try {
       const r2 = await fetch("/api/method/frappe.client.get_value?doctype=User&filters=%7B%22name%22%3A%22session%22%7D&fieldname=%5B%22name%22%5D", {
         credentials: "same-origin", headers: { "Accept": "application/json" }
@@ -23841,6 +26828,13 @@ select.bk-fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w
     __app.config.globalProperties.setInterval = window.setInterval.bind(window);
     __app.config.globalProperties.clearTimeout = window.clearTimeout.bind(window);
     __app.config.globalProperties.clearInterval = window.clearInterval.bind(window);
+    // Utility helpers — registered globally so every component template can call
+    // them without needing to return them individually from each setup().
+    __app.config.globalProperties.icon     = icon;
+    __app.config.globalProperties.fmt      = fmt;
+    __app.config.globalProperties.fmtDate  = fmtDate;
+    __app.config.globalProperties.flt      = flt;
+    __app.config.globalProperties.toast    = toast;
     __app.use(router).component("SearchableSelect", SearchableSelect).mount("#books-app");
   });
 

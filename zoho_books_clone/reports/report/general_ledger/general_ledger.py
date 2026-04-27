@@ -26,7 +26,7 @@ def get_columns():
 
 
 def get_data(filters: dict) -> list[dict]:
-    conditions = ["docstatus = 1", "posting_date BETWEEN %(from_date)s AND %(to_date)s"]
+    conditions = ["IFNULL(is_cancelled, 0) = 0", "posting_date BETWEEN %(from_date)s AND %(to_date)s"]
     if filters.get("company"):    conditions.append("company = %(company)s")
     if filters.get("account"):    conditions.append("account = %(account)s")
     if filters.get("party_type"): conditions.append("party_type = %(party_type)s")

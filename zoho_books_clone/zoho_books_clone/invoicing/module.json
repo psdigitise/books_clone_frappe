@@ -1,9 +1,0 @@
-{
- "module_name": "Invoicing",
- "app_name": "zoho_books_clone",
- "color": "#16A34A",
- "icon": "octicon octicon-file-text",
- "type": "module",
- "label": "Invoicing",
- "doctype": "Module Def"
-}

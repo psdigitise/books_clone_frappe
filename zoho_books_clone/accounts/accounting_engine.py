@@ -306,7 +306,7 @@ def post_journal_entry(doc) -> None:
                 "party_type":   row.party_type or "",
                 "party":        row.party or "",
                 "company":      doc.company,
-                "fiscal_year":  doc.fiscal_year or "",
+                "fiscal_year":  getattr(doc, "fiscal_year", "") or "",
                 "remarks":      doc.remark or f"Journal Entry {doc.name}",
             })
     if not gl_map:
@@ -358,7 +358,7 @@ def post_expense_claim(doc) -> None:
     # Resolve a default expense account for lines that don't carry one
     default_exp_acct = frappe.db.get_value(
         "Account",
-        {"account_type": "Expense Account", "company": doc.company, "is_group": 0},
+        {"account_type": "Expense", "company": doc.company, "is_group": 0},
         "name",
     )
 

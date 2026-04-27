@@ -24,6 +24,8 @@ class JournalEntry(Document):
 
     def on_submit(self):
         post_journal_entry(self)
+        self.db_set("status", "Submitted", update_modified=False)
 
     def on_cancel(self):
         reverse_voucher(self.doctype, self.name)
+        self.db_set("status", "Cancelled", update_modified=False)

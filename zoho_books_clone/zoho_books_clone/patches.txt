@@ -1,5 +1,0 @@
-zoho_books_clone.patches.v1_1.fix_module_assignments
-zoho_books_clone.patches.v1_0.create_indexes
-zoho_books_clone.patches.v1_0.seed_default_currency
-zoho_books_clone.patches.v1_0.seed_modes_of_payment
-zoho_books_clone.patches.v1_2.fix_mode_of_payment_field

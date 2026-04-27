@@ -32,6 +32,10 @@ class BankTransaction(Document):
         return frappe.db.get_value("Bank Account", self.bank_account, "gl_account") or ""
 
     def _post_gl(self):
+        # Caller (e.g. post_bank_transfer) may post a single combined GL set
+        # itself; skip the per-transaction posting in that case.
+        if getattr(self.flags, "skip_gl_posting", False):
+            return
         bank_account = self._get_bank_gl_account()
         if not bank_account:
             frappe.log_error(

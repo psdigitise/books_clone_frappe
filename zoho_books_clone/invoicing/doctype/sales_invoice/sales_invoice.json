@@ -1137,7 +1137,8 @@
       "options": "Sales Invoice",
       "depends_on": "eval:doc.is_return",
       "idx": 51
-    }
+    },
+    {"fieldname":"sales_order","fieldtype":"Link","label":"Sales Order","options":"Sales Order","read_only":1,"no_copy":1,"idx":52,"creation":"2026-04-26 00:00:00.000000","modified":"2026-04-26 00:00:00.000000","modified_by":"Administrator","owner":"Administrator","docstatus":0,"permlevel":0}
   ],
   "permissions": [
     {

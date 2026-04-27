@@ -65,7 +65,7 @@ class Account(Document):
         res = frappe.db.sql("""
             SELECT SUM(debit) AS d, SUM(credit) AS c
             FROM `tabGeneral Ledger Entry`
-            WHERE account = %s AND docstatus = 1
+            WHERE account = %s AND IFNULL(is_cancelled, 0) = 0
         """, self.name, as_dict=True)[0]
         debit, credit = flt(res.d), flt(res.c)
         return {"debit": debit, "credit": credit, "balance": debit - credit}

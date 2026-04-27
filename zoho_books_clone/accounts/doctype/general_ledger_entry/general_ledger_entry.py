@@ -134,7 +134,9 @@ def _reverse_gl_entries(voucher_type: str, voucher_no: str) -> set[str]:
             "General Ledger Entry", row.name, "is_cancelled", 1,
             update_modified=False
         )
-        # Post a mirror entry with debit ↔ credit swapped
+        # Post a mirror entry with debit ↔ credit swapped, also marked cancelled
+        # so reports (which filter is_cancelled=0) see net zero effect from the
+        # cancelled voucher. Audit trail preserved: rows still exist with flags.
         _create_gl_entry({
             "account":      row.account,
             "debit":        flt(row.credit),   # swap
@@ -151,6 +153,7 @@ def _reverse_gl_entries(voucher_type: str, voucher_no: str) -> set[str]:
             "fiscal_year":  row.fiscal_year or "",
             "is_opening":   row.is_opening or 0,
             "is_reversal":  1,
+            "is_cancelled": 1,
         })
         affected.add(row.account)
 

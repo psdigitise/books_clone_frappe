@@ -23,13 +23,20 @@ def get_data(filters: dict) -> list[dict]:
                SUM(g.credit) - SUM(g.debit) AS amount
         FROM `tabGeneral Ledger Entry` g
         JOIN `tabAccount` a ON a.name = g.account
-        WHERE g.docstatus = 1
+        WHERE IFNULL(g.is_cancelled, 0) = 0
           AND g.posting_date BETWEEN %(from_date)s AND %(to_date)s
           AND g.company = %(company)s
           AND a.account_type IN ("Income","Expense")
         GROUP BY g.account
         ORDER BY a.account_type, g.account
     """, filters, as_dict=True)
+
+    # Income accounts naturally have credit balances (credit - debit > 0).
+    # Expense accounts naturally have debit balances, so credit - debit comes
+    # out negative — flip the sign so expenses read as positive in the report.
+    for r in rows:
+        if r.account_type == "Expense":
+            r.amount = flt(r.amount) * -1
 
     income  = [r for r in rows if r.account_type == "Income"]
     expense = [r for r in rows if r.account_type == "Expense"]

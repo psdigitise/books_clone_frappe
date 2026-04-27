@@ -121,7 +121,9 @@ def post_bank_transfer(
     company = _company(from_account)
     remark  = description or f"Transfer from {from_account} to {to_account}"
 
-    # Bank Transaction — source account (withdrawal / debit)
+    # Bank Transaction — source account (withdrawal / debit).
+    # skip_gl_posting flag: this API posts a single combined GL set below,
+    # so the per-transaction _post_gl must not run (would double-post).
     bt_from = frappe.get_doc({
         "doctype": "Bank Transaction",
         "bank_account": from_account,
@@ -133,6 +135,7 @@ def post_bank_transfer(
         "status": "Reconciled",
     })
     bt_from.flags.ignore_permissions = True
+    bt_from.flags.skip_gl_posting = True
     bt_from.insert()
     bt_from.submit()
 
@@ -148,6 +151,7 @@ def post_bank_transfer(
         "status": "Reconciled",
     })
     bt_to.flags.ignore_permissions = True
+    bt_to.flags.skip_gl_posting = True
     bt_to.insert()
     bt_to.submit()
 

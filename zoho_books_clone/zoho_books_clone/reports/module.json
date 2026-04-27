@@ -1,9 +1,0 @@
-{
- "module_name": "Reports",
- "app_name": "zoho_books_clone",
- "color": "#4B5563",
- "icon": "octicon octicon-graph",
- "type": "module",
- "label": "Reports",
- "doctype": "Module Def"
-}

@@ -165,9 +165,8 @@
    "columns": 0,
    "print_width": "",
    "fieldname": "company",
-   "fieldtype": "Link",
-   "label": "Company",
-   "options": "Company"
+   "fieldtype": "Data",
+   "label": "Company"
   },
   {
    "creation": "2026-04-11 00:00:00.000000",

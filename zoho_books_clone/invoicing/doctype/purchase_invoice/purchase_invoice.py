@@ -62,17 +62,48 @@ class PurchaseInvoice(Document):
             self.status = "Draft"
 
     def on_submit(self):
-        self.status = "Submitted"
-        self.outstanding_amount = self.grand_total
         if getattr(self, "is_return", 0):
             from zoho_books_clone.accounts.accounting_engine import post_debit_note
+            # A return doesn't create new debt; it offsets the source bill.
+            self.db_set("outstanding_amount", 0, update_modified=False)
+            self.db_set("status", "Paid", update_modified=False)
             remark = (getattr(self, "remark", "") or "").strip()
             return_type = "inventory" if "Goods Returned" in remark else "expense"
             post_debit_note(self, return_type=return_type)
+            self._adjust_source_bill_outstanding(direction=-1)
         else:
+            self.status = "Submitted"
+            self.outstanding_amount = self.grand_total
             post_purchase_invoice(self)
 
     def on_cancel(self):
         self.status = "Cancelled"
         self.outstanding_amount = 0
         reverse_voucher(self.doctype, self.name)
+        if getattr(self, "is_return", 0):
+            self._adjust_source_bill_outstanding(direction=+1)
+
+    def _adjust_source_bill_outstanding(self, direction: int):
+        """Reduce (direction=-1) or restore (+1) outstanding on the source PINV."""
+        if not getattr(self, "return_against", None):
+            return
+        src = frappe.db.get_value(
+            "Purchase Invoice", self.return_against,
+            ["outstanding_amount", "grand_total", "due_date", "docstatus"],
+            as_dict=True,
+        )
+        if not src:
+            return
+        new_outstanding = flt(src.outstanding_amount) + direction * flt(self.grand_total)
+        if src.docstatus == 1:
+            if flt(new_outstanding) <= 0:                            new_status = "Paid"
+            elif flt(new_outstanding) < flt(src.grand_total):        new_status = "Partly Paid"
+            elif src.due_date and getdate(src.due_date) < getdate(today()): new_status = "Overdue"
+            else:                                                    new_status = "Submitted"
+        else:
+            new_status = "Cancelled" if src.docstatus == 2 else "Draft"
+        frappe.db.set_value(
+            "Purchase Invoice", self.return_against,
+            {"outstanding_amount": new_outstanding, "status": new_status},
+            update_modified=False,
+        )
